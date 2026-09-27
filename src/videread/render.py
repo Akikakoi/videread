@@ -1,0 +1,134 @@
+"""模板填充与自包含检查（对应开发文档 §6.10 / §8.1）。
+
+模板本身是完整 HTML，只做占位符的纯 `str.replace` 替换，**不做 HTML 转义**。
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from .errors import RenderError
+
+TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+
+REQUIRED_PLACEHOLDERS = ("TITLE", "LEAD", "ATTRIBUTION", "BODY", "SOURCES")
+OPTIONAL_PLACEHOLDERS = ("SUBTITLE", "VIDEO_DESCRIPTION")
+
+_PLACEHOLDER = re.compile(r"\{\{([A-Z0-9_]+)\}\}")
+
+# 可选占位符为空时整块删除（§8.1：空则整行 / 整块删除）
+_OPTIONAL_BLOCKS = {
+    "SUBTITLE": re.compile(r"[ \t]*<p class=\"subtitle\">\{\{SUBTITLE\}\}</p>[ \t]*\n?"),
+    "VIDEO_DESCRIPTION": re.compile(
+        r"[ \t]*<details class=\"meta-fold\">.*?</details>[ \t]*\n?", re.DOTALL
+    ),
+}
+
+_TEMPLATES = {"standard": "report.html", "brief": "brief-report.html"}
+
+# --- 模板已定义 class 的清单：用于剔除 LLM 自创的 class -----------------------
+_STYLE_BLOCK = re.compile(r"<style[^>]*>(.*?)</style>", re.IGNORECASE | re.DOTALL)
+_CSS_CLASS = re.compile(r"\.([A-Za-z][A-Za-z0-9_-]*)")
+_CLASS_ATTR_IN_TEMPLATE = re.compile(r"class\s*=\s*\"([^\"]*)\"", re.IGNORECASE)
+
+# --- 自包含检查：只拒绝外部资源，不拒绝指向原视频的可见链接 ------------------
+_EXTERNAL_CSS = re.compile(r"<\s*link\b[^>]*\brel\s*=\s*[\"']?\s*stylesheet", re.IGNORECASE)
+_SCRIPT_SRC = re.compile(r"<\s*script\b[^>]*\bsrc\s*=", re.IGNORECASE)
+_EXTERNAL_MEDIA = re.compile(
+    r"<\s*(?:img|source|video|audio)\b[^>]*\b(?:src|srcset)\s*=\s*[\"']?\s*https?://",
+    re.IGNORECASE,
+)
+_CSS_IMPORT = re.compile(r"@import\s+(?:url\(\s*)?[\"']?\s*https?://", re.IGNORECASE)
+_CSS_URL = re.compile(r"url\(\s*[\"']?\s*https?://", re.IGNORECASE)
+_FONT_FACE = re.compile(r"@font-face", re.IGNORECASE)
+
+
+def template_for(mode: str) -> Path:
+    """按阅读模式定位模板文件。"""
+    name = _TEMPLATES.get((mode or "").strip().lower())
+    if name is None:
+        raise RenderError(f"未知模式：{mode!r}（可选 standard / brief）")
+    path = TEMPLATE_DIR / name
+    if not path.is_file():
+        raise RenderError(f"模板文件不存在：{path}")
+    return path
+
+
+def render_report(*, template: Path, ctx: dict[str, str], out: Path) -> None:
+    """把 ctx 填入模板并写盘；必需占位符缺失时抛 RenderError（提示具体名称）。"""
+    try:
+        html = template.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RenderError(f"读取模板失败：{template}（{exc}）") from exc
+
+    present = set(_PLACEHOLDER.findall(html))
+    missing = [name for name in REQUIRED_PLACEHOLDERS if name not in present]
+    if missing:
+        raise RenderError(
+            "模板缺少必需占位符："
+            + "、".join(f"{{{{{name}}}}}" for name in missing)
+        )
+
+    text = html
+    for name, pattern in _OPTIONAL_BLOCKS.items():
+        value = str(ctx.get(name, "") or "").strip()
+        if value:
+            continue
+        stripped, count = pattern.subn("", text)
+        if count == 0:
+            # 模板结构与预期不符时退化为清空占位符，避免留下空标签
+            stripped = text.replace(f"{{{{{name}}}}}", "")
+        text = stripped
+
+    for name in (*REQUIRED_PLACEHOLDERS, *OPTIONAL_PLACEHOLDERS):
+        text = text.replace(f"{{{{{name}}}}}", str(ctx.get(name, "") or ""))
+
+    leftover = sorted(set(_PLACEHOLDER.findall(text)))
+    if leftover:
+        raise RenderError("模板存在未替换的占位符：" + "、".join(leftover))
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        out.write_text(text, encoding="utf-8", newline="\n")
+    except OSError as exc:
+        raise RenderError(f"写入报告失败：{out}（{exc}）") from exc
+
+
+def template_classes(template: Path) -> set[str]:
+    """收集模板已定义的 class 名（`<style>` 内的选择器 + 静态 HTML 的 class 属性）。
+
+    供 `report.writer` 剔除模型自创的 class —— 未定义的 class 不会带来任何样式，
+    留着只会让人误以为生效。
+    """
+    try:
+        text = template.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RenderError(f"读取模板失败：{template}（{exc}）") from exc
+
+    names: set[str] = set()
+    for block in _STYLE_BLOCK.findall(text):
+        names.update(_CSS_CLASS.findall(block))
+    for attr in _CLASS_ATTR_IN_TEMPLATE.findall(text):
+        names.update(attr.split())
+    return names
+
+
+def check_self_contained(html: str) -> list[str]:
+    """扫描外部依赖，返回违规项描述列表；空列表表示自包含（§1.3 A2）。"""
+    violations: list[str] = []
+
+    def _flag(pattern: re.Pattern[str], description: str) -> None:
+        match = pattern.search(html)
+        if match:
+            violations.append(f"{description}：{match.group(0).strip()[:120]}")
+
+    if _FONT_FACE.search(html) and _CSS_URL.search(html):
+        _flag(_CSS_URL, "外链字体（@font-face 引用远程字体文件）")
+
+    _flag(_EXTERNAL_CSS, "外链样式表 <link rel=stylesheet>")
+    _flag(_SCRIPT_SRC, "外链脚本 <script src=...>")
+    _flag(_EXTERNAL_MEDIA, "外链图片 / 媒体")
+    _flag(_CSS_IMPORT, "外链样式导入 @import http(s)://")
+    _flag(_CSS_URL, "内联样式引用了外链资源 url(http(s)://...)")
+    return violations

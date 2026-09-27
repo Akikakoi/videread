@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>视频阅读报告</title>
+<style>
+/* ── 基础：色板与排版基线（画布 900px / 圆角 26px / 正文 18px）── */
+*, *::before, *::after { box-sizing: border-box; }
+
+:root {
+  --ink: #23292e;
+  --ink-soft: #4b555d;
+  --ink-mute: #7a848c;
+  --line: #e3e7ea;
+  --line-strong: #d3d9dd;
+  --paper: #ffffff;
+  --page: #f2f4f6;
+  --accent: #0f6f8c;
+  --accent-soft: #eef6f8;
+  --accent-line: #cfe4ea;
+}
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  font-size: 18px;
+  line-height: 1.75;
+  line-break: strict;
+  overflow-wrap: break-word;
+}
+
+.report-canvas {
+  width: 900px;
+  max-width: calc(100% - 32px);
+  margin: 40px auto;
+  padding: 52px 56px 60px;
+  background: var(--paper);
+  border-radius: 26px;
+  box-shadow: 0 10px 34px rgba(24, 38, 50, .09);
+}
+
+/* ── 页首 ── */
+.report-head {
+  margin: 0 0 34px;
+  padding: 0 0 26px;
+  border-bottom: 1px solid var(--line);
+}
+.report-head h1 {
+  margin: 0 0 10px;
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: .01em;
+}
+.subtitle {
+  margin: 0 0 16px;
+  font-size: 18px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+}
+.lead {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.85;
+  text-align: justify;
+}
+.attribution {
+  margin: 16px 0 0;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--ink-mute);
+}
+.attribution a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent-line);
+  word-break: break-all;
+}
+.attribution a:hover { border-bottom-color: var(--accent); }
+
+/* ── 折叠块（视频简介 / 来源说明）── */
+.meta-fold,
+.sources {
+  margin: 18px 0 0;
+  background: #fafbfc;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+.sources { margin: 0; }
+.meta-fold > summary,
+.sources > summary {
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;
+}
+.meta-fold > summary::-webkit-details-marker,
+.sources > summary::-webkit-details-marker { display: none; }
+.meta-fold > summary::before,
+.sources > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 8px;
+  color: var(--ink-mute);
+  transition: transform .16s ease;
+}
+.meta-fold[open] > summary::before,
+.sources[open] > summary::before { transform: rotate(90deg); }
+.meta-fold-body {
+  padding: 2px 16px 16px;
+  font-size: 15px;
+  line-height: 1.8;
+  color: var(--ink-soft);
+}
+.meta-fold-body > :first-child { margin-top: 0; }
+.meta-fold-body > :last-child { margin-bottom: 0; }
+
+/* ── 正文排版 ── */
+.report-body { font-size: 18px; }
+.report-body > :first-child { margin-top: 0; }
+.report-body p {
+  margin: 0 0 16px;
+  text-align: justify;
+}
+.report-body h3 {
+  margin: 26px 0 12px;
+  font-size: 19px;
+  line-height: 1.5;
+  font-weight: 700;
+}
+.report-body ul,
+.report-body ol {
+  margin: 0 0 16px;
+  padding-left: 1.4em;
+}
+.report-body li { margin: 0 0 6px; }
+.report-body a { color: var(--accent); }
+.report-body strong { font-weight: 700; }
+.report-body code {
+  padding: 1px 5px;
+  font-size: .92em;
+  background: #f2f4f6;
+  border-radius: 3px;
+  font-family: ui-monospace, Menlo, Consolas, "Courier New", monospace;
+}
+
+/* 节标题：编号由 CSS 计数器自动生成，正文不显示时间戳 */
+.report-body { counter-reset: brief-sec; }
+.report-body h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 38px 0 14px;
+  padding-bottom: 8px;
+  font-size: 23px;
+  line-height: 1.45;
+  font-weight: 700;
+  border-bottom: 1px solid var(--line);
+  counter-increment: brief-sec;
+}
+.report-body h2::before {
+  content: counter(brief-sec, decimal-leading-zero);
+  flex: 0 0 auto;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 来源追溯标记：只用于人工核对，不产生任何视觉变化 ── */
+[data-source-units] { /* 追溯标记，不改变任何视觉样式 */ }
+
+/* ── data-tone 强调色（默认蓝青 / rust / ochre / plum / sage / rose）── */
+[data-tone] {
+  --tone-accent: #0f6f8c;
+  --tone-soft: #eef6f8;
+  --tone-line: #cfe4ea;
+}
+[data-tone="rust"]  { --tone-accent: #b4552d; --tone-soft: #fbeee7; --tone-line: #f0d5c6; }
+[data-tone="ochre"] { --tone-accent: #9a7514; --tone-soft: #faf3dd; --tone-line: #ecdfae; }
+[data-tone="plum"]  { --tone-accent: #7a3b6b; --tone-soft: #f6ecf3; --tone-line: #e6cfe0; }
+[data-tone="sage"]  { --tone-accent: #4a7a5a; --tone-soft: #edf4ee; --tone-line: #cfe2d4; }
+[data-tone="rose"]  { --tone-accent: #b03a5b; --tone-soft: #fbeaef; --tone-line: #f2ccd8; }
+
+/* ── .brief-branch-group 条件分支 ── */
+.brief-branch-group {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0;
+}
+.brief-branch-group > * {
+  padding: 12px 16px;
+  background: #fafbfc;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px 14px 14px 6px;
+}
+.brief-branch-group > *:nth-child(even) {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  border-left-color: var(--accent);
+}
+.brief-branch-group > * > :first-child { margin-top: 0; }
+.brief-branch-group > * > :last-child { margin-bottom: 0; }
+
+/* ── .brief-change 前后变化 ── */
+.brief-change {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 18px 0;
+}
+.brief-change::before {
+  content: "→";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 2px 7px;
+  font-size: 15px;
+  color: var(--ink-mute);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+.brief-change > * {
+  padding: 12px 16px;
+  background: #f7f9fa;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.brief-change > *:last-child {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+.brief-change > * > :first-child { margin-top: 0; }
+.brief-change > * > :last-child { margin-bottom: 0; }
+
+/* ── .brief-open-card 留白卡 ── */
+.brief-open-card {
+  margin: 18px 0;
+  padding: 20px 22px;
+  min-height: 120px;
+  background: #fcfdfd;
+  border: 1px dashed var(--line-strong);
+  border-radius: 16px;
+  color: var(--ink-soft);
+}
+.brief-open-card > :first-child { margin-top: 0; }
+.brief-open-card > :last-child { margin-bottom: 0; }
+
+/* ── .brief-case-card 参数算例 ── */
+.brief-case-card {
+  margin: 18px 0;
+  padding: 16px 20px;
+  background: #f7f9fa;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  border-radius: 16px;
+}
+.brief-case-card > :first-child { margin-top: 0; }
+.brief-case-card > :last-child { margin-bottom: 0; }
+.brief-case-card strong { color: var(--accent); }
+
+/* ── .brief-fold-card 折角便签（伪元素折角）── */
+.brief-fold-card {
+  position: relative;
+  margin: 20px 0;
+  padding: 18px 22px;
+  background: #fdf8e6;
+  border: 1px solid #ecdfae;
+  border-radius: 6px 16px 16px 16px;
+  overflow: hidden;
+}
+.brief-fold-card::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 30px;
+  height: 30px;
+  background: linear-gradient(225deg, #e8d59b 0 50%, transparent 50%);
+  border-bottom-left-radius: 6px;
+}
+.brief-fold-card > :first-child { margin-top: 0; }
+.brief-fold-card > :last-child { margin-bottom: 0; }
+
+/* ── .brief-timeline 时间轴 ── */
+.brief-timeline {
+  position: relative;
+  display: grid;
+  gap: 16px;
+  margin: 22px 0;
+  padding: 0 0 0 26px;
+  list-style: none;
+}
+.brief-timeline::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--line);
+}
+.brief-timeline > li {
+  position: relative;
+}
+.brief-timeline > li::before {
+  content: "";
+  position: absolute;
+  left: -25px;
+  top: 8px;
+  width: 9px;
+  height: 9px;
+  background: #fff;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+}
+.brief-timeline > li > :first-child { margin-top: 0; }
+.brief-timeline > li > :last-child { margin-bottom: 0; }
+
+/* data-layout="alternating"：中轴交替布局 */
+.brief-timeline[data-layout="alternating"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 48px;
+  row-gap: 18px;
+  padding-left: 0;
+}
+.brief-timeline[data-layout="alternating"]::before { left: 50%; top: 0; bottom: 0; transform: translateX(-50%); }
+.brief-timeline[data-layout="alternating"] > li { padding: 0; }
+.brief-timeline[data-layout="alternating"] > li::before { left: auto; top: 9px; }
+.brief-timeline[data-layout="alternating"] > li:nth-child(odd) {
+  grid-column: 1;
+  text-align: right;
+}
+.brief-timeline[data-layout="alternating"] > li:nth-child(odd)::before { right: -26px; }
+.brief-timeline[data-layout="alternating"] > li:nth-child(even) {
+  grid-column: 2;
+  text-align: left;
+}
+.brief-timeline[data-layout="alternating"] > li:nth-child(even)::before { left: -26px; }
+
+/* ── .brief-facts 事实条 / .brief-pair 对照 ── */
+.brief-facts {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0;
+}
+.brief-facts > * {
+  display: flex;
+  gap: 10px;
+  padding: 9px 14px;
+  font-size: 16px;
+  line-height: 1.7;
+  background: #f7f9fa;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.brief-facts > *::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  margin-top: 10px;
+  background: var(--accent);
+  border-radius: 50%;
+}
+.brief-facts > * > p { margin: 0; }
+
+.brief-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 18px 0;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.brief-pair > * {
+  padding: 12px 16px;
+  font-size: 16px;
+  line-height: 1.7;
+  background: #fff;
+}
+.brief-pair > *:first-child { background: #f7f9fa; }
+.brief-pair > * > :first-child { margin-top: 0; }
+.brief-pair > * > :last-child { margin-bottom: 0; }
+
+/* ── .brief-dimension-group 维度对照（按子项数自动 1/2/3 列）── */
+.brief-dimension-group {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+  margin: 20px 0;
+}
+.brief-dimension-group > * {
+  padding: 14px 16px;
+  background: #fafbfc;
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--accent);
+  border-radius: 12px;
+}
+.brief-dimension-group > * > :first-child { margin-top: 0; }
+.brief-dimension-group > * > :last-child { margin-bottom: 0; }
+/* 仅 1 项：整行 */
+.brief-dimension-group > *:only-child { grid-column: 1 / -1; }
+/* 恰好 2 项：各占半数 */
+.brief-dimension-group > *:first-child:nth-last-child(2),
+.brief-dimension-group > *:first-child:nth-last-child(2) ~ * { grid-column: span 3; }
+/* 恰好 3 项：三等分 */
+.brief-dimension-group > *:first-child:nth-last-child(3),
+.brief-dimension-group > *:first-child:nth-last-child(3) ~ * { grid-column: span 2; }
+/* 4 项及以上：两列排布 */
+.brief-dimension-group > *:first-child:nth-last-child(n+4),
+.brief-dimension-group > *:first-child:nth-last-child(n+4) ~ * { grid-column: span 3; }
+
+/* ── .brief-table 表格（data-layout="labels" 固定四列）── */
+.brief-table {
+  width: 100%;
+  margin: 18px 0;
+  border-collapse: collapse;
+  font-size: 15px;
+  line-height: 1.65;
+}
+.brief-table th,
+.brief-table td {
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+.brief-table thead th {
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: #f2f5f7;
+  border-bottom: 2px solid var(--line-strong);
+}
+.brief-table tbody tr:nth-child(even) td { background: #fafbfc; }
+.brief-table[data-layout="labels"] { table-layout: fixed; }
+.brief-table[data-layout="labels"] th,
+.brief-table[data-layout="labels"] td { width: 25%; }
+
+/* ── 页尾 ── */
+.report-foot {
+  margin: 48px 0 0;
+  padding: 22px 0 0;
+  border-top: 1px solid var(--line);
+}
+.sources-body {
+  padding: 2px 16px 16px;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--ink-soft);
+}
+.sources-body > :first-child { margin-top: 0; }
+.sources-body > :last-child { margin-bottom: 0; }
+
+/* ── 响应式 ── */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .report-canvas {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 28px 20px 36px;
+    border-radius: 0;
+  }
+  .report-head h1 { font-size: 26px; }
+  .report-body h2 { font-size: 20px; }
+  .brief-change { grid-template-columns: 1fr; }
+  .brief-change::before {
+    content: "↓";
+    top: 50%;
+  }
+  .brief-pair { grid-template-columns: 1fr; }
+  .brief-dimension-group { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .brief-dimension-group > * { grid-column: span 1; }
+  .brief-dimension-group > *:only-child { grid-column: 1 / -1; }
+  .brief-timeline[data-layout="alternating"] {
+    grid-template-columns: 1fr;
+    padding-left: 26px;
+  }
+  .brief-timeline[data-layout="alternating"]::before {
+    left: 6px;
+    transform: none;
+  }
+  .brief-timeline[data-layout="alternating"] > li:nth-child(odd),
+  .brief-timeline[data-layout="alternating"] > li:nth-child(even) {
+    grid-column: 1;
+    text-align: left;
+  }
+  .brief-timeline[data-layout="alternating"] > li:nth-child(odd)::before,
+  .brief-timeline[data-layout="alternating"] > li:nth-child(even)::before {
+    left: -25px;
+    right: auto;
+  }
+}
+
+/* ── 打印 ── */
+@media print {
+  body { background: #fff; }
+  .report-canvas {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .report-body h2 { break-after: avoid; }
+  .meta-fold,
+  .sources,
+  .brief-case-card,
+  .brief-fold-card { break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+<main class="report-canvas">
+  <header class="report-head">
+    <h1>{{TITLE}}</h1>
+    <p class="subtitle">{{SUBTITLE}}</p>
+    <p class="lead">{{LEAD}}</p>
+    <p class="attribution">{{ATTRIBUTION}}</p>
+    <details class="meta-fold">
+      <summary>视频简介</summary>
+      <div class="meta-fold-body">{{VIDEO_DESCRIPTION}}</div>
+    </details>
+  </header>
+
+  <!--
+    组件用法参考（由正文片段使用，模板本身不渲染示例）
+      brief-branch-group    条件分支：div.brief-branch-group，每个子元素为一个分支
+      brief-change          前后变化：div.brief-change，内放两个直接子元素（前 / 后），中间箭头由伪元素生成
+      brief-open-card       留白卡：div.brief-open-card，内部放段落
+      brief-case-card       参数算例：div.brief-case-card，内部放段落或列表
+      brief-fold-card       折角便签：div.brief-fold-card，折角由伪元素生成
+      brief-timeline        时间轴：ol.brief-timeline 内放 li；加 data-layout 属性为 alternating 时变中轴交替布局
+      brief-facts           事实条：div.brief-facts，每个子元素为一条事实
+      brief-pair            对照：div.brief-pair，内放两个直接子元素
+      brief-dimension-group 维度对照：div.brief-dimension-group，子项数决定列数（1 / 2 / 3 列，4 项起两列）
+      brief-table           表格：table.brief-table；加 data-layout 属性为 labels 时固定四列
+    节标题不写编号与时间戳，编号由 CSS 计数器自动生成
+    追溯：核心判断段落外层包 div 并加 data-source-units 属性，属性值引用本节来源单元 id
+  -->
+
+  <article class="report-body">
+{{BODY}}
+  </article>
+
+  <footer class="report-foot">
+    <details class="sources">
+      <summary>来源与处理说明</summary>
+      <div class="sources-body">{{SOURCES}}</div>
+    </details>
+  </footer>
+</main>
+</body>
+</html>
