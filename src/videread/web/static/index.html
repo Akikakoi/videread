@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>videread 控制台</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-name">videread</span>
+    <span class="brand-sub">把视频转写重组成可读报告</span>
+  </div>
+  <div class="topbar-meta">
+    <span class="muted">产物目录</span>
+    <code id="out-root">—</code>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ── 新建任务 + 实时进度 ── -->
+  <section class="panel">
+    <h2 class="panel-title">新建任务</h2>
+
+    <form id="job-form" novalidate>
+      <label class="field">
+        <span class="field-label">视频链接 / 本地文件路径</span>
+        <input id="url" type="text" autocomplete="off" required
+               placeholder="https://www.bilibili.com/video/BV...">
+      </label>
+
+      <div class="grid-2">
+        <label class="field">
+          <span class="field-label">阅读模式</span>
+          <select id="mode">
+            <option value="standard">Standard · 自适应精读</option>
+            <option value="brief">Brief · 字数硬预算速览</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">ASR 后端</span>
+          <select id="asr-backend">
+            <option value="">按 .env 配置</option>
+            <option value="dashscope">dashscope · 异步</option>
+            <option value="dashscope-realtime">dashscope-realtime · 实时</option>
+            <option value="openai">openai · whisper</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="checks">
+        <label class="check"><input type="checkbox" id="no-cache"> 忽略缓存全部重跑</label>
+        <label class="check"><input type="checkbox" id="keep-audio"> 保留 audio.m4a</label>
+      </div>
+
+      <button id="submit" type="submit" class="btn btn-primary btn-block">开始生成</button>
+      <p id="form-error" class="form-error" hidden></p>
+    </form>
+
+    <div id="progress" class="progress" hidden>
+      <div class="progress-head">
+        <span class="progress-title">执行进度</span>
+        <span id="state-pill" class="pill">排队中</span>
+      </div>
+
+      <ol id="stepper" class="stepper"></ol>
+
+      <pre id="log" class="log" aria-live="polite"></pre>
+
+      <div id="result" class="result" hidden>
+        <a id="open-report" class="btn btn-primary" href="#" target="_blank" rel="noopener">
+          在新窗口打开报告
+        </a>
+        <button id="preview-report" type="button" class="btn">就地预览</button>
+      </div>
+
+      <p id="job-error" class="job-error" hidden></p>
+    </div>
+  </section>
+
+  <!-- ── 报告库 ── -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title">
+        报告库 <span id="runs-count" class="muted"></span>
+      </h2>
+      <button id="refresh-runs" type="button" class="btn btn-small">刷新</button>
+    </div>
+
+    <input id="filter" class="filter" type="search" placeholder="按标题 / UP主 / BV 号过滤" autocomplete="off">
+
+    <p id="runs-empty" class="muted empty" hidden>还没有生成过报告。</p>
+    <div id="runs" class="runs"></div>
+  </section>
+
+</main>
+
+<!-- ── 报告预览浮层 ── -->
+<div id="preview" class="preview" hidden>
+  <div class="preview-box">
+    <div class="preview-head">
+      <span id="preview-title" class="preview-title">报告预览</span>
+      <div class="preview-actions">
+        <a id="preview-open" class="btn btn-small" href="#" target="_blank" rel="noopener">新窗口打开</a>
+        <button id="preview-close" type="button" class="btn btn-small">关闭</button>
+      </div>
+    </div>
+    <iframe id="preview-frame" title="报告预览"></iframe>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

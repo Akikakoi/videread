@@ -108,6 +108,7 @@ Bilibili URL
 ```
 videread/
 ├─ pyproject.toml
+├─ run.bat                    # 一键启动：自检环境 → 建 .venv 装依赖 → 跑流水线
 ├─ .env                       # 密钥（不入库）
 ├─ .env.example
 ├─ README.md
@@ -123,6 +124,7 @@ videread/
 │  │  ├─ __init__.py
 │  │  ├─ base.py
 │  │  ├─ dashscope.py
+│  │  ├─ realtime.py          # 实时 WebSocket 后端（不经 OSS 桶）
 │  │  └─ openai_whisper.py
 │  ├─ transcript.py
 │  ├─ report/
@@ -731,6 +733,7 @@ def retry(fn, *, attempts=3, base=1.0, jitter=0.2): ...
 
 ## 12. Windows 落地清单
 
+- **一键启动**：`run.bat` 先自检 Python / 虚拟环境 / ffmpeg / `.env` 四项；首次运行自动建 `.venv`、`pip install -e .`、并把 ffmpeg 静态包下载解压到 `bin/`。无参数时默认启动本地 Web 控制台并自动打开浏览器（等价于 `run.bat web`），带参数时原样透传给 CLI
 - **ffmpeg**：`winget install Gyan.FFmpeg`，或将静态包解压到项目 `bin/`，代码优先探测 `bin/ffmpeg.exe`
 - **路径**：统一 `pathlib.Path`，禁止字符串拼接路径
 - **编码**：所有文件读写显式 `encoding="utf-8"`；子进程输出捕获显式指定 `encoding="utf-8", errors="replace"`
