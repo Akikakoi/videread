@@ -9,14 +9,16 @@ import asyncio
 import json
 import queue
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .. import markdown
 from ..errors import VidereadError
-from . import library
+from . import library, probe
 from .jobs import Job, JobBusy, JobManager
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -34,6 +36,10 @@ class JobRequest(BaseModel):
     no_cache: bool = False
     keep_audio: bool = False
     asr_backend: str | None = None
+
+
+class ProbeRequest(BaseModel):
+    url: str
 
 
 def _frame(item: dict) -> str:
@@ -95,6 +101,33 @@ def create_app(out_root: Path) -> FastAPI:
             raise HTTPException(status_code=404, detail="该 run 还没有 report.html")
         return HTMLResponse(path.read_text(encoding="utf-8"))
 
+    @app.get("/api/runs/{run_id}/markdown")
+    def run_markdown(run_id: str) -> Response:
+        """把 report.html 转成 Markdown 下载。
+
+        Markdown 表达不了报告里的 CSS 组件，导出只保留文字层次（见 `markdown` 模块）。
+        文件名同时给 ASCII 回退与 RFC 5987 的 UTF-8 形式，中文标题在各浏览器都能落对。
+        """
+        run_dir = library.safe_run_dir(out_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="未找到该 run")
+        path = run_dir / "report.html"
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="该 run 还没有 report.html")
+
+        detail = library.run_detail(out_root, run_id) or {}
+        title = str(detail.get("title") or "").strip() or run_id
+        return Response(
+            content=markdown.html_to_markdown(path.read_text(encoding="utf-8")),
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{run_id}.md"; '
+                    f"filename*=UTF-8''{quote(title + '.md')}"
+                )
+            },
+        )
+
     # ------------------------------------------------------------------ 报告库
 
     @app.get("/api/runs")
@@ -107,6 +140,16 @@ def create_app(out_root: Path) -> FastAPI:
         if detail is None:
             raise HTTPException(status_code=404, detail="未找到该 run")
         return detail
+
+    # ------------------------------------------------------------------ 预检
+
+    @app.post("/api/probe")
+    def api_probe(payload: ProbeRequest) -> dict:
+        """提交前探测时长；超长由前端拦截，异常统一转 400 让前端降级放行。"""
+        try:
+            return probe.probe_source(payload.url, out_root=out_root)
+        except VidereadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # ------------------------------------------------------------------ 任务
 

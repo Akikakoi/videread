@@ -41,6 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--asr", dest="asr_backend", default=None, help="临时覆盖 ASR 后端（dashscope / openai）"
     )
+    parser.add_argument(
+        "--force-asr",
+        dest="force_asr",
+        action="store_true",
+        help="忽略平台字幕，坚持下载音频走 ASR（字幕优先的兜底开关）",
+    )
     parser.add_argument("--version", action="version", version=f"videread {__version__}")
     return parser
 
@@ -56,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
             use_cache=not args.no_cache,
             keep_audio=args.keep_audio,
             asr_backend=args.asr_backend,
+            force_asr=args.force_asr,
             open_report=args.open_report,
         )
     except VidereadError as exc:

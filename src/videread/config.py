@@ -26,7 +26,7 @@ DEFAULT_OUT_ROOT = PROJECT_ROOT / "runs"
 LLM_TIMEOUT_SEC = 180.0
 ASR_SEGMENT_TIMEOUT_SEC = 600.0
 PIPELINE_TIMEOUT_SEC = 20 * 60
-MAX_VIDEO_DURATION_SEC = 4 * 3600
+MAX_VIDEO_DURATION_SEC = 2 * 3600
 
 # 单次提交云 ASR 的音频时长上限；超过则按静音点切段并行提交（§6.5）
 ASR_SEGMENT_SECONDS = 1800.0
@@ -38,6 +38,9 @@ LLM_WRITE_CONCURRENCY = 3
 # 转写单元上限字符数（§5.3）
 TRANSCRIPT_MAX_CHARS = 160
 
+# 字幕优先：视频带平台字幕时直接用它构造转写稿，跳过音频下载与 ASR（§6.3）
+SUBTITLE_FIRST = True
+
 # DashScope 接入点；专属/私有化（MaaS）部署可用 DASHSCOPE_BASE_URL 覆盖（§6.5）
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
 
@@ -45,6 +48,7 @@ DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
 @dataclass(frozen=True)
 class Settings:
     asr_backend: str
+    subtitle_first: bool
     dashscope_api_key: str
     dashscope_base_url: str
     dashscope_model: str
@@ -119,6 +123,17 @@ def _env_int(key: str, default: int, *, minimum: int = 1) -> int:
     return value
 
 
+def _env_bool(key: str, default: bool) -> bool:
+    raw = os.environ.get(key, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise UsageError(f"环境变量 {key} 不是合法开关：{raw!r}")
+
+
 def get_settings(**overrides: object) -> Settings:
     """读取配置；`overrides` 中非 None 的值覆盖环境变量（CLI 参数优先级最高）。"""
     load_env()
@@ -129,6 +144,7 @@ def get_settings(**overrides: object) -> Settings:
     )
     settings = Settings(
         asr_backend=(os.environ.get("ASR_BACKEND", "dashscope").strip() or "dashscope"),
+        subtitle_first=_env_bool("SUBTITLE_FIRST", SUBTITLE_FIRST),
         dashscope_api_key=os.environ.get("DASHSCOPE_API_KEY", "").strip(),
         dashscope_base_url=(
             os.environ.get("DASHSCOPE_BASE_URL", "").strip() or DASHSCOPE_BASE_URL

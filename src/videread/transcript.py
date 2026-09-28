@@ -160,6 +160,43 @@ def parse_srt(path: Path) -> list[tuple[float, float, str]]:
     return cues
 
 
+def segments_from_srt(path: Path) -> list[AsrSegment]:
+    """字幕优先：把 SRT 直接转成转写分段，跳过 ASR（§6.3）。"""
+    return [
+        AsrSegment(start=start, end=max(end, start), text=text)
+        for start, end, text in parse_srt(path)
+    ]
+
+
+def _covered_texts(
+    start: float, end: float, cues: list[tuple[float, float, str]]
+) -> tuple[float, list[str]]:
+    """某个时间段与字幕的总重叠时长，以及重叠到的字幕文本。"""
+    covered = 0.0
+    texts: list[str] = []
+    for cue_start, cue_end, cue_text in cues:
+        overlap = min(end, cue_end) - max(start, cue_start)
+        if overlap <= 0:
+            continue
+        covered += overlap
+        texts.append(cue_text)
+    return covered, texts
+
+
+def subtitle_coverage(srt: Path, duration: float) -> float:
+    """字幕覆盖的视频时长占比（0~1）。
+
+    只按时间轴计算，不需要 ASR 结果即可判断，因此能在下载音频、调用 ASR
+    之前就判定这份字幕是否完整。阈值取 0.5 偏保守：宁可白跑一次 ASR，
+    也不要用零星字幕生成一份大面积缺内容的报告。
+    """
+    cues = parse_srt(srt)
+    if not cues or duration <= 0:
+        return 0.0
+    covered = sum(max(0.0, end - start) for start, end, _ in cues)
+    return min(1.0, covered / duration)
+
+
 def merge_subtitles(units: list[TranscriptUnit], srt: Path) -> list[TranscriptUnit]:
     """有平台字幕时，用字幕文本替换同时间段 ASR 文本，`source` 标为 subtitle。
 
@@ -171,14 +208,7 @@ def merge_subtitles(units: list[TranscriptUnit], srt: Path) -> list[TranscriptUn
 
     merged: list[TranscriptUnit] = []
     for unit in units:
-        covered = 0.0
-        texts: list[str] = []
-        for cue_start, cue_end, cue_text in cues:
-            overlap = min(unit.end, cue_end) - max(unit.start, cue_start)
-            if overlap <= 0:
-                continue
-            covered += overlap
-            texts.append(cue_text)
+        covered, texts = _covered_texts(unit.start, unit.end, cues)
         span = max(1e-6, unit.end - unit.start)
         if texts and covered / span >= 0.5:
             merged.append(

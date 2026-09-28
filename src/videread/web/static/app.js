@@ -9,11 +9,14 @@
   // 逐节写作在 STAGES 里的序号（1 起）：只有这个阶段有「第 k/n 节」的子进度
   var WRITER_STAGE = STAGES.indexOf("逐节写作") + 1;
   var SECTION_RE = /第\s*(\d+)\/(\d+)\s*节/;
+  // 服务端日志里带 LLM 用量读数（累计值，如 "12.3k tokens"）
+  var TOKEN_RE = /(\d+(?:\.\d+)?)k tokens/;
   var STORE_KEY = "videread.job";
 
   var el = {
     form: document.getElementById("job-form"),
     url: document.getElementById("url"),
+    probeHint: document.getElementById("probe-hint"),
     mode: document.getElementById("mode"),
     asr: document.getElementById("asr-backend"),
     noCache: document.getElementById("no-cache"),
@@ -24,6 +27,7 @@
     pill: document.getElementById("state-pill"),
     spinner: document.getElementById("spinner"),
     elapsed: document.getElementById("elapsed"),
+    tokens: document.getElementById("tokens"),
     stepper: document.getElementById("stepper"),
     progressBar: document.getElementById("progress-bar"),
     progressFill: document.getElementById("progress-fill"),
@@ -34,7 +38,6 @@
     openReport: document.getElementById("open-report"),
     previewReport: document.getElementById("preview-report"),
     jobError: document.getElementById("job-error"),
-    outRoot: document.getElementById("out-root"),
     runs: document.getElementById("runs"),
     runsCount: document.getElementById("runs-count"),
     runsEmpty: document.getElementById("runs-empty"),
@@ -51,10 +54,13 @@
   var stageIndex = 0;      // 已完成的阶段数：k 表示 k 阶段已过、k+1 正在跑
   var sectionDone = 0;     // 逐节写作：已完成的节数
   var sectionTotal = 0;    // 逐节写作：总节数（来自日志）
+  var tokenText = null;    // LLM 累计用量读数（来自日志，服务端给的已是累计值）
   var currentState = "queued";
   var startedAt = 0;
   var timerId = null;
   var runsCache = [];
+  var probeCache = { key: null, promise: null };  // 同一输入值只预检一次
+  var probeTooLong = false;                        // 当前输入是否已被判超长
 
   /* ───────────────────────────── 工具 ───────────────────────────── */
 
@@ -226,6 +232,24 @@
     renderProgress();
   }
 
+  /* LLM 用量：日志里出现读数就显示，没读到就不显示。
+     服务端给的是同一个 client 的累计值，所以取最后一次即可覆盖全流程。 */
+  function trackTokens(line) {
+    var match = TOKEN_RE.exec(line || "");
+    if (!match) return;
+    tokenText = match[1] + "k";
+    renderTokens();
+  }
+
+  function renderTokens() {
+    if (tokenText === null) {
+      el.tokens.hidden = true;
+      return;
+    }
+    el.tokens.hidden = false;
+    el.tokens.textContent = "token " + tokenText;
+  }
+
   function appendLog(line) {
     var atBottom = el.log.scrollTop + el.log.clientHeight >= el.log.scrollHeight - 24;
     el.log.textContent += (el.log.textContent ? "\n" : "") + line;
@@ -236,6 +260,7 @@
     stageIndex = 0;
     sectionDone = 0;
     sectionTotal = 0;
+    tokenText = null;
     currentState = "queued";
     startedAt = 0;
     stopTimer();
@@ -243,6 +268,7 @@
     el.spinner.hidden = true;
     el.elapsed.hidden = true;
     el.elapsed.textContent = "已用 00:00";
+    renderTokens();
     buildStepper();
     setStage(0);  // 第 1 个阶段立刻置为活跃，避免开头看起来没有任何动静
     show(el.result, false);
@@ -258,20 +284,91 @@
     show(el.formError, Boolean(message));
   }
 
-  el.form.addEventListener("submit", function (event) {
-    event.preventDefault();
-    var payload = {
-      url: el.url.value.trim(),
-      mode: el.mode.value,
-      no_cache: el.noCache.checked,
-      keep_audio: el.keepAudio.checked,
-      asr_backend: el.asr.value || null
-    };
-    if (!payload.url) {
-      setFormError("请先填写 BV 号、视频链接或本地音视频路径。");
-      return;
+  /* ──────────────── 提交前预检：时长与 2 小时上限 ──────────────── */
+
+  function currentSource() {
+    return el.url.value.trim();
+  }
+
+  function showProbeHint(text, tone) {
+    el.probeHint.textContent = text || "";
+    if (tone) {
+      el.probeHint.dataset.tone = tone;
+    } else {
+      delete el.probeHint.dataset.tone;
     }
-    setFormError("");
+    show(el.probeHint, Boolean(text));
+  }
+
+  function setProbeGate(tooLong) {
+    probeTooLong = tooLong;
+    el.submit.disabled = tooLong;
+  }
+
+  // 同一输入值只探测一次：失焦给出即时反馈，提交时复用同一次结果
+  function ensureProbe(value) {
+    if (probeCache.key === value && probeCache.promise) return probeCache.promise;
+    var promise = fetch("/api/probe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: value })
+    })
+      .then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (data) {
+          if (!response.ok) return { ok: false, detail: data.detail };
+          return { ok: true, data: data };
+        });
+      })
+      .catch(function () { return { ok: false }; });
+    probeCache = { key: value, promise: promise };
+    return promise;
+  }
+
+  function renderProbeHint(result) {
+    if (!result.ok) {
+      // 预检失败不应卡住用户，超长由流水线的下载阶段兜底校验
+      showProbeHint("无法预检时长，将在执行时校验");
+      setProbeGate(false);
+      return false;
+    }
+    var data = result.data;
+    if (data.too_long) {
+      showProbeHint(
+        "该视频时长 " + data.duration_text + "，超过 " + data.limit_text +
+        "上限，已禁止提交。", "bad");
+      setProbeGate(true);
+      return true;
+    }
+    showProbeHint("时长 " + data.duration_text + (data.title ? " · " + data.title : ""));
+    setProbeGate(false);
+    return false;
+  }
+
+  // 返回 Promise<是否超长>；输入为空时不拦截（交给提交处的空值校验）
+  function runProbe(value) {
+    if (!value) {
+      showProbeHint("");
+      setProbeGate(false);
+      return Promise.resolve(false);
+    }
+    showProbeHint("正在预检时长…");
+    return ensureProbe(value).then(function (result) {
+      if (currentSource() !== value) return false;  // 输入已改，丢弃过期结果
+      return renderProbeHint(result);
+    });
+  }
+
+  el.url.addEventListener("blur", function () { runProbe(currentSource()); });
+  el.url.addEventListener("change", function () { runProbe(currentSource()); });
+  // 输入变化即失效旧结论，避免拿着上一个视频的判定挡住新输入
+  el.url.addEventListener("input", function () {
+    if (currentSource() !== probeCache.key) {
+      showProbeHint("");
+      setProbeGate(false);
+    }
+  });
+
+  function submitJob(payload) {
     el.submit.disabled = true;
     fetch("/api/jobs", {
       method: "POST",
@@ -294,8 +391,32 @@
         setFormError("无法连接本地服务：" + error.message);
       })
       .finally(function () {
-        el.submit.disabled = false;
+        el.submit.disabled = probeTooLong;
       });
+  }
+
+  el.form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var source = currentSource();
+    var payload = {
+      url: source,
+      mode: el.mode.value,
+      no_cache: el.noCache.checked,
+      keep_audio: el.keepAudio.checked,
+      asr_backend: el.asr.value || null
+    };
+    if (!source) {
+      setFormError("请先填写 BV 号、视频链接或本地音视频路径。");
+      return;
+    }
+    setFormError("");
+    el.submit.disabled = true;
+    // 点击提交会先触发失焦预检，但结果未必已回来；这里复用同一次探测，
+    // 保证「超长」一定在创建任务之前被拦下。
+    runProbe(source).then(function (tooLong) {
+      if (tooLong) return;
+      submitJob(payload);
+    });
   });
 
   function attachJob(jobId, reset) {
@@ -315,6 +436,7 @@
       var line = JSON.parse(event.data).line;
       appendLog(line);
       trackSections(line);
+      trackTokens(line);
     });
     stream.addEventListener("done", function (event) {
       finishJob(JSON.parse(event.data));
@@ -363,6 +485,7 @@
         if (!snapshot) { sessionStorage.removeItem(STORE_KEY); return; }
         el.log.textContent = (snapshot.logs || []).join("\n");
         el.log.scrollTop = el.log.scrollHeight;
+        (snapshot.logs || []).forEach(trackTokens);
         if (snapshot.stage_index) setStage(snapshot.stage_index);
         if (snapshot.state === "done") {
           finishJob({ report_url: snapshot.report_url });
@@ -394,14 +517,10 @@
     fetch("/api/runs")
       .then(function (response) { return response.json(); })
       .then(function (data) {
-        el.outRoot.textContent = data.out_root || "—";
-        el.outRoot.title = data.out_root || "";
         runsCache = data.runs || [];
         renderRuns();
       })
-      .catch(function () {
-        el.outRoot.textContent = "无法连接服务";
-      });
+      .catch(function () {});
   }
 
   function renderRuns() {
@@ -440,6 +559,16 @@
       card.appendChild(meta);
 
       var actions = node("div", "run-actions");
+
+      // 原视频只对远程链接可跳转；本地文件的 file:// 会被浏览器拦截
+      if (/^https?:\/\//i.test(run.url || "")) {
+        var origin = node("a", "btn btn-small", "查看原视频");
+        origin.href = run.url;
+        origin.target = "_blank";
+        origin.rel = "noopener";
+        actions.appendChild(origin);
+      }
+
       if (run.has_report) {
         var view = node("button", "btn btn-small", "预览");
         view.type = "button";
@@ -451,6 +580,11 @@
         fresh.target = "_blank";
         fresh.rel = "noopener";
         actions.appendChild(fresh);
+
+        // 让服务端下发 Content-Disposition 决定文件名，因此不设 download 属性
+        var exportMd = node("a", "btn btn-small", "导出 MD");
+        exportMd.href = "/api/runs/" + encodeURIComponent(run.run_id) + "/markdown";
+        actions.appendChild(exportMd);
       } else {
         actions.appendChild(node("span", "tag", "无 report.html"));
       }
@@ -489,8 +623,15 @@
         var trace = detail.trace || { stages: [], errors: [], total_ms: 0, tokens: 0 };
         var table = node("table", "trace");
         var head = node("tr");
-        ["阶段", "耗时", "token", "状态"].forEach(function (label) {
-          head.appendChild(node("th", null, label));
+        // 耗时 / token 两列是右对齐数字，表头必须同样右对齐才不会与数据错位
+        var HEAD_COLUMNS = [
+          { label: "阶段", numeric: false },
+          { label: "耗时", numeric: true },
+          { label: "token", numeric: true },
+          { label: "状态", numeric: false }
+        ];
+        HEAD_COLUMNS.forEach(function (column) {
+          head.appendChild(node("th", column.numeric ? "num" : null, column.label));
         });
         table.appendChild(head);
 

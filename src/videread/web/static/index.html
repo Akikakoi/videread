@@ -13,10 +13,6 @@
     <span class="brand-name">videread</span>
     <span class="brand-sub">把视频转写重组成可读报告</span>
   </div>
-  <div class="topbar-meta">
-    <span class="muted">产物目录</span>
-    <code id="out-root">—</code>
-  </div>
 </header>
 
 <main class="layout">
@@ -31,6 +27,7 @@
         <input id="url" type="text" autocomplete="off" required
                placeholder="BV1xx411c7mD">
       </label>
+      <p id="probe-hint" class="probe-hint" hidden></p>
 
       <div class="grid-2">
         <label class="field">
@@ -66,6 +63,7 @@
         <span class="progress-status">
           <span id="spinner" class="spinner" aria-hidden="true" hidden></span>
           <span id="elapsed" class="elapsed" hidden>已用 00:00</span>
+          <span id="tokens" class="tokens" hidden></span>
           <span id="state-pill" class="pill">排队中</span>
         </span>
       </div>

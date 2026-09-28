@@ -13,8 +13,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from videread import failures
-from videread.web import jobs, library
+from videread import download, failures
+from videread.errors import DownloadError
+from videread.web import jobs, library, probe
 from videread.web.app import create_app
 
 URL = "https://www.bilibili.com/video/BV1xx411c7mD"
@@ -218,6 +219,8 @@ def test_api_runs_lists_existing_runs(tmp_path: Path):
     body = response.json()
     assert body["out_root"] == str(tmp_path)
     assert [item["run_id"] for item in body["runs"]] == [RUN_ID]
+    # 控制台「查看原视频」依赖列表里带出原视频链接
+    assert body["runs"][0]["url"] == URL
 
 
 def test_report_route_serves_html_and_404s_unknown(tmp_path: Path):
@@ -231,6 +234,29 @@ def test_report_route_serves_html_and_404s_unknown(tmp_path: Path):
     assert miss.status_code == 404
 
 
+def test_markdown_export_downloads_report(tmp_path: Path):
+    make_run(tmp_path, RUN_ID, title="示例视频")
+    with TestClient(create_app(tmp_path)) as client:
+        response = client.get(f"/api/runs/{RUN_ID}/markdown")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/markdown")
+    # 下载文件名：ASCII 回退 + RFC 5987 的中文标题
+    assert f'filename="{RUN_ID}.md"' in response.headers["content-disposition"]
+    assert "filename*=UTF-8''" in response.headers["content-disposition"]
+    assert "report" in response.text
+
+
+def test_markdown_export_404s_without_report(tmp_path: Path):
+    make_run(tmp_path, RUN_ID, report=False)
+    with TestClient(create_app(tmp_path)) as client:
+        no_report = client.get(f"/api/runs/{RUN_ID}/markdown")
+        unknown = client.get("/api/runs/BV1xx411c7mD-ffffffff/markdown")
+
+    assert no_report.status_code == 404
+    assert unknown.status_code == 404
+
+
 def test_report_route_rejects_traversal(tmp_path: Path):
     (tmp_path / "secret.txt").write_text("nope", encoding="utf-8")
     with TestClient(create_app(tmp_path)) as client:
@@ -242,6 +268,76 @@ def test_report_route_rejects_traversal(tmp_path: Path):
 def test_run_detail_route_404s_unknown(tmp_path: Path):
     with TestClient(create_app(tmp_path)) as client:
         assert client.get("/api/runs/BV1xx411c7mD-ffffffff").status_code == 404
+
+
+# ------------------------------------------------------------------- 预检
+
+
+def _fake_meta(duration: float, title: str = "示例视频"):
+    def _fetch(url, settings=None, *, enforce_limit=True):
+        return download.VideoMeta(
+            bvid="BV1xx411c7mD",
+            title=title,
+            uploader="某UP主",
+            duration=duration,
+            url=url,
+        )
+
+    return _fetch
+
+
+def test_probe_reports_short_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(probe.download, "fetch_meta", _fake_meta(1234.0))
+    with TestClient(create_app(tmp_path)) as client:
+        response = client.post("/api/probe", json={"url": URL})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["too_long"] is False
+    assert body["duration_text"] == "20:34"
+    assert body["limit_seconds"] == 7200
+    assert body["source_kind"] == "remote"
+
+
+def test_probe_flags_over_long_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(probe.download, "fetch_meta", _fake_meta(2 * 3600 + 60))
+    with TestClient(create_app(tmp_path)) as client:
+        body = client.post("/api/probe", json={"url": URL}).json()
+
+    assert body["too_long"] is True
+    assert body["limit_text"] == "2 小时"
+
+
+def test_probe_handles_local_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    local = tmp_path / "sample.m4a"
+    local.write_bytes(b"fake")
+    monkeypatch.setattr(probe.audio, "probe_duration", lambda _path, _settings: 2 * 3600 + 1)
+
+    with TestClient(create_app(tmp_path)) as client:
+        body = client.post("/api/probe", json={"url": str(local)}).json()
+
+    assert body["source_kind"] == "local"
+    assert body["too_long"] is True
+
+
+def test_probe_rejects_invalid_input(tmp_path: Path):
+    with TestClient(create_app(tmp_path)) as client:
+        empty = client.post("/api/probe", json={"url": "   "})
+        missing = client.post("/api/probe", json={"url": str(tmp_path / "nope.m4a")})
+
+    assert empty.status_code == 400
+    assert missing.status_code == 400
+
+
+def test_probe_maps_fetch_failure_to_400(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def boom(*args, **kwargs):
+        raise DownloadError("获取视频元信息失败")
+
+    monkeypatch.setattr(probe.download, "fetch_meta", boom)
+    with TestClient(create_app(tmp_path)) as client:
+        response = client.post("/api/probe", json={"url": URL})
+
+    assert response.status_code == 400
 
 
 # ------------------------------------------------------------------- 任务

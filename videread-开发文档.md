@@ -305,6 +305,8 @@ def run(url: str, *, mode: str = "standard", out_root: Path,
 ```python
 def fetch_meta(url: str) -> VideoMeta
 def download_audio(url: str, dest: Path, *, keep: bool = False) -> Path
+def download_subtitles(url: str, dest: Path) -> list[dict]
+def pick_subtitle(subtitles: list[dict], run_dir: Path) -> Path | None
 ```
 
 要点：
@@ -312,7 +314,9 @@ def download_audio(url: str, dest: Path, *, keep: bool = False) -> Path
 - 先用 `yt-dlp --dump-json` 拿元信息（不下载），失败即归类为下载失败
 - 音频格式优先 `m4a`；不支持时回退 `bestaudio`
 - 若视频自带字幕，一并下载到 `subtitle.<lang>.srt`
-- 校验：`duration > 0` 且 `duration <= 4 * 3600`（超 4 小时拒绝，避免 ASR 成本失控）
+- 多字幕并存时按 `zh-CN → zh-Hans → zh → zh-Hant → en` 取用（`pick_subtitle`）；`--sub-langs` 只做过滤，不决定取哪一份
+- **字幕优先**（`SUBTITLE_FIRST`，默认开）：字幕覆盖视频时长 ≥ 50% 时判为完整，直接由字幕建转写稿，跳过音频下载、音频处理与 ASR；覆盖不足或字幕文件缺失时回退到「下载音频 + ASR」。CLI 可用 `--force-asr` 单次强制走 ASR
+- 校验：`duration > 0` 且 `duration <= 2 * 3600`（超 2 小时拒绝，避免 ASR 成本失控）；本地文件在流水线阶段 1 走同一上限
 - 起子进程一律走 `execution.run_command()`：统一 utf-8 / 文本模式 / 超时，并把「程序缺失」「超时」归一化为 `DownloadError`（本模块与 §6.4 的 ffmpeg 封装共用同一入口）
 
 ### 6.4 `audio.py`

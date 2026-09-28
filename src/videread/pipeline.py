@@ -15,7 +15,7 @@ from typing import Callable
 from . import audio as audio_mod
 from . import download, render
 from .asr import get_backend, load_raw_jsonl, write_raw_jsonl
-from .config import Settings, get_settings
+from .config import MAX_VIDEO_DURATION_SEC, Settings, get_settings
 from .download import VideoMeta
 from .errors import AsrError, AudioError, LlmError, RenderError, UsageError, VidereadError
 from .report import (
@@ -35,12 +35,17 @@ from .transcript import (
     format_time,
     load_units,
     merge_subtitles,
+    segments_from_srt,
+    subtitle_coverage,
     write_jsonl,
     write_markdown,
 )
 
 _MODES = ("standard", "brief")
 _STAGE_LABELS = ("下载", "音频处理", "转写", "规范化", "结构规划", "逐节写作", "渲染")
+
+# 字幕至少覆盖视频时长的这个比例，才允许用它替代 ASR（§6.3）
+_SUBTITLE_MIN_COVERAGE = 0.5
 
 
 def _nonempty(path: Path) -> bool:
@@ -53,17 +58,6 @@ def _cached(text: str) -> str:
 
 def _say(progress: Callable[[str], None], index: int, detail: str) -> None:
     progress(f"[{index}/7] {_STAGE_LABELS[index - 1]} ✓ {detail}")
-
-
-def _local_path(url: str) -> Path | None:
-    text = (url or "").strip()
-    if not text or text.lower().startswith(("http://", "https://")):
-        return None
-    try:
-        path = Path(text).expanduser()
-    except (OSError, ValueError):
-        return None
-    return path if path.is_file() else None
 
 
 def _sections_complete(out_dir: Path, outline: Outline) -> bool:
@@ -79,6 +73,7 @@ def run(
     use_cache: bool = True,
     keep_audio: bool = False,
     asr_backend: str | None = None,
+    force_asr: bool = False,
     open_report: bool = False,
     force_report: bool = False,
     progress: Callable[[str], None] = print,
@@ -97,12 +92,15 @@ def run(
 
     try:
         # ------------------------------------------------------------ [1/7] 下载
-        local_path = _local_path(url)
+        local_path = download.local_path(url)
         if local_path is None and not (url or "").strip().lower().startswith(
             ("http://", "https://")
         ):
             raise UsageError(f"参数既不是有效链接、也不是存在的本地文件：{url}")
         is_local = local_path is not None
+
+        # 字幕优先只对远程视频生效：本地文件没有平台字幕（§6.3）
+        subtitle_path: Path | None = None
 
         if is_local:
             assert local_path is not None
@@ -111,16 +109,26 @@ def run(
             trace = TraceWriter(run_dir / "run.trace.jsonl")
             meta_path = run_dir / "meta.json"
             with trace.stage("download") as stage:
-                if use_cache and _nonempty(meta_path):
+                cached = use_cache and _nonempty(meta_path)
+                if cached:
                     meta = download.read_meta(meta_path)
                     stage.detail["cached"] = True
                     detail = _cached(f"meta.json  {meta.title}  时长 {format_time(meta.duration)}")
                 else:
                     duration = audio_mod.probe_duration(local_path, settings)
                     meta = download.local_meta(local_path, duration)
-                    download.write_meta(meta, meta_path)
                     stage.detail.update({"mode": "local", "duration": duration})
                     detail = f"meta.json  {local_path.name}  时长 {format_time(duration)}"
+                if meta.duration > MAX_VIDEO_DURATION_SEC:
+                    # 远程由 fetch_meta 拦截，本地此前不校验；统一到同一上限（§6.6）
+                    # 校验放在写 meta.json 之前，避免被拒的视频在报告库留下条目
+                    raise UsageError(
+                        f"视频时长 {meta.duration / 3600:.1f} 小时，超过 "
+                        f"{MAX_VIDEO_DURATION_SEC / 3600:.0f} 小时上限，"
+                        "为避免 ASR 成本失控已拒绝"
+                    )
+                if not cached:
+                    download.write_meta(meta, meta_path)
             source_audio: Path | None = local_path
             produced.append(meta_path)
         else:
@@ -154,13 +162,42 @@ def run(
                     stage.detail["subtitles"] = len(meta.subtitles)
                 else:
                     stage.detail["cached"] = True
+
+                # 字幕优先：字幕够完整就不再下载音频、不再调用 ASR
+                if settings.subtitle_first and not force_asr:
+                    candidate = download.pick_subtitle(meta.subtitles, run_dir)
+                    if candidate is None:
+                        if meta.subtitles:
+                            progress(
+                                f"提示：meta.json 记录的字幕（{len(meta.subtitles)} 份）"
+                                "已不在磁盘上，回退到下载音频 + ASR"
+                            )
+                    else:
+                        coverage = subtitle_coverage(candidate, meta.duration)
+                        stage.detail["subtitle_coverage"] = round(coverage, 3)
+                        if coverage >= _SUBTITLE_MIN_COVERAGE:
+                            subtitle_path = candidate
+                        else:
+                            progress(
+                                f"提示：{candidate.name} 只覆盖约 {coverage:.0%} 的视频时长，"
+                                "判为不完整，回退到下载音频 + ASR"
+                            )
+
                 source_audio = download.find_audio(run_dir)
-                if source_audio is None and not (use_cache and _nonempty(wav_path)):
+                if (
+                    subtitle_path is None
+                    and source_audio is None
+                    and not (use_cache and _nonempty(wav_path))
+                ):
                     source_audio = download.download_audio(meta.url, run_dir, settings)
                     did_download = True
                     stage.detail["audio"] = source_audio.name
+                if subtitle_path is not None:
+                    stage.detail["subtitle_first"] = subtitle_path.name
             detail = f"meta.json  {meta.bvid}  时长 {format_time(meta.duration)}"
-            if meta_cached and not did_download:
+            if subtitle_path is not None:
+                detail += f"  字幕优先 {subtitle_path.name}（跳过音频与 ASR）"
+            elif meta_cached and not did_download:
                 detail = _cached(detail)
             produced.append(run_dir / "meta.json")
         _say(progress, 1, detail)
@@ -171,7 +208,10 @@ def run(
         current = _STAGE_LABELS[1]
         wav = run_dir / "audio.wav"
         with trace.stage("audio") as stage:
-            if use_cache and _nonempty(wav):
+            if subtitle_path is not None:
+                stage.detail["skipped"] = "字幕优先，无需音频"
+                detail = "字幕优先，跳过音频处理"
+            elif use_cache and _nonempty(wav):
                 stage.detail["cached"] = True
                 detail = _cached("16kHz 单声道 wav")
             else:
@@ -185,7 +225,7 @@ def run(
                 if not is_local and not keep_audio and source_audio.parent == run_dir:
                     source_audio.unlink(missing_ok=True)
                     stage.detail["removed_source"] = source_audio.name
-        produced.append(wav)
+                produced.append(wav)
         _say(progress, 2, detail)
 
         # ------------------------------------------------------------ [3/7] 转写
@@ -196,6 +236,14 @@ def run(
                 segments = load_raw_jsonl(raw_path)
                 stage.detail.update({"segments": len(segments), "cached": True})
                 detail = _cached(f"{len(segments)} 段")
+            elif subtitle_path is not None:
+                # 直接由平台字幕构造分段，完全不经过 ASR
+                segments = segments_from_srt(subtitle_path)
+                if not segments:
+                    raise AsrError(f"字幕未解析出任何内容：{subtitle_path.name}")
+                write_raw_jsonl(segments, raw_path)
+                stage.detail.update({"segments": len(segments), "source": "subtitle"})
+                detail = f"{len(segments)} 段（平台字幕）"
             else:
                 backend = get_backend(settings, cache_dir=run_dir, progress=progress)
                 segments = backend.transcribe(wav, duration=meta.duration)
@@ -219,12 +267,12 @@ def run(
                 detail = _cached(f"{len(units)} 单元  u0001-u{len(units):04d}")
             else:
                 units = build_units(segments)
-                for subtitle in meta.subtitles:
-                    srt = run_dir / str(subtitle.get("path", ""))
-                    if srt.is_file():
-                        units = merge_subtitles(units, srt)
-                        stage.detail["subtitle"] = srt.name
-                        break
+                # 与字幕优先共用同一套语言优先级，避免出现「用中文字幕建稿、
+                # 又被英文字幕覆盖」这类前后不一致
+                srt = download.pick_subtitle(meta.subtitles, run_dir)
+                if srt is not None:
+                    units = merge_subtitles(units, srt)
+                    stage.detail["subtitle"] = srt.name
                 if not units:
                     raise AsrError("转写规范化后没有任何可用单元")
                 write_jsonl(units, jsonl_path)
@@ -316,7 +364,15 @@ def run(
                 stage.detail["cached"] = True
                 detail = _cached("report.html  自包含检查通过")
             else:
-                ctx = _context(meta, outline, parts, units, settings, mode=mode)
+                ctx = _context(
+                    meta,
+                    outline,
+                    parts,
+                    units,
+                    settings,
+                    mode=mode,
+                    subtitle_first=subtitle_path is not None,
+                )
                 render.render_report(template=render.template_for(mode), ctx=ctx, out=report_path)
                 html = report_path.read_text(encoding="utf-8")
                 detail = "report.html  自包含检查通过"
@@ -358,20 +414,24 @@ def _sources(
     settings: Settings,
     *,
     mode: str,
+    subtitle_first: bool,
 ) -> str:
     counts: dict[str, int] = {}
     for unit in units:
         counts[unit.source] = counts.get(unit.source, 0) + 1
     breakdown = " / ".join(f"{key} {value}" for key, value in sorted(counts.items()))
-    asr_name = settings.asr_backend
-    if asr_name == "dashscope":
-        asr_name = f"dashscope / {settings.dashscope_model}"
+    asr_label = settings.asr_backend
+    if asr_label == "dashscope":
+        asr_label = f"dashscope / {settings.dashscope_model}"
+    if subtitle_first and units and all(unit.source == "subtitle" for unit in units):
+        # 本次完全由平台字幕建稿 = 没调用 ASR，报告里必须如实说明
+        asr_label = "平台字幕（字幕优先，未调用 ASR）"
     generated_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
     url_text = escape(meta.url)
     rows = [
         f"原视频：<a href=\"{url_text}\">{url_text}</a>",
         f"阅读模式：{'Brief' if mode == 'brief' else 'Standard'}；信息结构：{outline.profile}",
-        f"转写：{asr_name}；转写单元 {len(units)} 个（{breakdown or '无'}）",
+        f"转写：{asr_label}；转写单元 {len(units)} 个（{breakdown or '无'}）",
         f"LLM：结构规划 {settings.llm_model_plan}，逐节写作 {settings.llm_model_write}",
         f"生成时间：{generated_at}",
         "正文中 data-source-units 属性指向 transcript.jsonl 的转写单元 id，可据此回溯原文。",
@@ -388,6 +448,7 @@ def _context(
     settings: Settings,
     *,
     mode: str,
+    subtitle_first: bool,
 ) -> dict[str, str]:
     """组装模板上下文；LLM 输出按 §6.10 不转义，平台元信息转义后再注入。"""
     return {
@@ -397,5 +458,12 @@ def _context(
         "ATTRIBUTION": _attribution(meta),
         "VIDEO_DESCRIPTION": escape(meta.description) if meta.description else "",
         "BODY": "\n".join(parts),
-        "SOURCES": _sources(meta, outline, units, settings, mode=mode),
+        "SOURCES": _sources(
+            meta,
+            outline,
+            units,
+            settings,
+            mode=mode,
+            subtitle_first=subtitle_first,
+        ),
     }

@@ -14,6 +14,10 @@ from videread.pipeline import run
 URL = "https://www.bilibili.com/video/BV1xx411c7mD"
 BVID = "BV1xx411c7mD"
 
+# 覆盖整段 12s 视频的字幕；另一份只覆盖开头 1s，用于验证不完整字幕会回退
+SRT_FULL = "1\n00:00:00,000 --> 00:00:12,000\n我们今天讲缓存预热。\n"
+SRT_PARTIAL = "1\n00:00:00,000 --> 00:00:01,000\n开场白。\n"
+
 
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,6 +86,48 @@ def _seed_run(out_root: Path) -> Path:
     return run_dir
 
 
+def _seed_subtitle_run(out_root: Path, srt_text: str) -> Path:
+    """只铺 meta.json + 平台字幕，不含音频与 ASR 产物 —— 字幕优先的起点。"""
+    run_dir = out_root / download.make_run_id(URL, BVID)
+    _write(run_dir / "subtitle.zh-CN.srt", srt_text)
+    _write(
+        run_dir / "meta.json",
+        json.dumps(
+            {
+                "bvid": BVID,
+                "title": "字幕优先讲清楚",
+                "uploader": "某UP主",
+                "duration": 12.0,
+                "url": URL,
+                "cover": "",
+                "description": "",
+                "subtitles": [{"lang": "zh-CN", "path": "subtitle.zh-CN.srt"}],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+    )
+    return run_dir
+
+
+def _read_units(run_dir: Path) -> list[dict]:
+    return [
+        json.loads(line)
+        for line in (run_dir / "transcript.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _stop_at_outline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """让流水线在结构规划阶段停下：能走到这里说明转写稿已经建好。"""
+
+    class _StopLlm:
+        def __init__(self, _settings: object) -> None:
+            raise LlmError("模拟 LLM 不可用")
+
+    monkeypatch.setattr(pipeline, "LlmClient", _StopLlm)
+
+
 def test_pipeline_skips_all_stages_when_cached(tmp_path: Path):
     run_dir = _seed_run(tmp_path)
     lines: list[str] = []
@@ -123,9 +169,155 @@ def test_pipeline_reports_produced_artifacts_on_failure(tmp_path: Path, monkeypa
     assert "已生成的产物" in joined
 
 
+def test_subtitle_first_skips_audio_and_asr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """§6.3：平台字幕够完整时，不下载音频、不调用 ASR，直接由字幕建转写稿。"""
+    run_dir = _seed_subtitle_run(tmp_path, SRT_FULL)
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("字幕优先路径不应触碰下载音频 / ASR")
+
+    monkeypatch.setattr(download, "download_audio", _boom)
+    monkeypatch.setattr(pipeline, "get_backend", _boom)
+    _stop_at_outline(monkeypatch)
+    lines: list[str] = []
+
+    with pytest.raises(LlmError):
+        run(URL, out_root=tmp_path, progress=lines.append)
+
+    joined = "\n".join(lines)
+    assert "字幕优先" in joined
+    assert "跳过音频处理" in joined
+    # 音频阶段的耗时条目仍在，但标记为跳过
+    stages = [
+        json.loads(line)
+        for line in (run_dir / "run.trace.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    ends = {item["stage"]: item for item in stages if item["event"] == "end"}
+    assert ends["audio"]["detail"]["skipped"]
+    assert ends["asr"]["detail"]["source"] == "subtitle"
+
+    units = _read_units(run_dir)
+    assert units and all(unit["source"] == "subtitle" for unit in units)
+    assert "缓存预热" in units[0]["text"]
+
+
+def test_subtitle_first_falls_back_when_subtitle_is_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """字幕只覆盖一小段视频时判为不完整，回退到下载音频 + ASR。"""
+    run_dir = _seed_subtitle_run(tmp_path, SRT_PARTIAL)
+    _write(run_dir / "audio.wav", "fake-wav")
+    _write(
+        run_dir / "asr.raw.jsonl",
+        json.dumps({"start": 0.0, "end": 12.0, "text": "ASR 文本。"}, ensure_ascii=False) + "\n",
+    )
+    _stop_at_outline(monkeypatch)
+    lines: list[str] = []
+
+    with pytest.raises(LlmError):
+        run(URL, out_root=tmp_path, progress=lines.append)
+
+    joined = "\n".join(lines)
+    assert "判为不完整" in joined
+    assert "字幕优先" not in joined
+    # 字幕覆盖率不足，转写单元应保持 ASR 来源
+    assert all(unit["source"] == "asr" for unit in _read_units(run_dir))
+
+
+def test_subtitle_first_can_be_disabled_by_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """SUBTITLE_FIRST=0 时，即使有完整字幕也照旧下载音频走 ASR。"""
+    monkeypatch.setenv("SUBTITLE_FIRST", "0")
+    run_dir = _seed_subtitle_run(tmp_path, SRT_FULL)
+    _write(run_dir / "audio.wav", "fake-wav")
+    _write(
+        run_dir / "asr.raw.jsonl",
+        json.dumps({"start": 0.0, "end": 12.0, "text": "ASR 文本。"}, ensure_ascii=False) + "\n",
+    )
+    _stop_at_outline(monkeypatch)
+    lines: list[str] = []
+
+    with pytest.raises(LlmError):
+        run(URL, out_root=tmp_path, progress=lines.append)
+
+    assert "字幕优先" not in "\n".join(lines)
+
+
+def test_force_asr_overrides_subtitle_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """--force-asr 无视配置与字幕，坚持走 ASR。"""
+    run_dir = _seed_subtitle_run(tmp_path, SRT_FULL)
+    _write(run_dir / "audio.wav", "fake-wav")
+    _write(
+        run_dir / "asr.raw.jsonl",
+        json.dumps({"start": 0.0, "end": 12.0, "text": "ASR 文本。"}, ensure_ascii=False) + "\n",
+    )
+    _stop_at_outline(monkeypatch)
+    lines: list[str] = []
+
+    with pytest.raises(LlmError):
+        run(URL, out_root=tmp_path, force_asr=True, progress=lines.append)
+
+    assert "字幕优先" not in "\n".join(lines)
+
+
+def test_pick_subtitle_prefers_chinese_and_checks_existence(tmp_path: Path):
+    """多字幕并存时中文优先；meta 里记录的文件已删除则视为没有字幕。"""
+    _write(tmp_path / "subtitle.en.srt", "1\n00:00:00,000 --> 00:00:01,000\nhello\n")
+    _write(tmp_path / "subtitle.zh-CN.srt", SRT_FULL)
+    subtitles = [
+        {"lang": "en", "path": "subtitle.en.srt"},
+        {"lang": "zh-CN", "path": "subtitle.zh-CN.srt"},
+    ]
+
+    picked = download.pick_subtitle(subtitles, tmp_path)
+    assert picked is not None and picked.name == "subtitle.zh-CN.srt"
+    assert download.pick_subtitle([{"lang": "zh-CN", "path": "gone.srt"}], tmp_path) is None
+    assert download.pick_subtitle([], tmp_path) is None
+
+
+def test_sources_label_is_honest_about_skipping_asr():
+    """报告来源说明必须如实：字幕建稿时不得宣称调用过 ASR。"""
+    from types import SimpleNamespace
+
+    from videread.config import get_settings
+    from videread.transcript import TranscriptUnit
+
+    units = [
+        TranscriptUnit(id="u0001", start=0.0, end=1.0, text="你好", source="subtitle"),
+    ]
+    meta = download.VideoMeta(bvid=BVID, title="t", uploader="u", duration=1.0, url=URL)
+    outline = SimpleNamespace(profile="mechanism")
+    settings = get_settings()
+
+    subtitle_first = pipeline._sources(
+        meta, outline, units, settings, mode="standard", subtitle_first=True
+    )
+    assert "未调用 ASR" in subtitle_first
+
+    # 走 ASR 的路径即便字幕覆盖了全部单元，也不能说成「未调用 ASR」
+    asr_path = pipeline._sources(
+        meta, outline, units, settings, mode="standard", subtitle_first=False
+    )
+    assert "未调用 ASR" not in asr_path
+
+
 def test_pipeline_rejects_missing_local_file(tmp_path: Path):
     with pytest.raises(UsageError):
         run(str(tmp_path / "not-here.m4a"), out_root=tmp_path, progress=lambda _msg: None)
+
+
+def test_pipeline_rejects_over_long_local_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """本地文件此前不校验时长；统一到与远程一致的 2 小时上限。"""
+    local = tmp_path / "long.m4a"
+    local.write_bytes(b"fake")
+    monkeypatch.setattr(pipeline.audio_mod, "probe_duration", lambda _p, _s: 3 * 3600)
+
+    with pytest.raises(UsageError) as excinfo:
+        run(str(local), out_root=tmp_path, progress=lambda _msg: None)
+
+    assert "2 小时上限" in str(excinfo.value)
+    # 被拒的视频不应在报告库留下 meta.json 条目
+    assert list(tmp_path.glob("*/meta.json")) == []
 
 
 def test_pipeline_rejects_unknown_mode(tmp_path: Path):
