@@ -25,32 +25,50 @@
       <label class="field">
         <span class="field-label">BV 号 / 视频链接 / 本地文件路径</span>
         <input id="url" type="text" autocomplete="off" required
-               placeholder="BV1xx411c7mD">
+               placeholder="请输入BV号">
       </label>
       <p id="probe-hint" class="probe-hint" hidden></p>
 
       <div class="grid-2">
-        <label class="field">
-          <span class="field-label">阅读模式</span>
-          <select id="mode">
-            <option value="standard">Standard · 自适应精读</option>
-            <option value="brief">Brief · 字数硬预算速览</option>
-          </select>
-        </label>
-        <label class="field">
-          <span class="field-label">ASR 后端</span>
-          <select id="asr-backend">
-            <option value="">按 .env 配置</option>
-            <option value="dashscope">dashscope · 异步</option>
-            <option value="dashscope-realtime">dashscope-realtime · 实时</option>
-            <option value="openai">openai · whisper</option>
-          </select>
-        </label>
+        <div class="field-group">
+          <label class="field">
+            <span class="field-label">阅读模式</span>
+            <select id="mode">
+              <option value="standard">详细讲解</option>
+              <option value="brief">快速概览</option>
+            </select>
+          </label>
+          <p id="mode-hint" class="field-hint"></p>
+        </div>
+        <div class="field-group">
+          <label class="field">
+            <span class="field-label">语音转文字方式</span>
+            <select id="asr-backend">
+              <option value="">自动选择（推荐）</option>
+              <option value="dashscope">阿里云 · 标准</option>
+              <option value="dashscope-realtime">阿里云 · 实时</option>
+              <option value="openai">OpenAI</option>
+            </select>
+          </label>
+          <p id="asr-hint" class="field-hint"></p>
+        </div>
       </div>
 
       <div class="checks">
-        <label class="check"><input type="checkbox" id="no-cache"> 忽略缓存全部重跑</label>
-        <label class="check"><input type="checkbox" id="keep-audio"> 保留 audio.m4a</label>
+        <label class="check">
+          <input type="checkbox" id="no-cache">
+          <span class="check-text">
+            <span>全部重新生成</span>
+            <span class="check-hint">忽略已有结果，所有步骤从头跑，更慢</span>
+          </span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="keep-audio">
+          <span class="check-text">
+            <span>保留音频文件</span>
+            <span class="check-hint">跑完不自动删除音频，便于排查问题</span>
+          </span>
+        </label>
       </div>
 
       <button id="submit" type="submit" class="btn btn-primary btn-block">开始生成</button>

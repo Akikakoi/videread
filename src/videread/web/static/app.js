@@ -19,6 +19,8 @@
     probeHint: document.getElementById("probe-hint"),
     mode: document.getElementById("mode"),
     asr: document.getElementById("asr-backend"),
+    modeHint: document.getElementById("mode-hint"),
+    asrHint: document.getElementById("asr-hint"),
     noCache: document.getElementById("no-cache"),
     keepAudio: document.getElementById("keep-audio"),
     submit: document.getElementById("submit"),
@@ -300,6 +302,25 @@
     show(el.probeHint, Boolean(text));
   }
 
+  /* 两个下拉下方的一句话说明。用大白话，避免只看到选项名不知差别在哪 */
+  var FIELD_HINTS = {
+    mode: {
+      standard: "内容完整，篇幅随视频信息量伸缩，适合想深入理解时选。",
+      brief: "只留主干结论，严格限制字数，几分钟就能读完。"
+    },
+    asr: {
+      "": "用项目默认设置。视频自带字幕时会直接用字幕，不走转写。",
+      dashscope: "阿里云标准通道，稳定；需账号开通云存储权限，未开通会失败。",
+      "dashscope-realtime": "阿里云实时通道，不需要云存储权限；上一项报错时改用这个。",
+      openai: "调用 OpenAI 转写，需要另外配置 OpenAI 密钥。"
+    }
+  };
+
+  function syncFieldHints() {
+    el.modeHint.textContent = FIELD_HINTS.mode[el.mode.value] || "";
+    el.asrHint.textContent = FIELD_HINTS.asr[el.asr.value] || "";
+  }
+
   function setProbeGate(tooLong) {
     probeTooLong = tooLong;
     el.submit.disabled = tooLong;
@@ -367,6 +388,9 @@
       setProbeGate(false);
     }
   });
+
+  el.mode.addEventListener("change", syncFieldHints);
+  el.asr.addEventListener("change", syncFieldHints);
 
   function submitJob(payload) {
     el.submit.disabled = true;
@@ -506,6 +530,7 @@
         if (!snapshot) { sessionStorage.removeItem(STORE_KEY); return; }
         el.url.value = snapshot.url || el.url.value;
         el.mode.value = snapshot.mode || "standard";
+        syncFieldHints();
         attachJob(jobId, true);
       })
       .catch(function () { sessionStorage.removeItem(STORE_KEY); });
@@ -521,6 +546,25 @@
         renderRuns();
       })
       .catch(function () {});
+  }
+
+  var WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+  // 按自然日归组：同一天解析的记录聚在一起，便于按时间翻历史
+  function dayKey(ms) {
+    var d = new Date(ms);
+    return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate();
+  }
+
+  function dayLabel(ms) {
+    var d = new Date(ms);
+    var now = new Date();
+    var today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    var day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    var text = (d.getMonth() + 1) + "月" + d.getDate() + "日";
+    if (day === today) return "今天 · " + text;
+    if (day === today - 86400000) return "昨天 · " + text;
+    return text + " " + WEEKDAYS[d.getDay()];
   }
 
   function renderRuns() {
@@ -541,71 +585,90 @@
       return;
     }
 
+    // 列表本身已按生成时间倒序，顺序切段即可得到「最新在前」的日期分组
+    var groups = [];
+    var seen = {};
     visible.forEach(function (run) {
-      var card = node("div", "run-card");
-
-      card.appendChild(node("h3", "run-title", run.title || run.run_id));
-
-      var meta = node("p", "run-meta");
-      [run.uploader ? "UP主 " + run.uploader : "",
-       "时长 " + run.duration_text,
-       run.profile || "",
-       run.sections ? run.sections + " 节" : "",
-       run.generated_at || "",
-       run.bvid && run.bvid !== "local" ? run.bvid : "本地文件"
-      ].filter(Boolean).forEach(function (text) {
-        meta.appendChild(node("span", null, text));
-      });
-      card.appendChild(meta);
-
-      var actions = node("div", "run-actions");
-
-      // 原视频只对远程链接可跳转；本地文件的 file:// 会被浏览器拦截
-      if (/^https?:\/\//i.test(run.url || "")) {
-        var origin = node("a", "btn btn-small", "查看原视频");
-        origin.href = run.url;
-        origin.target = "_blank";
-        origin.rel = "noopener";
-        actions.appendChild(origin);
+      var key = run.mtime ? dayKey(run.mtime * 1000) : "unknown";
+      if (!seen[key]) {
+        seen[key] = { label: run.mtime ? dayLabel(run.mtime * 1000) : "时间未知", runs: [] };
+        groups.push(seen[key]);
       }
-
-      if (run.has_report) {
-        var view = node("button", "btn btn-small", "预览");
-        view.type = "button";
-        view.addEventListener("click", function () { openPreview(run.report_url, run.title); });
-        actions.appendChild(view);
-
-        var fresh = node("a", "btn btn-small", "新窗口打开");
-        fresh.href = run.report_url;
-        fresh.target = "_blank";
-        fresh.rel = "noopener";
-        actions.appendChild(fresh);
-
-        // 让服务端下发 Content-Disposition 决定文件名，因此不设 download 属性
-        var exportMd = node("a", "btn btn-small", "导出 MD");
-        exportMd.href = "/api/runs/" + encodeURIComponent(run.run_id) + "/markdown";
-        actions.appendChild(exportMd);
-      } else {
-        actions.appendChild(node("span", "tag", "无 report.html"));
-      }
-
-      var detailButton = node("button", "btn btn-small", "阶段耗时");
-      detailButton.type = "button";
-      actions.appendChild(detailButton);
-      card.appendChild(actions);
-
-      var detail = node("div", "run-detail");
-      show(detail, false);
-      card.appendChild(detail);
-      detailButton.addEventListener("click", function () {
-        if (!detail.hidden) { show(detail, false); return; }
-        show(detail, true);
-        if (detail.dataset.loaded === "1") return;
-        renderDetail(detail, run.run_id);
-      });
-
-      el.runs.appendChild(card);
+      seen[key].runs.push(run);
     });
+
+    groups.forEach(function (group) {
+      var box = node("div", "run-group");
+      box.appendChild(node("p", "run-group-title", group.label));
+      group.runs.forEach(function (run) { box.appendChild(runCard(run)); });
+      el.runs.appendChild(box);
+    });
+  }
+
+  function runCard(run) {
+    var card = node("div", "run-card");
+
+    card.appendChild(node("h3", "run-title", run.title || run.run_id));
+
+    var meta = node("p", "run-meta");
+    [run.uploader ? "UP主 " + run.uploader : "",
+     "时长 " + run.duration_text,
+     run.profile || "",
+     run.sections ? run.sections + " 节" : "",
+     run.generated_at || "",
+     run.bvid && run.bvid !== "local" ? run.bvid : "本地文件"
+    ].filter(Boolean).forEach(function (text) {
+      meta.appendChild(node("span", null, text));
+    });
+    card.appendChild(meta);
+
+    var actions = node("div", "run-actions");
+
+    // 原视频只对远程链接可跳转；本地文件的 file:// 会被浏览器拦截
+    if (/^https?:\/\//i.test(run.url || "")) {
+      var origin = node("a", "btn btn-small", "查看原视频");
+      origin.href = run.url;
+      origin.target = "_blank";
+      origin.rel = "noopener";
+      actions.appendChild(origin);
+    }
+
+    if (run.has_report) {
+      var view = node("button", "btn btn-small", "预览");
+      view.type = "button";
+      view.addEventListener("click", function () { openPreview(run.report_url, run.title); });
+      actions.appendChild(view);
+
+      var fresh = node("a", "btn btn-small", "新窗口打开");
+      fresh.href = run.report_url;
+      fresh.target = "_blank";
+      fresh.rel = "noopener";
+      actions.appendChild(fresh);
+
+      // 让服务端下发 Content-Disposition 决定文件名，因此不设 download 属性
+      var exportMd = node("a", "btn btn-small", "导出 MD");
+      exportMd.href = "/api/runs/" + encodeURIComponent(run.run_id) + "/markdown";
+      actions.appendChild(exportMd);
+    } else {
+      actions.appendChild(node("span", "tag", "无 report.html"));
+    }
+
+    var detailButton = node("button", "btn btn-small", "阶段耗时");
+    detailButton.type = "button";
+    actions.appendChild(detailButton);
+    card.appendChild(actions);
+
+    var detail = node("div", "run-detail");
+    show(detail, false);
+    card.appendChild(detail);
+    detailButton.addEventListener("click", function () {
+      if (!detail.hidden) { show(detail, false); return; }
+      show(detail, true);
+      if (detail.dataset.loaded === "1") return;
+      renderDetail(detail, run.run_id);
+    });
+
+    return card;
   }
 
   function renderDetail(container, runId) {
@@ -700,6 +763,7 @@
   /* ───────────────────────────── 启动 ───────────────────────────── */
 
   buildStepper();
+  syncFieldHints();
   loadRuns();
   var saved = sessionStorage.getItem(STORE_KEY);
   if (saved) resumeJob(saved);

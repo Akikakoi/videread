@@ -1,5 +1,5 @@
 /* videread 控制台样式：色板与排版基线复用 templates/report.html，保持同一套观感。
-   视觉基调为磨砂玻璃（glassmorphism）：柔和极光背景 + 半透明表面 + backdrop-filter。 */
+   视觉基调为磨砂玻璃（glassmorphism）：花卉照片背景 + 半透明表面 + backdrop-filter。 */
 
 *, *::before, *::after { box-sizing: border-box; }
 
@@ -46,37 +46,21 @@ html {
 body {
   margin: 0;
   min-height: 100vh;
-  background:
-    radial-gradient(1300px 900px at 8% -12%, #dceef5 0%, rgba(220, 238, 245, 0) 62%),
-    radial-gradient(1100px 760px at 104% -4%, #e7e9f8 0%, rgba(231, 233, 248, 0) 58%),
-    radial-gradient(1000px 900px at 52% 118%, #e2f2ec 0%, rgba(226, 242, 236, 0) 62%),
-    linear-gradient(162deg, #f7fafc 0%, #eef2f6 46%, #f3f0f8 100%);
-  background-attachment: fixed;
+  /* 背景照片（紫粉花簇，16:9 裁切后 2560×1440）。照片整体偏亮，但右下花色密集、
+     局部偏深，故叠一层自上而下渐浓的白色薄纱，给玻璃面板上的文字留足对比度 */
+  background-color: var(--page);
+  background-image:
+    linear-gradient(180deg, rgba(247, 250, 252, .34) 0%, rgba(240, 246, 251, .54) 100%),
+    url("bg.jpg");
+  background-position: center, center;
+  background-size: cover, cover;
+  background-repeat: no-repeat, no-repeat;
+  background-attachment: fixed, fixed;
   color: var(--ink);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif;
   font-size: 15px;
   line-height: 1.7;
   overflow-wrap: break-word;
-}
-
-/* 极光光斑：为 backdrop-filter 提供可模糊的底层，玻璃才真的“毛”得起来 */
-body::before {
-  content: "";
-  position: fixed;
-  inset: -25vmax;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(closest-side, rgba(29, 156, 189, .40), transparent 70%) 20% 24% / 48vmax 48vmax no-repeat,
-    radial-gradient(closest-side, rgba(124, 140, 232, .32), transparent 70%) 84% 10% / 42vmax 42vmax no-repeat,
-    radial-gradient(closest-side, rgba(62, 195, 216, .28), transparent 70%) 72% 86% / 46vmax 46vmax no-repeat,
-    radial-gradient(closest-side, rgba(15, 111, 140, .20), transparent 70%) 6% 82% / 40vmax 40vmax no-repeat;
-  filter: blur(36px) saturate(1.12);
-  animation: drift 30s ease-in-out infinite alternate;
-}
-@keyframes drift {
-  from { transform: translate3d(-2%, -1%, 0) scale(1); }
-  to { transform: translate3d(2%, 2%, 0) scale(1.08); }
 }
 
 .muted { color: var(--ink-mute); font-size: 13px; }
@@ -133,6 +117,11 @@ body::before {
 .field { display: block; margin: 0 0 14px; }
 .field-label { display: block; margin-bottom: 5px; font-size: 13px; color: var(--ink-soft); }
 
+/* 下拉选项在原生 <option> 里塞不下说明文字，改为在控件下方配一行大白话 */
+.field-group { margin-bottom: 14px; }
+.field-group .field { margin-bottom: 6px; }
+.field-hint { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ink-mute); }
+
 input[type="text"], input[type="search"], select {
   width: 100%;
   padding: 8px 10px;
@@ -153,12 +142,69 @@ input[type="text"]:focus, input[type="search"]:focus, select:focus {
 }
 select option { color: var(--ink); background: var(--paper); }
 
+/* ── 下拉菜单「展开的那层」──────────────────────────────────────
+   select 按钮下方的弹出菜单由系统绘制，普通 CSS 够不到。Chromium 135+ 起可用
+   appearance: base-select + ::picker(select) 把它交给页面样式接管。
+   整段包在 @supports 内：不支持的浏览器（如 Firefox / Safari）会整块忽略，
+   退回系统原生菜单，功能与观感都不受影响。 */
+@supports (appearance: base-select) {
+  select, ::picker(select) { appearance: base-select; }
+
+  ::picker(select) {
+    margin-top: 6px;
+    padding: 6px;
+    border: 1px solid var(--glass-border);
+    border-radius: 16px;
+    background: var(--glass-2);
+    box-shadow: var(--sheen), var(--shadow-raised);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+    transition: opacity .16s ease, transform .16s ease;
+  }
+
+  /* 展开动画只写在 @starting-style：关闭态不设 opacity，菜单不会因动画失效而不可见 */
+  @starting-style {
+    ::picker(select):popover-open {
+      opacity: 0;
+      transform: translateY(-6px) scale(.97);
+    }
+  }
+
+  /* 圆角内缩 = 菜单圆角 − 内边距，保证悬停块与菜单边缘平行 */
+  select option {
+    padding: 8px 12px;
+    border-radius: 10px;
+    color: var(--ink);
+    background: transparent;
+    transition: background .12s ease;
+  }
+  select option:hover,
+  select option:focus-visible { background: var(--accent-soft); }
+  select option:checked { color: var(--accent); font-weight: 600; }
+
+  /* 箭头改由 ::picker-icon 绘制，跟随玻璃按钮的配色 */
+  select::picker-icon { color: var(--ink-mute); transition: rotate .18s ease; }
+  select:open::picker-icon { rotate: 180deg; }
+
+  @media (prefers-reduced-motion: reduce) {
+    ::picker(select), select::picker-icon, select option { transition: none; }
+  }
+}
+
+/* 无 backdrop-filter 能力时，菜单回退为不透明浅玻璃（单列，避免整条规则被无效选择器带塌） */
+@supports (appearance: base-select) and not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  ::picker(select) { background: rgba(255, 255, 255, .96); }
+}
+
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 520px) { .grid-2 { grid-template-columns: 1fr; } }
 
-.checks { display: flex; flex-wrap: wrap; gap: 16px; margin: 2px 0 18px; }
-.check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-soft); }
-.check input { margin: 0; accent-color: var(--accent); }
+.checks { display: flex; flex-wrap: wrap; gap: 14px 28px; margin: 2px 0 18px; }
+.check { display: flex; align-items: flex-start; gap: 6px; font-size: 13px; color: var(--ink-soft); }
+.check input { margin: 1px 0 0; accent-color: var(--accent); }
+/* 复选框同样配一行说明：名称走「标题 + 小字注释」两行结构 */
+.check-text { display: flex; flex-direction: column; gap: 2px; }
+.check-hint { font-size: 12px; line-height: 1.4; color: var(--ink-mute); }
 
 /* ── 按钮 ── */
 .btn {
@@ -440,7 +486,16 @@ select option { color: var(--ink); background: var(--paper); }
 .filter { margin-bottom: 14px; }
 .empty { margin: 8px 0 0; }
 
-.runs { display: grid; gap: 10px; }
+.runs { display: grid; gap: 20px; }
+/* 历史记录按自然日分组，同一天的卡片聚在一条日期标题下 */
+.run-group { display: grid; gap: 10px; }
+.run-group-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-mute);
+  letter-spacing: .02em;
+}
 .run-card {
   padding: 13px 15px;
   border: 1px solid var(--glass-border);
@@ -533,8 +588,7 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .preview { background: rgba(24, 38, 50, .42); }
 }
 
-/* ── 动效偏好：关闭极光漂移 ── */
+/* ── 动效偏好 ── */
 @media (prefers-reduced-motion: reduce) {
-  body::before { animation: none; }
   .btn, .run-card, .stepper li { transition: none; }
 }
