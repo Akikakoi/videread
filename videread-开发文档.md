@@ -152,8 +152,8 @@ videread/
 | 文件                 | 说明                       | 可否复用           |
 | ------------------ | ------------------------ | -------------- |
 | `meta.json`        | 标题 / UP主 / 时长 / URL / 封面 | 是              |
-| `audio.m4a`        | 原始音频（`--keep-audio` 时保留） | 是              |
-| `audio.wav`        | 16kHz 单声道，ASR 输入         | 可删             |
+| `audio.m4a`        | 原始音频（仅在线视频；`--keep-audio` 时保留） | 是              |
+| `audio.wav`        | 16kHz 单声道，ASR 输入（跑完自动清理）  | 可删             |
 | `asr.raw.jsonl`    | ASR 原始输出，带时间戳            | **是（最贵，务必保留）** |
 | `transcript.jsonl` | 规范化转写单元，带 id             | 是              |
 | `transcript.md`    | 同上，人 / 模型可读              | 是              |
@@ -263,7 +263,7 @@ videread/
 #   --mode {standard,brief}   阅读模式，默认 standard
 #   --out DIR                 产物根目录，默认 ./runs
 #   --no-cache                忽略已有产物，全部重跑
-#   --keep-audio              保留 audio.m4a
+#   --keep-audio              跑完保留音频中间文件（默认自动清理）
 #   --open                    生成后自动用浏览器打开
 #   --asr NAME                临时覆盖 ASR 后端
 ```

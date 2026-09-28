@@ -384,6 +384,16 @@ def run(
         produced.append(report_path)
         _say(progress, 7, detail)
 
+        # 跑完自动清理中间产物。audio.wav 是这里体积最大的一项（2h 视频约 230MB，
+        # 实测占整个 run 目录的 99.9%），而它只是 ASR 的输入——ASR 结果已落盘到
+        # asr.raw.jsonl，后续阶段不再读它，故删除不影响报告与各级缓存。
+        # 代价：将来重跑 ASR（如换用别的转写通道）需要重新下载并转码一次音频。
+        # 字幕文件不在此列：体积小，且是「字幕优先」判断覆盖率所必需。
+        if not keep_audio and _nonempty(wav):
+            freed = wav.stat().st_size / 1024 / 1024
+            wav.unlink(missing_ok=True)
+            progress(f"已清理中间产物 audio.wav，释放 {freed:.1f} MB")
+
         if open_report:
             webbrowser.open(report_path.resolve().as_uri())
         return report_path

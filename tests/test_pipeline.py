@@ -439,3 +439,44 @@ def test_realtime_rejects_non_mono_wav(tmp_path: Path):
 
     with pytest.raises(AsrError):
         _read_pcm_frames(stereo)
+
+
+def test_wav_cleaned_up_after_successful_run(tmp_path: Path):
+    """跑完自动清理 audio.wav —— 它占 run 目录体积的 99.9%，且 ASR 之后没人再读。"""
+    run_dir = _seed_run(tmp_path)
+
+    report = run(URL, out_root=tmp_path)
+
+    assert report.exists()
+    assert not (run_dir / "audio.wav").exists()
+    # 清理只针对 wav：报告与各级缓存必须原样保留，否则重跑要重新付费
+    assert (run_dir / "asr.raw.jsonl").exists()
+    assert (run_dir / "transcript.jsonl").exists()
+    assert (run_dir / "outline.json").exists()
+    assert (run_dir / "sections" / "s1.html").exists()
+
+
+def test_keep_audio_preserves_wav(tmp_path: Path):
+    """勾选保留音频时不清理，便于排查问题。"""
+    run_dir = _seed_run(tmp_path)
+
+    run(URL, out_root=tmp_path, keep_audio=True)
+
+    assert (run_dir / "audio.wav").exists()
+
+
+def test_wav_kept_when_run_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """失败时保留 wav：错误回显会列出已生成产物供续跑，删了就续不上。"""
+    run_dir = _seed_run(tmp_path)
+    (run_dir / "sections" / "s1.html").unlink()  # 逼逐节写作真的跑起来
+
+    class _BrokenLlm:
+        def __init__(self, _settings: object) -> None:
+            raise LlmError("模拟 LLM 不可用")
+
+    monkeypatch.setattr(pipeline, "LlmClient", _BrokenLlm)
+
+    with pytest.raises(VidereadError):
+        run(URL, out_root=tmp_path)
+
+    assert (run_dir / "audio.wav").exists()

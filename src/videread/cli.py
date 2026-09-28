@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--out", default=str(DEFAULT_OUT_ROOT), help="产物根目录，默认 ./runs")
     parser.add_argument("--no-cache", action="store_true", help="忽略已有产物，全部重跑")
-    parser.add_argument("--keep-audio", action="store_true", help="保留 audio.m4a")
+    parser.add_argument("--keep-audio", action="store_true", help="跑完保留音频中间文件（默认自动清理）")
     parser.add_argument(
         "--open", dest="open_report", action="store_true", help="生成后自动用浏览器打开"
     )
