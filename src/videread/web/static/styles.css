@@ -161,6 +161,100 @@ input[type="text"]:focus, input[type="search"]:focus, select:focus {
 .progress { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
 .progress-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .progress-title { font-size: 14px; font-weight: 600; }
+.progress-status { display: flex; align-items: center; gap: 8px; }
+
+/* 转圈：仅在有任务推进时出现，静止时不占视觉重量 */
+.spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--accent-line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.elapsed { font-variant-numeric: tabular-nums; }
+
+/* ── 进度条：阶段为主体，逐节写作阶段再按节数细分 ── */
+.progress-bar {
+  position: relative;
+  height: 10px;
+  margin: 0 0 10px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #e7ecef, #f4f7f8);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: inset 0 1px 2px rgba(24, 38, 50, .07);
+  transition: box-shadow .3s ease;
+}
+/* 运行时整条轨道透一圈柔光，静止后回归安静 */
+.progress-bar[data-running="1"] {
+  box-shadow: inset 0 1px 2px rgba(24, 38, 50, .06), 0 0 0 3px var(--accent-soft);
+}
+
+.progress-fill {
+  position: relative;
+  height: 100%;
+  width: 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0b5a72 0%, var(--accent) 40%, #1d9cbd 75%, #3ec3d8 100%);
+  transition: width .5s cubic-bezier(.22, .61, .36, 1);
+}
+/* 玻璃质感：上半部一道高光，压在填充之上 */
+.progress-bar::after {
+  content: "";
+  position: absolute;
+  inset: 1px 1px 55% 1px;
+  pointer-events: none;
+  border-radius: 999px 999px 0 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, 0));
+}
+/* 运行中：填充部分叠一层流动斜纹，长阶段也能一眼看出「还在跑」 */
+.progress-bar[data-running="1"] .progress-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, .32) 25%, transparent 25%,
+    transparent 50%, rgba(255, 255, 255, .32) 50%,
+    rgba(255, 255, 255, .32) 75%, transparent 75%
+  );
+  background-size: 16px 16px;
+  animation: stripes .7s linear infinite;
+}
+@keyframes stripes {
+  from { background-position: 0 0; }
+  to { background-position: 16px 0; }
+}
+
+/* 执行进度行：左侧提示文案，右侧百分比读数 */
+.progress-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.progress-note { margin: 0; min-height: 1.2em; }
+.progress-pct {
+  flex: none;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  transition: color .3s ease;
+}
+.progress-pct[data-state="done"] { color: var(--ok); }
+.progress-pct[data-state="error"] { color: var(--bad); }
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .progress-bar[data-running="1"] .progress-fill::after { animation: none; }
+  .progress-fill, .progress-bar, .progress-pct { transition: none; }
+}
 
 .pill {
   padding: 2px 10px;
@@ -218,6 +312,14 @@ input[type="text"]:focus, input[type="search"]:focus, select:focus {
   background: var(--accent-soft);
   border-color: var(--accent-line);
   font-weight: 600;
+  animation: breathe 1.8s ease-in-out infinite;
+}
+@keyframes breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .68; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stepper li[data-state="active"] { animation: none; }
 }
 .stepper li[data-state="active"]::before { color: var(--accent); border-color: var(--accent); }
 .stepper li[data-state="error"] { color: var(--bad); background: var(--bad-soft); border-color: #f0d4d2; }

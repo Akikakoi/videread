@@ -32,6 +32,9 @@ MAX_VIDEO_DURATION_SEC = 4 * 3600
 ASR_SEGMENT_SECONDS = 1800.0
 ASR_MAX_CONCURRENCY = 3
 
+# 逐节写作的并发路数。各节互相独立，串行调用是整个流水线最长的一段（§6.8）
+LLM_WRITE_CONCURRENCY = 3
+
 # 转写单元上限字符数（§5.3）
 TRANSCRIPT_MAX_CHARS = 160
 
@@ -49,6 +52,7 @@ class Settings:
     llm_api_key: str
     llm_model_plan: str
     llm_model_write: str
+    llm_write_concurrency: int
     llm_timeout: float
     proxy: str | None
     ffmpeg: str | None
@@ -102,6 +106,19 @@ def _env_float(key: str, default: float) -> float:
         raise UsageError(f"环境变量 {key} 不是合法数字：{raw!r}") from exc
 
 
+def _env_int(key: str, default: int, *, minimum: int = 1) -> int:
+    raw = os.environ.get(key, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:  # 参数校验失败不重试（§11.2）
+        raise UsageError(f"环境变量 {key} 不是合法整数：{raw!r}") from exc
+    if value < minimum:
+        raise UsageError(f"环境变量 {key} 不能小于 {minimum}：{raw!r}")
+    return value
+
+
 def get_settings(**overrides: object) -> Settings:
     """读取配置；`overrides` 中非 None 的值覆盖环境变量（CLI 参数优先级最高）。"""
     load_env()
@@ -123,6 +140,7 @@ def get_settings(**overrides: object) -> Settings:
         llm_api_key=os.environ.get("LLM_API_KEY", "").strip(),
         llm_model_plan=(os.environ.get("LLM_MODEL_PLAN", "").strip() or "deepseek-chat"),
         llm_model_write=(os.environ.get("LLM_MODEL_WRITE", "").strip() or "deepseek-chat"),
+        llm_write_concurrency=_env_int("LLM_WRITE_CONCURRENCY", LLM_WRITE_CONCURRENCY),
         llm_timeout=_env_float("LLM_TIMEOUT", LLM_TIMEOUT_SEC),
         proxy=proxy,
         ffmpeg=resolve_binary("FFMPEG_BIN", "ffmpeg"),

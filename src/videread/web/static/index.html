@@ -63,10 +63,23 @@
     <div id="progress" class="progress" hidden>
       <div class="progress-head">
         <span class="progress-title">执行进度</span>
-        <span id="state-pill" class="pill">排队中</span>
+        <span class="progress-status">
+          <span id="spinner" class="spinner" aria-hidden="true" hidden></span>
+          <span id="elapsed" class="elapsed" hidden>已用 00:00</span>
+          <span id="state-pill" class="pill">排队中</span>
+        </span>
       </div>
 
       <ol id="stepper" class="stepper"></ol>
+
+      <div id="progress-bar" class="progress-bar" role="progressbar"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="progress-fill" class="progress-fill"></div>
+      </div>
+      <div class="progress-foot">
+        <p id="progress-note" class="progress-note muted"></p>
+        <span id="progress-pct" class="progress-pct">0%</span>
+      </div>
 
       <pre id="log" class="log" aria-live="polite"></pre>
 

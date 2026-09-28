@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
+from videread.config import get_settings
 from videread.report import writer
 from videread.report.outline import Outline, OutlineSection
 from videread.report.writer import (
@@ -17,6 +20,7 @@ from videread.report.writer import (
     sanitize_section_html,
     write_sections,
 )
+from videread.transcript import TranscriptUnit
 
 _SECTION = OutlineSection(
     id="s1",
@@ -142,3 +146,98 @@ def test_write_sections_injects_heading_from_cache(tmp_path: Path, monkeypatch: 
     assert "<p>正文</p>" in parts[0]
     # 落盘文件只存 LLM 片段，标题不写回缓存
     assert "<h2>" not in (tmp_path / "sections" / "s1.html").read_text(encoding="utf-8")
+
+
+# ------------------------------------------------------------ 并发逐节写作
+
+
+def _units() -> list[TranscriptUnit]:
+    return [TranscriptUnit(id="u0001", start=0.0, end=10.0, text="正文", source="asr")]
+
+
+def _outline(count: int) -> Outline:
+    return Outline(
+        title="t",
+        subtitle="",
+        lead="l",
+        profile="mechanism",
+        sections=[
+            OutlineSection(
+                id=f"s{i}",
+                heading=f"第 {i} 章",
+                time_range="00:00-00:10",
+                intent="讲清机制",
+                source_ids=["u0001"],
+            )
+            for i in range(1, count + 1)
+        ],
+    )
+
+
+def test_write_sections_parallel_keeps_order_and_writes_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """并发只是加速，返回顺序必须仍与大纲一致，且每节都落盘。"""
+    outline = _outline(4)
+    guard = threading.Lock()
+    active = {"now": 0, "peak": 0}
+
+    class _FakeLlm:
+        def __init__(self, _settings: object) -> None:
+            pass
+
+        def complete(self, **_kwargs: object) -> str:
+            with guard:
+                active["now"] += 1
+                active["peak"] = max(active["peak"], active["now"])
+            time.sleep(0.05)  # 给其他线程重叠的机会
+            with guard:
+                active["now"] -= 1
+            return '<p data-source-units="u0001">正文</p>'
+
+    monkeypatch.setattr(writer, "LlmClient", _FakeLlm)
+
+    parts = write_sections(
+        outline,
+        _units(),
+        out_dir=tmp_path,
+        mode="standard",
+        settings=get_settings(llm_write_concurrency=3),
+    )
+
+    assert len(parts) == 4
+    for index in range(1, 5):
+        assert f'<span class="num">{index}</span>第 {index} 章' in parts[index - 1]
+        assert (tmp_path / "sections" / f"s{index}.html").is_file()
+    assert active["peak"] >= 2, "并发没有生效"
+
+
+def test_write_sections_keeps_successes_when_one_section_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """单节失败不应丢掉其他节的产物：已成功的节照样落盘，最后抛出该失败。"""
+    outline = _outline(3)
+
+    class _FlakyLlm:
+        def __init__(self, _settings: object) -> None:
+            pass
+
+        def complete(self, *, user: str, **_kwargs: object) -> str:
+            if "第 2 章" in user:
+                raise RuntimeError("第 2 节炸了")
+            return '<p data-source-units="u0001">正文</p>'
+
+    monkeypatch.setattr(writer, "LlmClient", _FlakyLlm)
+
+    with pytest.raises(RuntimeError, match="第 2 节炸了"):
+        write_sections(
+            outline,
+            _units(),
+            out_dir=tmp_path,
+            mode="standard",
+            settings=get_settings(llm_write_concurrency=3),
+        )
+
+    assert (tmp_path / "sections" / "s1.html").is_file()
+    assert (tmp_path / "sections" / "s3.html").is_file()
+    assert not (tmp_path / "sections" / "s2.html").exists()

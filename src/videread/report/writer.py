@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -177,6 +179,19 @@ def _section_units(section: OutlineSection, unit_map: dict[str, TranscriptUnit])
     return [unit_map[unit_id] for unit_id in section.source_ids if unit_id in unit_map]
 
 
+class _Counter:
+    """并发下的完成计数：只增不减，供「第 k/n 节」进度文案使用。"""
+
+    def __init__(self, start: int = 0) -> None:
+        self._value = start
+        self._lock = threading.Lock()
+
+    def next(self) -> int:
+        with self._lock:
+            self._value += 1
+            return self._value
+
+
 def write_sections(
     outline: Outline,
     units: list[TranscriptUnit],
@@ -190,6 +205,10 @@ def write_sections(
     allowed_classes: set[str] | None = None,
 ) -> list[str]:
     """逐节生成正文片段，返回按大纲顺序排好的 HTML 列表。
+
+    各节互相独立：只读自己那节的转写单元、只写自己的 `sections/sN.html`，
+    因此除缓存命中的节先按序快速处理外，其余各节用有界线程池并发调用，
+    把串行的 LLM 等待时间压到最短；返回顺序始终与大纲一致。
 
     返回值是**已完成标题拼装**的整节 HTML（标题由 `assemble_section` 注入）。
     落盘的 `sections/sN.html` 只存 LLM 片段，标题在拼装时确定性生成，
@@ -206,26 +225,37 @@ def write_sections(
     unit_map = {unit.id: unit for unit in units}
     system = prompts.writer_system(mode)
     component_list = prompts.components_for(mode)
+    total = len(outline.sections)
 
-    parts: list[str] = []
+    parts: dict[str, str] = {}
+    pending: list[tuple[int, OutlineSection]] = []
     done = 0
+
+    # 先按大纲顺序处理缓存命中的节；全部命中时不应构造 LlmClient
     for index, section in enumerate(outline.sections, start=1):
-        path = directory / f"{section.id}.html"
-        if section.id in cached:
-            done += 1
-            progress(f"第 {done}/{len(outline.sections)} 节命中缓存，跳过")
-            fragment = strip_markdown_markers(cached[section.id])
-            if allowed_classes is not None:
-                fragment, dropped = strip_unknown_classes(fragment, allowed_classes)
-                if dropped:
-                    progress(f"第 {section.id} 节：未定义的 class 已剔除：{','.join(dropped)}")
-            parts.append(assemble_section(section, index, fragment, mode=mode))
+        fragment = cached.get(section.id)
+        if fragment is None:
+            if not _section_units(section, unit_map):
+                raise LlmError(f"第 {section.id} 节没有可用的转写单元")
+            pending.append((index, section))
             continue
+        fragment = strip_markdown_markers(fragment)
+        if allowed_classes is not None:
+            fragment, dropped = strip_unknown_classes(fragment, allowed_classes)
+            if dropped:
+                progress(f"第 {section.id} 节：未定义的 class 已剔除：{','.join(dropped)}")
+        done += 1
+        progress(f"第 {done}/{total} 节命中缓存，跳过")
+        parts[section.id] = assemble_section(section, index, fragment, mode=mode)
 
+    if not pending:
+        return [parts[section.id] for section in outline.sections]
+
+    llm = client or LlmClient(settings)
+    counter = _Counter(done)
+
+    def _generate(section: OutlineSection) -> str:
         section_units = _section_units(section, unit_map)
-        if not section_units:
-            raise LlmError(f"第 {section.id} 节没有可用的转写单元")
-
         user = prompts.fill(
             prompts.WRITER_USER,
             heading=section.heading,
@@ -234,22 +264,42 @@ def write_sections(
             section_units_md=units_to_markdown(section_units),
             component_list=component_list,
         )
-        client = client or LlmClient(settings)
-        raw = client.complete(system=system, user=user, model=settings.llm_model_write)
+        raw = llm.complete(system=system, user=user, model=settings.llm_model_write)
         html, violations = sanitize_section_html(
             raw, set(section.source_ids), allowed_classes
         )
         for violation in violations:
             progress(f"第 {section.id} 节：{violation}")
-
         if mode == "brief":
             chars = count_text_chars(html)
             if chars > BRIEF_SECTION_MAX * 1.2:
                 progress(f"第 {section.id} 节 {chars} 字，明显超出 Brief 单节建议上限")
+        return html
 
-        path.write_text(html + "\n", encoding="utf-8", newline="\n")
-        done += 1
-        progress(f"第 {done}/{len(outline.sections)} 节完成")
-        parts.append(assemble_section(section, index, html, mode=mode))
+    # 单节失败不打断其他节：已成功的节照常落盘，最后统一抛出最先失败的那一节
+    failures: list[tuple[int, BaseException]] = []
+    workers = max(1, min(settings.llm_write_concurrency, len(pending)))
+    with ThreadPoolExecutor(
+        max_workers=workers, thread_name_prefix="videread-writer"
+    ) as pool:
+        futures = {
+            pool.submit(_generate, section): (index, section)
+            for index, section in pending
+        }
+        for future in as_completed(futures):
+            index, section = futures[future]
+            try:
+                html = future.result()
+            except BaseException as exc:  # noqa: BLE001 - 收集后统一抛出
+                failures.append((index, exc))
+                continue
+            path = directory / f"{section.id}.html"
+            path.write_text(html + "\n", encoding="utf-8", newline="\n")
+            done = counter.next()
+            progress(f"第 {done}/{total} 节完成")
+            parts[section.id] = assemble_section(section, index, html, mode=mode)
 
-    return parts
+    if failures:
+        _index, first = min(failures, key=lambda item: item[0])
+        raise first
+    return [parts[section.id] for section in outline.sections]

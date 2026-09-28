@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 
 from ..config import Settings
@@ -48,24 +49,30 @@ def strip_code_fence(text: str) -> str:
 
 
 class LlmClient:
-    """一次构造，多次调用；`usage` 累计两条 prompt 的总用量。"""
+    """一次构造，多次调用；`usage` 累计两条 prompt 的总用量。
+
+    逐节写作会并发调用同一个实例，因此 SDK 懒加载与 token 累加都要加锁：
+    前者避免并发各建一个客户端，后者避免 `+=` 读改写丢计数。
+    """
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.api_key = settings.require_llm()
         self.usage = Usage()
         self._client = None
+        self._lock = threading.Lock()
 
     def _sdk(self):
-        if self._client is None:
-            from openai import OpenAI
+        with self._lock:
+            if self._client is None:
+                from openai import OpenAI
 
-            self._client = OpenAI(
-                api_key=self.api_key,
-                base_url=self.settings.llm_base_url,
-                timeout=self.settings.llm_timeout,
-            )
-        return self._client
+                self._client = OpenAI(
+                    api_key=self.api_key,
+                    base_url=self.settings.llm_base_url,
+                    timeout=self.settings.llm_timeout,
+                )
+            return self._client
 
     def complete(
         self,
@@ -90,12 +97,15 @@ class LlmClient:
             response = self._sdk().chat.completions.create(**kwargs)
             usage = getattr(response, "usage", None)
             if usage is not None:
-                self.usage.add(
-                    Usage(
-                        prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
-                        completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+                with self._lock:
+                    self.usage.add(
+                        Usage(
+                            prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+                            completion_tokens=int(
+                                getattr(usage, "completion_tokens", 0) or 0
+                            ),
+                        )
                     )
-                )
             choices = getattr(response, "choices", None) or []
             if not choices:
                 raise LlmError("LLM 返回空 choices")

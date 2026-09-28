@@ -5,6 +5,10 @@
   "use strict";
 
   var STAGES = ["下载", "音频处理", "转写", "规范化", "结构规划", "逐节写作", "渲染"];
+  var STAGE_COUNT = STAGES.length;
+  // 逐节写作在 STAGES 里的序号（1 起）：只有这个阶段有「第 k/n 节」的子进度
+  var WRITER_STAGE = STAGES.indexOf("逐节写作") + 1;
+  var SECTION_RE = /第\s*(\d+)\/(\d+)\s*节/;
   var STORE_KEY = "videread.job";
 
   var el = {
@@ -18,7 +22,13 @@
     formError: document.getElementById("form-error"),
     progress: document.getElementById("progress"),
     pill: document.getElementById("state-pill"),
+    spinner: document.getElementById("spinner"),
+    elapsed: document.getElementById("elapsed"),
     stepper: document.getElementById("stepper"),
+    progressBar: document.getElementById("progress-bar"),
+    progressFill: document.getElementById("progress-fill"),
+    progressNote: document.getElementById("progress-note"),
+    progressPct: document.getElementById("progress-pct"),
     log: document.getElementById("log"),
     result: document.getElementById("result"),
     openReport: document.getElementById("open-report"),
@@ -38,7 +48,12 @@
   };
 
   var stream = null;
-  var stageIndex = 0;
+  var stageIndex = 0;      // 已完成的阶段数：k 表示 k 阶段已过、k+1 正在跑
+  var sectionDone = 0;     // 逐节写作：已完成的节数
+  var sectionTotal = 0;    // 逐节写作：总节数（来自日志）
+  var currentState = "queued";
+  var startedAt = 0;
+  var timerId = null;
   var runsCache = [];
 
   /* ───────────────────────────── 工具 ───────────────────────────── */
@@ -57,6 +72,13 @@
     if (n < 1024) return n + " B";
     if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
     return (n / 1048576).toFixed(1) + " MB";
+  }
+
+  function fmtClock(seconds) {
+    var total = Math.max(0, Math.floor(seconds));
+    var minutes = Math.floor(total / 60);
+    var rest = total % 60;
+    return (minutes < 10 ? "0" : "") + minutes + ":" + (rest < 10 ? "0" : "") + rest;
   }
 
   function node(tag, className, text) {
@@ -87,24 +109,27 @@
     var items = el.stepper.children;
     for (var i = 0; i < items.length; i++) {
       var position = i + 1;
-      if (position < index) {
+      // 服务端在阶段「结束后」才上报 index，所以 index 表示已完成数，
+      // 活跃项是 index + 1 —— 长阶段期间才看得到动的东西。
+      if (position <= index) {
         items[i].dataset.state = "done";
-      } else if (position === index) {
+      } else if (position === index + 1) {
         items[i].dataset.state = "active";
       } else if (items[i].dataset.state !== "error") {
         items[i].dataset.state = "pending";
       }
     }
+    renderProgress();
   }
 
   function completeStages() {
+    stageIndex = STAGE_COUNT;
     for (var i = 0; i < el.stepper.children.length; i++) {
       el.stepper.children[i].dataset.state = "done";
     }
   }
 
   function failStages(index) {
-    if (!index) return;
     for (var i = 0; i < el.stepper.children.length; i++) {
       var position = i + 1;
       if (position === index) {
@@ -115,10 +140,90 @@
     }
   }
 
+  /* 进度条：以 7 个阶段为刻度；「逐节写作」阶段再按 第 k/n 节 细分，
+     这样最长的那个阶段里数字也会持续往前走，而不是卡住不动。 */
+  function progressPercent() {
+    if (currentState === "done") return 100;
+    if (currentState === "error") return null;
+    var completed = Math.min(stageIndex, STAGE_COUNT);
+    var fraction = 0;
+    if (completed + 1 === WRITER_STAGE && sectionTotal > 0) {
+      fraction = Math.min(1, sectionDone / sectionTotal);
+    }
+    // 未结束前一格不满，避免出现"100% 却还没完"的错觉
+    return Math.min(99, Math.round(((completed + fraction) / STAGE_COUNT) * 100));
+  }
+
+  function progressNoteText() {
+    if (currentState === "done") return "全部阶段完成";
+    if (currentState === "error") return "已中断";
+    if (currentState === "queued") return "等待执行…";
+    if (stageIndex >= STAGE_COUNT) return "收尾…";
+    var label = STAGES[Math.min(stageIndex, STAGE_COUNT - 1)];
+    if (stageIndex + 1 === WRITER_STAGE && sectionTotal > 0) {
+      return label + " · " + sectionDone + "/" + sectionTotal + " 节";
+    }
+    return label;
+  }
+
+  function renderProgress() {
+    var percent = progressPercent();
+    if (percent === null) {
+      el.progressBar.dataset.running = "0";
+      el.progressPct.textContent = "—";
+    } else {
+      el.progressFill.style.width = percent + "%";
+      el.progressBar.setAttribute("aria-valuenow", String(percent));
+      el.progressBar.dataset.running =
+        (currentState === "running" || currentState === "queued") ? "1" : "0";
+      el.progressPct.textContent = percent + "%";
+    }
+    el.progressPct.dataset.state = currentState;
+    el.progressNote.textContent = progressNoteText();
+  }
+
+  function tickElapsed() {
+    if (!startedAt) return;
+    el.elapsed.textContent = "已用 " + fmtClock((Date.now() - startedAt) / 1000);
+  }
+
+  function startTimer() {
+    startedAt = Date.now();
+    el.elapsed.hidden = false;
+    tickElapsed();
+    if (timerId === null) timerId = window.setInterval(tickElapsed, 1000);
+  }
+
+  function stopTimer() {
+    if (timerId !== null) {
+      window.clearInterval(timerId);
+      timerId = null;
+    }
+    tickElapsed();
+  }
+
   function setState(state) {
+    currentState = state;
     var labels = { queued: "排队中", running: "执行中", done: "已完成", error: "失败" };
     el.pill.textContent = labels[state] || state;
     el.pill.dataset.state = state;
+    el.spinner.hidden = !(state === "queued" || state === "running");
+    if (state === "running") {
+      if (timerId === null) startTimer();
+    } else if (state === "queued") {
+      el.elapsed.hidden = true;
+    } else {
+      stopTimer();
+    }
+    renderProgress();
+  }
+
+  function trackSections(line) {
+    var match = SECTION_RE.exec(line || "");
+    if (!match) return;
+    sectionDone = parseInt(match[1], 10);
+    sectionTotal = parseInt(match[2], 10);
+    renderProgress();
   }
 
   function appendLog(line) {
@@ -129,8 +234,17 @@
 
   function resetProgress() {
     stageIndex = 0;
-    buildStepper();
+    sectionDone = 0;
+    sectionTotal = 0;
+    currentState = "queued";
+    startedAt = 0;
+    stopTimer();
     el.log.textContent = "";
+    el.spinner.hidden = true;
+    el.elapsed.hidden = true;
+    el.elapsed.textContent = "已用 00:00";
+    buildStepper();
+    setStage(0);  // 第 1 个阶段立刻置为活跃，避免开头看起来没有任何动静
     show(el.result, false);
     show(el.jobError, false);
     el.jobError.textContent = "";
@@ -198,7 +312,9 @@
       setStage(JSON.parse(event.data).index);
     });
     stream.addEventListener("log", function (event) {
-      appendLog(JSON.parse(event.data).line);
+      var line = JSON.parse(event.data).line;
+      appendLog(line);
+      trackSections(line);
     });
     stream.addEventListener("done", function (event) {
       finishJob(JSON.parse(event.data));
@@ -231,7 +347,8 @@
     sessionStorage.removeItem(STORE_KEY);
     setState("error");
     if (stream) { stream.close(); stream = null; }
-    failStages(stageIndex || STAGES.length);
+    // stageIndex 是已完成数，出错的阶段是它后面那一个
+    failStages(Math.min(stageIndex + 1, STAGE_COUNT));
     // hint 由服务端 failures 下发，前端不再维护退出码对照表
     el.jobError.textContent = "任务失败（退出码 " + data.exit_code + "）" +
       (data.hint ? "：" + data.hint : "") + "\n" + (data.message || "");
