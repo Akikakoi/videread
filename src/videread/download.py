@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from . import execution
 from .config import MAX_VIDEO_DURATION_SEC, Settings, get_settings
 from .errors import DownloadError
 
@@ -95,6 +96,18 @@ def extract_bvid(url: str) -> str:
     return match.group(1) if match else ""
 
 
+def normalize_source(text: str) -> str:
+    """把裸 BV 号补成标准视频链接；链接 / 本地路径原样返回（仅去首尾空白）。
+
+    统一在这里归一化，保证同一个视频无论用 BV 号还是完整链接提交，
+    都算出同一个 run-id，缓存不会因为两种写法而分裂。
+    """
+    value = (text or "").strip()
+    if _BVID_RE.fullmatch(value):
+        return f"https://www.bilibili.com/video/{value}"
+    return value
+
+
 def make_run_id(url: str, bvid: str) -> str:
     """`{bvid}-{hash8}`：同一视频多次运行落到同一目录（§4）。"""
     digest = hashlib.sha256(canonical_url(url).encode("utf-8")).hexdigest()[:8]
@@ -138,20 +151,13 @@ def _yt_dlp(args: list[str], settings: Settings, *, timeout: float = 900) -> sub
     if settings.proxy:
         cmd += ["--proxy", settings.proxy]
     cmd += args
-    try:
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise DownloadError("yt-dlp 未安装：请执行 `pip install yt-dlp`") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise DownloadError(f"下载超时（{timeout:.0f}s）") from exc
+    return execution.run_command(
+        cmd,
+        timeout=timeout,
+        error_cls=DownloadError,
+        missing_message=lambda _program: "yt-dlp 未安装：请执行 `pip install yt-dlp`",
+        timeout_message=lambda seconds, _program: f"下载超时（{seconds:.0f}s）",
+    )
 
 
 def _fail(action: str, result: subprocess.CompletedProcess[str]) -> DownloadError:

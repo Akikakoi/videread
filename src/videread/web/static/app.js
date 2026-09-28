@@ -5,13 +5,6 @@
   "use strict";
 
   var STAGES = ["下载", "音频处理", "转写", "规范化", "结构规划", "逐节写作", "渲染"];
-  var EXIT_HINTS = {
-    1: "参数 / 用法错误（含缺少密钥）",
-    2: "下载失败（反爬、地域限制、链接失效）",
-    3: "音频处理或 ASR 失败",
-    4: "LLM 调用失败（超时、限流、JSON 非法）",
-    5: "渲染或写盘失败"
-  };
   var STORE_KEY = "videread.job";
 
   var el = {
@@ -161,7 +154,7 @@
       asr_backend: el.asr.value || null
     };
     if (!payload.url) {
-      setFormError("请先填写视频链接或本地音视频路径。");
+      setFormError("请先填写 BV 号、视频链接或本地音视频路径。");
       return;
     }
     setFormError("");
@@ -239,9 +232,9 @@
     setState("error");
     if (stream) { stream.close(); stream = null; }
     failStages(stageIndex || STAGES.length);
-    var hint = EXIT_HINTS[data.exit_code];
+    // hint 由服务端 failures 下发，前端不再维护退出码对照表
     el.jobError.textContent = "任务失败（退出码 " + data.exit_code + "）" +
-      (hint ? "：" + hint : "") + "\n" + (data.message || "");
+      (data.hint ? "：" + data.hint : "") + "\n" + (data.message || "");
     show(el.jobError, true);
     loadRuns();
   }
@@ -257,7 +250,7 @@
         if (snapshot.state === "done") {
           finishJob({ report_url: snapshot.report_url });
         } else if (snapshot.state === "error") {
-          failJob({ exit_code: snapshot.exit_code, message: snapshot.error || "" });
+          failJob({ exit_code: snapshot.exit_code, hint: snapshot.error_hint, message: snapshot.error || "" });
         } else {
           // 进度仍在推进但事件流已断：退化为轮询直到终态
           window.setTimeout(function () { pollSnapshot(jobId); }, 2000);

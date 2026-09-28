@@ -14,7 +14,7 @@
 
 ### 1.1 目标
 
-输入一个 Bilibili 视频链接（或本地音视频文件），自动完成 **下载 → 转写 → 内容编辑 → 生成一份自包含的 HTML 阅读报告**，双击即可阅读，也可导出为长图分享。
+输入一个 Bilibili 视频链接或 BV 号（或本地音视频文件），自动完成 **下载 → 转写 → 内容编辑 → 生成一份自包含的 HTML 阅读报告**，双击即可阅读，也可导出为长图分享。
 
 报告不是"逐句摘要"，而是**按信息结构重新组织的阅读材料**：保留关键条件、数字、公式、归因与不确定性，让没看过视频的人也能理解主要内容。
 
@@ -62,7 +62,7 @@
 ### 3.1 流水线
 
 ```
-Bilibili URL
+Bilibili URL / BV 号
    │
    ├─[1] 下载      yt-dlp ──→ meta.json + audio.m4a
    │
@@ -120,6 +120,9 @@ videread/
 │  ├─ config.py
 │  ├─ download.py
 │  ├─ audio.py
+│  ├─ errors.py               # 退出码常量与异常分类
+│  ├─ execution.py            # 外部命令统一执行（yt-dlp / ffmpeg 共用）
+│  ├─ failures.py             # 退出码 → 失败类别 / 用户文案（纯函数）
 │  ├─ asr/
 │  │  ├─ __init__.py
 │  │  ├─ base.py
@@ -276,6 +279,10 @@ videread/
 | 4 | LLM 调用失败（含 JSON 解析失败重试耗尽）   |
 | 5 | 渲染或写盘失败                     |
 
+退出码常量与异常分类定义在 `errors.py`；每个码对应的**失败类别与用户文案**由 `failures.py`
+用纯函数提供（`group()` / `hint()`），CLI 与 Web 控制台共用这一份，前端不再各自维护码表。
+新增退出码时必须同步在 `failures.py` 登记，`tests/test_failures.py` 会挡住漏登记。
+
 ### 6.2 `pipeline.py`
 
 职责：阶段调度 + 断点续跑 + 异常归类。
@@ -306,6 +313,7 @@ def download_audio(url: str, dest: Path, *, keep: bool = False) -> Path
 - 音频格式优先 `m4a`；不支持时回退 `bestaudio`
 - 若视频自带字幕，一并下载到 `subtitle.<lang>.srt`
 - 校验：`duration > 0` 且 `duration <= 4 * 3600`（超 4 小时拒绝，避免 ASR 成本失控）
+- 起子进程一律走 `execution.run_command()`：统一 utf-8 / 文本模式 / 超时，并把「程序缺失」「超时」归一化为 `DownloadError`（本模块与 §6.4 的 ffmpeg 封装共用同一入口）
 
 ### 6.4 `audio.py`
 

@@ -87,6 +87,7 @@ def run(
     mode = (mode or "").strip().lower()
     if mode not in _MODES:
         raise UsageError(f"未知模式：{mode!r}（可选 standard / brief）")
+    url = download.normalize_source(url)
     out_root = Path(out_root)
     settings = get_settings(asr_backend=asr_backend)
 

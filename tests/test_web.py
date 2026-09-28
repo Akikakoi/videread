@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from videread import failures
 from videread.web import jobs, library
 from videread.web.app import create_app
 
@@ -293,7 +294,27 @@ def test_job_manager_maps_videread_error_to_exit_code(
     assert job.state == "error"
     assert job.exit_code == 3
     assert "余额不足" in (job.error or "")
+    assert job.hint == failures.hint(3)  # 文案统一来自 failures，前端不再自带码表
+    assert job.snapshot()["error_hint"] == job.hint
     assert job.snapshot()["report_url"] is None
+
+
+def test_job_manager_hint_for_unclassified_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """兜底分支不能复用退出码 1 的「参数错误」文案，否则会误导用户。"""
+
+    def boom(*args, **kwargs):
+        raise ValueError("内部炸了")
+
+    monkeypatch.setattr(jobs, "pipeline_run", boom)
+    manager = jobs.JobManager(tmp_path)
+
+    job = manager.submit(url=URL)
+    wait_terminal(job)
+
+    assert job.state == "error"
+    assert job.hint == "未归类异常，请查看运行日志"
 
 
 def test_job_manager_serialises_concurrent_submits(

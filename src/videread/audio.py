@@ -6,6 +6,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from . import execution
 from .config import Settings, get_settings
 from .errors import AudioError
 
@@ -32,21 +33,14 @@ def ffprobe_bin(settings: Settings | None = None) -> str:
     return _require(settings.ffprobe, "FFPROBE_BIN", "ffprobe")
 
 
-def _run(cmd: list[str], *, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise AudioError(f"无法执行外部程序：{cmd[0]}") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise AudioError(f"外部程序超时（{timeout}s）：{cmd[0]}") from exc
+def _run(cmd: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+    return execution.run_command(
+        cmd,
+        timeout=timeout,
+        error_cls=AudioError,
+        missing_message=lambda program: f"无法执行外部程序：{program}",
+        timeout_message=lambda seconds, program: f"外部程序超时（{seconds:.0f}s）：{program}",
+    )
 
 
 def probe_duration(src: Path, settings: Settings | None = None) -> float:

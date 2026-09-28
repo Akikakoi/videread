@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, failures
 from .config import DEFAULT_OUT_ROOT, configure_console
 from .errors import EXIT_OK, EXIT_USAGE, VidereadError
 from .pipeline import run
@@ -28,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="videread",
         description="把 Bilibili 视频 / 本地音视频的转写稿重组为自包含 HTML 阅读报告",
     )
-    parser.add_argument("url", help="Bilibili 视频链接，或本地音视频文件路径")
+    parser.add_argument("url", help="Bilibili 视频链接或 BV 号，或本地音视频文件路径")
     parser.add_argument(
         "--mode", choices=_MODES, default="standard", help="阅读模式，默认 standard"
     )
@@ -59,8 +59,10 @@ def main(argv: list[str] | None = None) -> int:
             open_report=args.open_report,
         )
     except VidereadError as exc:
-        print(f"错误：{exc}（退出码 {exc.exit_code}）", file=sys.stderr)
-        return int(exc.exit_code)
+        code = int(exc.exit_code)
+        print(f"错误：{exc}", file=sys.stderr)
+        print(f"  [{failures.group(code)}] {failures.hint(code)}", file=sys.stderr)
+        return code
     except KeyboardInterrupt:
         print("已中断。", file=sys.stderr)
         return 130

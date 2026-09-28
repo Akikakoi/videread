@@ -70,7 +70,7 @@ pip install -e .
 ## 用法
 
 ```powershell
-python -m videread.cli <url>
+python -m videread.cli BV1xx411c7mD
 ```
 
 > 注意入口是 `videread.cli`，项目没有 `__main__.py`，`python -m videread` 会报 `No module named videread.__main__`。
@@ -78,7 +78,7 @@ python -m videread.cli <url>
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `url` | — | Bilibili 视频链接，或本地音视频文件路径 |
+| `url` | — | Bilibili 视频链接或 BV 号（如 `BV1xx411c7mD`），或本地音视频文件路径 |
 | `--mode` | `standard` | `standard` / `brief`，对应两套模板 |
 | `--out` | 项目根 `runs/` | 产物根目录 |
 | `--no-cache` | 关 | 忽略已有产物，全部重跑 |
@@ -173,6 +173,7 @@ videread/
 │  ├─ pipeline.py             # 7 阶段编排、断点续跑
 │  ├─ config.py               # 配置分层与外部程序探测
 │  ├─ download.py audio.py transcript.py
+│  ├─ execution.py failures.py  # 外部命令统一执行 / 退出码归类文案
 │  ├─ asr/                    # dashscope / realtime / openai_whisper
 │  ├─ report/                 # outline / writer / prompts
 │  ├─ render.py trace.py      # 模板填充与埋点

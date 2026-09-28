@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from .. import failures
 from ..errors import EXIT_OK, EXIT_USAGE, VidereadError
 from ..pipeline import run as pipeline_run
 
@@ -59,6 +60,7 @@ class Job:
         self.report_path: Path | None = None
         self.exit_code: int | None = None
         self.error: str | None = None
+        self.hint: str | None = None
         self.created_at = _now()
         self.finished_at: str | None = None
 
@@ -120,6 +122,7 @@ class Job:
             "report_url": f"/report/{self.run_id}" if self.run_id else None,
             "exit_code": self.exit_code,
             "error": self.error,
+            "error_hint": self.hint,
             "created_at": self.created_at,
             "finished_at": self.finished_at,
         }
@@ -194,21 +197,12 @@ class JobManager:
                 progress=job.progress,
             )
         except VidereadError as exc:
-            job.exit_code = int(exc.exit_code)
-            job.error = str(exc)
-            self._finish(job, "error")
-            job.emit(
-                "error", exit_code=job.exit_code, message=job.error, state="error"
-            )
+            self._fail(job, int(exc.exit_code), str(exc))
         except BaseException as exc:  # 兜底：未归类异常也要有终态，避免前端挂住
-            job.exit_code = EXIT_USAGE
-            job.error = f"{type(exc).__name__}: {exc}"
-            job.emit("log", line=f"[错误] 未归类异常：{job.error}")
+            error = f"{type(exc).__name__}: {exc}"
+            job.emit("log", line=f"[错误] 未归类异常：{error}")
             job.emit("log", line=traceback.format_exc(limit=3).strip())
-            self._finish(job, "error")
-            job.emit(
-                "error", exit_code=job.exit_code, message=job.error, state="error"
-            )
+            self._fail(job, EXIT_USAGE, error, hint="未归类异常，请查看运行日志")
         else:
             job.run_id = report.parent.name
             job.report_path = report
@@ -220,6 +214,14 @@ class JobManager:
                 run_id=job.run_id,
                 report_url=f"/report/{job.run_id}",
             )
+
+    def _fail(self, job: Job, exit_code: int, error: str, *, hint: str | None = None) -> None:
+        """失败出口：文案统一来自 failures，前端不再自己维护一份退出码表。"""
+        job.exit_code = exit_code
+        job.error = error
+        job.hint = hint or failures.hint(exit_code)
+        self._finish(job, "error")
+        job.emit("error", exit_code=exit_code, state="error", message=error, hint=job.hint)
 
     @staticmethod
     def _finish(job: Job, state: str) -> None:

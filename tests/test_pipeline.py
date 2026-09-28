@@ -133,6 +133,26 @@ def test_pipeline_rejects_unknown_mode(tmp_path: Path):
         run(URL, mode="epic", out_root=tmp_path, progress=lambda _msg: None)
 
 
+def test_normalize_source_expands_bare_bvid():
+    assert download.normalize_source(BVID) == URL
+    assert download.normalize_source(f"  {BVID}  ") == URL
+
+
+def test_normalize_source_keeps_url_and_local_path(tmp_path: Path):
+    assert download.normalize_source(URL) == URL
+    local = tmp_path / "sample.m4a"
+    assert download.normalize_source(f" {local} ") == str(local)
+    # 不是完整 BV 号（长度不符）时不做补全
+    assert download.normalize_source("BV1xx") == "BV1xx"
+
+
+def test_bare_bvid_hits_cache_written_by_full_url():
+    """裸 BV 号与完整链接必须落到同一 run 目录，否则缓存会分裂。"""
+    assert download.make_run_id(download.normalize_source(BVID), BVID) == download.make_run_id(
+        URL, BVID
+    )
+
+
 def test_pipeline_refetches_meta_belonging_to_another_video(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
