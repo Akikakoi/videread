@@ -6,9 +6,15 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
+from html import escape
 from pathlib import Path
 
+from .config import Settings
+from .download import VideoMeta
 from .errors import RenderError
+from .report import Outline
+from .transcript import TranscriptUnit
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
@@ -132,3 +138,79 @@ def check_self_contained(html: str) -> list[str]:
     _flag(_CSS_IMPORT, "外链样式导入 @import http(s)://")
     _flag(_CSS_URL, "内联样式引用了外链资源 url(http(s)://...)")
     return violations
+
+
+# --- 报告来源区块：平台元信息转义后注入，LLM 输出不转义（§6.10）---------------
+
+
+def attribution(meta: VideoMeta) -> str:
+    platform = "本地文件" if meta.bvid == "local" else "Bilibili"
+    bits = [platform]
+    if meta.uploader:
+        bits.append(f"UP主：{escape(meta.uploader)}")
+    if meta.title:
+        bits.append(f"《{escape(meta.title)}》")
+    url_text = escape(meta.url)
+    return f"{' · '.join(bits)}<br><a href=\"{url_text}\">{url_text}</a>"
+
+
+def sources(
+    meta: VideoMeta,
+    outline: Outline,
+    units: list[TranscriptUnit],
+    settings: Settings,
+    *,
+    mode: str,
+    subtitle_first: bool,
+) -> str:
+    counts: dict[str, int] = {}
+    for unit in units:
+        counts[unit.source] = counts.get(unit.source, 0) + 1
+    breakdown = " / ".join(f"{key} {value}" for key, value in sorted(counts.items()))
+    asr_label = settings.asr_backend
+    if asr_label == "dashscope":
+        asr_label = f"dashscope / {settings.dashscope_model}"
+    if subtitle_first and units and all(unit.source == "subtitle" for unit in units):
+        # 本次完全由平台字幕建稿 = 没调用 ASR，报告里必须如实说明
+        asr_label = "平台字幕（字幕优先，未调用 ASR）"
+    generated_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
+    url_text = escape(meta.url)
+    rows = [
+        f"原视频：<a href=\"{url_text}\">{url_text}</a>",
+        f"阅读模式：{'Brief' if mode == 'brief' else 'Standard'}；信息结构：{outline.profile}",
+        f"转写：{asr_label}；转写单元 {len(units)} 个（{breakdown or '无'}）",
+        f"LLM：结构规划 {settings.llm_model_plan}，逐节写作 {settings.llm_model_write}",
+        f"生成时间：{generated_at}",
+        "正文中 data-source-units 属性指向 transcript.jsonl 的转写单元 id，可据此回溯原文。",
+        "本报告由转写稿重组生成，可能存在转写或理解误差；关键信息请以原视频为准。",
+    ]
+    return "\n".join(f"<p>{row}</p>" for row in rows)
+
+
+def context(
+    meta: VideoMeta,
+    outline: Outline,
+    parts: list[str],
+    units: list[TranscriptUnit],
+    settings: Settings,
+    *,
+    mode: str,
+    subtitle_first: bool,
+) -> dict[str, str]:
+    """组装模板上下文；LLM 输出按 §6.10 不转义，平台元信息转义后再注入。"""
+    return {
+        "TITLE": outline.title,
+        "SUBTITLE": outline.subtitle,
+        "LEAD": outline.lead,
+        "ATTRIBUTION": attribution(meta),
+        "VIDEO_DESCRIPTION": escape(meta.description) if meta.description else "",
+        "BODY": "\n".join(parts),
+        "SOURCES": sources(
+            meta,
+            outline,
+            units,
+            settings,
+            mode=mode,
+            subtitle_first=subtitle_first,
+        ),
+    }

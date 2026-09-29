@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from videread import download, pipeline
+from videread.config import get_settings
 from videread.errors import AsrError, LlmError, UsageError, VidereadError
 from videread.pipeline import run
 
@@ -280,6 +281,7 @@ def test_sources_label_is_honest_about_skipping_asr():
     from types import SimpleNamespace
 
     from videread.config import get_settings
+    from videread.render import sources
     from videread.transcript import TranscriptUnit
 
     units = [
@@ -289,13 +291,13 @@ def test_sources_label_is_honest_about_skipping_asr():
     outline = SimpleNamespace(profile="mechanism")
     settings = get_settings()
 
-    subtitle_first = pipeline._sources(
+    subtitle_first = sources(
         meta, outline, units, settings, mode="standard", subtitle_first=True
     )
     assert "未调用 ASR" in subtitle_first
 
     # 走 ASR 的路径即便字幕覆盖了全部单元，也不能说成「未调用 ASR」
-    asr_path = pipeline._sources(
+    asr_path = sources(
         meta, outline, units, settings, mode="standard", subtitle_first=False
     )
     assert "未调用 ASR" not in asr_path
@@ -323,6 +325,34 @@ def test_pipeline_rejects_over_long_local_file(tmp_path: Path, monkeypatch: pyte
 def test_pipeline_rejects_unknown_mode(tmp_path: Path):
     with pytest.raises(UsageError):
         run(URL, mode="epic", out_root=tmp_path, progress=lambda _msg: None)
+
+
+def test_pipeline_preflights_missing_llm_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """缺 LLM 密钥必须在下载 / ASR 之前失败，否则前面的成本就白花了。"""
+    settings = get_settings(llm_api_key="")
+    monkeypatch.setattr(pipeline, "get_settings", lambda **_kw: settings)
+
+    with pytest.raises(UsageError, match="LLM_API_KEY"):
+        run(URL, out_root=tmp_path, progress=lambda _msg: None)
+
+    # 预检失败不应留下任何 run 目录产物
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_dashscope_language_hints_follow_settings(monkeypatch: pytest.MonkeyPatch):
+    """ASR 语言提示可配置；auto 时不传 language_hints，由服务端自动识别。"""
+    from videread.asr.dashscope import DashScopeAsr
+
+    monkeypatch.setenv("DASHSCOPE_LANGUAGE", "en")
+    backend = DashScopeAsr(get_settings())
+    assert backend._task_parameters() == {
+        "channel_id": [0],
+        "language_hints": ["en"],
+    }
+
+    monkeypatch.setenv("DASHSCOPE_LANGUAGE", "auto")
+    backend = DashScopeAsr(get_settings())
+    assert backend._task_parameters() == {"channel_id": [0]}
 
 
 def test_normalize_source_expands_bare_bvid():
@@ -364,7 +394,7 @@ def test_pipeline_refetches_meta_belonging_to_another_video(
 
     fetched: list[str] = []
 
-    def _fake_fetch(url: str, settings: object) -> None:
+    def _fake_fetch(url: str, settings: object, **_kwargs: object) -> None:
         fetched.append(url)
         raise UsageError("到此为止：能走到这里说明确实重新抓取了")
 
@@ -428,7 +458,7 @@ def test_realtime_rejects_non_mono_wav(tmp_path: Path):
     """§6.5：实时接口只接受单声道 16bit PCM，双声道应直接报错而不是发错数据。"""
     import wave
 
-    from videread.asr.realtime import _read_pcm_frames
+    from videread.asr.realtime import _pcm_sample_rate
 
     stereo = tmp_path / "stereo.wav"
     with wave.open(str(stereo), "wb") as fh:
@@ -438,7 +468,7 @@ def test_realtime_rejects_non_mono_wav(tmp_path: Path):
         fh.writeframes(b"\x00" * 400)
 
     with pytest.raises(AsrError):
-        _read_pcm_frames(stereo)
+        _pcm_sample_rate(stereo)
 
 
 def test_wav_cleaned_up_after_successful_run(tmp_path: Path):

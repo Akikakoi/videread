@@ -185,15 +185,35 @@ def _fail(action: str, result: subprocess.CompletedProcess[str]) -> DownloadErro
 
 
 def fetch_meta(
-    url: str, settings: Settings | None = None, *, enforce_limit: bool = True
+    url: str,
+    settings: Settings | None = None,
+    *,
+    enforce_limit: bool = True,
+    subtitle_dir: Path | None = None,
 ) -> VideoMeta:
     """先拿元信息（不下载），失败即归类为下载失败。
 
     `enforce_limit=False` 时不校验时长上限，供提交前预检拿到真实时长后自行判定
     「超长」与「抓取失败」——流水线仍按默认 `True` 调用。
+    传入 `subtitle_dir` 时顺带下载平台字幕到该目录：与元信息共用一次 yt-dlp
+    调用，省一次解释器启动；无字幕时 yt-dlp 仅告警不报错。
     """
     settings = settings or get_settings()
-    result = _yt_dlp(["-J", "--skip-download", url], settings, timeout=180)
+    args = ["-J", "--skip-download"]
+    timeout = 180.0
+    if subtitle_dir is not None:
+        subtitle_dir.mkdir(parents=True, exist_ok=True)
+        args += [
+            "--write-subs",
+            "--sub-langs",
+            _SUBTITLE_LANGS,
+            "--convert-subs",
+            "srt",
+            "-o",
+            str(subtitle_dir / "subtitle.%(ext)s"),
+        ]
+        timeout = 300.0
+    result = _yt_dlp([*args, url], settings, timeout=timeout)
     if result.returncode != 0:
         raise _fail("获取视频元信息", result)
     try:
@@ -225,6 +245,8 @@ def fetch_meta(
     )
     if not meta.title:
         raise DownloadError("视频标题为空，链接可能无效")
+    if subtitle_dir is not None:
+        meta.subtitles = collect_subtitles(subtitle_dir)
     return meta
 
 
@@ -270,6 +292,14 @@ def find_audio(dest_dir: Path) -> Path | None:
     return candidates[0]
 
 
+def collect_subtitles(dest_dir: Path) -> list[dict]:
+    """收集目录中的 `subtitle.<lang>.srt` 为 meta 记录（lang + 相对文件名）。"""
+    return [
+        {"lang": path.name[len("subtitle.") : -len(".srt")], "path": path.name}
+        for path in sorted(dest_dir.glob("subtitle.*.srt"))
+    ]
+
+
 def download_subtitles(
     url: str, dest_dir: Path, settings: Settings | None = None
 ) -> list[dict]:
@@ -293,12 +323,7 @@ def download_subtitles(
     )
     if result.returncode != 0:
         return []
-
-    subtitles: list[dict] = []
-    for path in sorted(dest_dir.glob("subtitle.*.srt")):
-        lang = path.name[len("subtitle.") : -len(".srt")]
-        subtitles.append({"lang": lang, "path": path.name})
-    return subtitles
+    return collect_subtitles(dest_dir)
 
 
 def pick_subtitle(subtitles: list[dict], run_dir: Path) -> Path | None:
