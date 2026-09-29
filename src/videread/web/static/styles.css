@@ -28,7 +28,7 @@
   /* ── 玻璃层 ── */
   --glass: rgba(255, 255, 255, .58);        /* 主表面：面板 / 顶栏 */
   --glass-2: rgba(255, 255, 255, .72);      /* 更实：输入框 / 卡片 / 浮层 */
-  --glass-3: rgba(255, 255, 255, .44);      /* 更透：日志 / 标签 / 胶囊 */
+  --glass-3: rgba(255, 255, 255, .44);      /* 更透：日志 / 标签 / 胶囊 / 报告卡片 */
   --glass-border: rgba(255, 255, 255, .78); /* 玻璃边缘高光 */
   --glass-blur: 18px;
   --hairline: rgba(122, 138, 148, .26);     /* 玻璃上的细分割线 */
@@ -500,20 +500,32 @@ select option { color: var(--ink); background: var(--paper); }
   padding: 13px 15px;
   border: 1px solid var(--glass-border);
   border-radius: var(--radius);
-  background: var(--glass-2);
-  box-shadow: var(--sheen);
-  -webkit-backdrop-filter: blur(10px) saturate(140%);
-  backdrop-filter: blur(10px) saturate(140%);
+  /* 卡片叠在同样半透明的面板上，两层白会叠成实心，故这里用更透的一层
+     （--glass-3），并加大模糊与饱和度，让背后的花瓣真正透进来 */
+  background: var(--glass-3);
+  box-shadow: var(--sheen), var(--shadow-soft);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(160%);
   transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
 }
 .run-card:hover {
   border-color: var(--accent-line);
-  box-shadow: var(--sheen), 0 10px 26px rgba(24, 38, 50, .12);
+  box-shadow: var(--sheen), var(--shadow-raised);
   transform: translateY(-1px);
 }
 .run-title { margin: 0 0 6px; font-size: 14px; font-weight: 600; line-height: 1.5; }
-.run-meta { margin: 0 0 10px; font-size: 12px; color: var(--ink-mute); }
-.run-meta span + span::before { content: " · "; color: var(--line-strong); }
+/* 一行元信息：UP主 · 时长 · BV号 · 解析时间。用 gap 而非「·」伪元素分隔，
+   窄屏折行时不会在行首多出一个分隔点 */
+.run-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+.run-meta span { white-space: nowrap; }
 .run-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .run-detail { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--hairline); }

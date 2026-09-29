@@ -611,12 +611,11 @@
     card.appendChild(node("h3", "run-title", run.title || run.run_id));
 
     var meta = node("p", "run-meta");
+    // 只留给人看的信息：profile / 节数是机器字段与内部统计，不在此处暴露
     [run.uploader ? "UP主 " + run.uploader : "",
      "时长 " + run.duration_text,
-     run.profile || "",
-     run.sections ? run.sections + " 节" : "",
-     run.generated_at || "",
-     run.bvid && run.bvid !== "local" ? run.bvid : "本地文件"
+     run.bvid && run.bvid !== "local" ? run.bvid : "本地文件",
+     run.generated_at || ""
     ].filter(Boolean).forEach(function (text) {
       meta.appendChild(node("span", null, text));
     });
