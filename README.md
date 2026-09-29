@@ -56,6 +56,7 @@ pip install -e .
 | `DASHSCOPE_API_KEY` | 用 `dashscope*` 时 | 阿里云百炼（Model Studio）API Key |
 | `DASHSCOPE_BASE_URL` | 否 | 默认 `https://dashscope.aliyuncs.com/api/v1`；私有化 MaaS 部署可覆盖 |
 | `DASHSCOPE_MODEL` | 否 | 默认 `paraformer-v2`；实时后端未含 `realtime` 关键字时自动改用 `paraformer-realtime-v2` |
+| `DASHSCOPE_LANGUAGE` | 否 | ASR 语言提示，默认 `zh`；设为 `auto` 时不传该参数、由服务端自动识别 |
 | `LLM_BASE_URL` / `LLM_API_KEY` | 是 | 任意 OpenAI 兼容网关 |
 | `LLM_MODEL_PLAN` / `LLM_MODEL_WRITE` | 否 | 结构规划与逐节写作所用的模型名 |
 | `LLM_WRITE_CONCURRENCY` | 否 | 逐节写作并发路数，默认 3；各节互相独立，加大可缩短总耗时，注意接口限流 |
@@ -138,7 +139,7 @@ videread-web                     # 安装后的控制台命令
 | `meta.json` | 标题 / UP主 / 时长 / URL / 封面 | 是 |
 | `audio.m4a` | 原始音频（仅在线视频；`--keep-audio` 时保留） | 是 |
 | `audio.wav` | 16kHz 单声道，ASR 输入（跑完自动清理） | 可删 |
-| `asr.raw.jsonl` | ASR 原始输出，带时间戳（实时后端为 `asr.part.NNN.jsonl`） | **是（最贵，务必保留）** |
+| `asr.raw.jsonl` | ASR 原始输出，带时间戳（长音频切段时为 `asr.part.NNN.<start>-<end>.jsonl`，文件名含切段边界，切段点变化后旧缓存自动失效） | **是（最贵，务必保留）** |
 | `transcript.jsonl` | 规范化转写单元，带 `id` | 是 |
 | `transcript.md` | 同上，人 / 模型可读 | 是 |
 | `outline.json` | 结构规划结果 | 是 |

@@ -52,6 +52,8 @@ class Settings:
     dashscope_api_key: str
     dashscope_base_url: str
     dashscope_model: str
+    # 提交给 Paraformer 的 language_hints；设为 auto 时不传该参数（服务端自动识别）
+    dashscope_language: str
     llm_base_url: str
     llm_api_key: str
     llm_model_plan: str
@@ -61,7 +63,6 @@ class Settings:
     proxy: str | None
     ffmpeg: str | None
     ffprobe: str | None
-    out_root: Path
 
     def require_dashscope(self) -> str:
         if not self.dashscope_api_key:
@@ -150,6 +151,9 @@ def get_settings(**overrides: object) -> Settings:
             os.environ.get("DASHSCOPE_BASE_URL", "").strip() or DASHSCOPE_BASE_URL
         ),
         dashscope_model=(os.environ.get("DASHSCOPE_MODEL", "").strip() or "paraformer-v2"),
+        dashscope_language=(
+            os.environ.get("DASHSCOPE_LANGUAGE", "").strip() or "zh"
+        ),
         llm_base_url=(
             os.environ.get("LLM_BASE_URL", "").strip() or "https://api.deepseek.com/v1"
         ),
@@ -161,7 +165,6 @@ def get_settings(**overrides: object) -> Settings:
         proxy=proxy,
         ffmpeg=resolve_binary("FFMPEG_BIN", "ffmpeg"),
         ffprobe=resolve_binary("FFPROBE_BIN", "ffprobe"),
-        out_root=DEFAULT_OUT_ROOT,
     )
     applied = {k: v for k, v in overrides.items() if v is not None}
     return replace(settings, **applied) if applied else settings
