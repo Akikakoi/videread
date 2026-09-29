@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 from pathlib import Path
@@ -155,6 +156,18 @@ def test_list_runs_skips_malformed_meta(tmp_path: Path):
 
 def test_list_runs_missing_root_returns_empty(tmp_path: Path):
     assert library.list_runs(tmp_path / "nope") == []
+
+
+def test_list_runs_cache_invalidates_on_new_report(tmp_path: Path):
+    """条目缓存按产物 mtime 失效：补生成 report 后列表要立即反映新状态。"""
+    make_run(tmp_path, RUN_ID, report=False)
+    runs = library.list_runs(tmp_path)
+    assert runs[0]["has_report"] is False
+
+    (tmp_path / RUN_ID / "report.html").write_text(REPORT_HTML, encoding="utf-8")
+    runs = library.list_runs(tmp_path)
+    assert runs[0]["has_report"] is True
+    assert runs[0]["report_url"] == f"/report/{RUN_ID}"
 
 
 def test_trace_summary_orders_stages_and_totals(tmp_path: Path):
@@ -460,6 +473,23 @@ def test_job_status_and_events_routes(tmp_path: Path, monkeypatch: pytest.Monkey
     assert body["report_url"] == f"/report/{RUN_ID}"
 
     assert missing.status_code == 404
+
+
+def test_web_main_uses_default_out_root(monkeypatch: pytest.MonkeyPatch):
+    """回归：移除 Settings.out_root 字段后，控制台默认目录仍能解析启动。
+
+    曾因 `settings.out_root` 被删而在启动时抛 AttributeError。
+    """
+
+    class _StubUvicorn:
+        @staticmethod
+        def run(*_args: object, **_kwargs: object) -> None:
+            return None
+
+    from videread.web import __main__ as web_main
+
+    monkeypatch.setitem(sys.modules, "uvicorn", _StubUvicorn)
+    assert web_main.main([]) == 0
 
 
 def test_events_replay_since_returns_tail_only(

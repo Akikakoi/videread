@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +19,12 @@ from ..trace import TraceWriter
 
 #: run 目录名的合法字符（`download.make_run_id` 产出 `{bvid}-{hash8}`）
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+# 条目缓存：key 含各产物的 mtime_ns，任何文件变动都会换 key，
+# 因此不需要显式失效；上限兜底防止长期驻留的服务进程缓慢累积。
+_ENTRY_CACHE: dict[tuple[str, int, int, int], dict] = {}
+_CACHE_LOCK = threading.Lock()
+_CACHE_MAX_ENTRIES = 512
 
 _STAGE_LABELS = {
     "download": "下载",
@@ -105,20 +112,41 @@ def trace_summary(path: Path) -> dict:
     return {"stages": stages, "total_ms": total_ms, "tokens": tokens, "errors": errors}
 
 
+def _mtime_ns(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
 def _entry(run_dir: Path) -> dict | None:
-    meta = _read_meta(run_dir / "meta.json")
+    """聚合单个 run 的基础信息；命中缓存时免读 meta.json / outline.json。"""
+    meta_path = run_dir / "meta.json"
+    outline_path = run_dir / "outline.json"
+    report = run_dir / "report.html"
+    key = (
+        str(run_dir),
+        _mtime_ns(meta_path),
+        _mtime_ns(outline_path),
+        _mtime_ns(report),
+    )
+    with _CACHE_LOCK:
+        cached = _ENTRY_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    meta = _read_meta(meta_path)
     if meta is None:
         return None
 
-    outline = _read_outline(run_dir / "outline.json")
-    report = run_dir / "report.html"
-    source = report if report.is_file() else run_dir / "meta.json"
+    outline = _read_outline(outline_path)
+    source = report if report.is_file() else meta_path
     try:
         mtime = source.stat().st_mtime
     except OSError:
         mtime = 0.0
 
-    return {
+    entry = {
         "run_id": run_dir.name,
         "title": meta.title,
         "uploader": meta.uploader,
@@ -137,6 +165,11 @@ def _entry(run_dir: Path) -> dict | None:
         ),
         "mtime": mtime,
     }
+    with _CACHE_LOCK:
+        if len(_ENTRY_CACHE) >= _CACHE_MAX_ENTRIES:
+            _ENTRY_CACHE.clear()
+        _ENTRY_CACHE[key] = entry
+    return entry
 
 
 def list_runs(out_root: Path) -> list[dict]:
@@ -160,9 +193,11 @@ def run_detail(out_root: Path, run_id: str) -> dict | None:
     run_dir = safe_run_dir(out_root, run_id)
     if run_dir is None:
         return None
-    entry = _entry(run_dir)
-    if entry is None:
+    base = _entry(run_dir)
+    if base is None:
         return None
+    # 缓存条目只读；后续 update 一律落在副本上，避免污染缓存
+    entry = dict(base)
 
     outline = _read_outline(run_dir / "outline.json")
     sections = (

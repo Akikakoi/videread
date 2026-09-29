@@ -8,7 +8,7 @@ import threading
 import webbrowser
 from pathlib import Path
 
-from ..config import get_settings
+from ..config import DEFAULT_OUT_ROOT
 from ..errors import EXIT_OK, EXIT_USAGE
 from .app import create_app
 
@@ -46,8 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_USAGE
 
     # 不调用 configure_console()：它会 reconfigure 全局 stdout，干扰 uvicorn 日志
-    settings = get_settings()
-    out_root = Path(args.out).expanduser() if args.out else settings.out_root
+    out_root = Path(args.out).expanduser() if args.out else DEFAULT_OUT_ROOT
     out_root.mkdir(parents=True, exist_ok=True)
 
     url = f"http://{args.host}:{args.port}/"
