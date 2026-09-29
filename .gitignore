@@ -23,3 +23,5 @@ build/
 .trae/
 .DS_Store
 Thumbs.db
+# --- 本地 AI 工作区 ---
+.workbuddy/
