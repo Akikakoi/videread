@@ -41,6 +41,8 @@ _DEFAULT_MODEL = "paraformer-realtime-v2"
 
 # 每个二进制帧承载的音频时长（秒）；100ms 是官方示例的粒度
 _FRAME_SECONDS = 0.1
+# 每次从磁盘读取的块时长（秒）；块内再切成帧，避免整段 PCM 常驻内存
+_BLOCK_SECONDS = 5.0
 # 等待 task-started 的上限（秒）
 _START_TIMEOUT_SEC = 30.0
 
@@ -101,9 +103,18 @@ class DashScopeRealtimeAsr:
         for index, (start, end) in enumerate(chunks):
             dest = chunk_dir / f"chunk.{index:03d}.wav"
             try:
-                if self._read_part(index) is None:
-                    cut_segment(audio, dest, start, end, self.settings)
-                merged.extend(self._transcribe_chunk(dest, index, start, end))
+                # 缓存判断只做一次：命中则跳过切段与推流，未命中才落到磁盘
+                cached = self._read_part(index, start, end)
+                if cached is not None:
+                    self.progress(f"第 {index + 1} 段转写命中缓存，跳过")
+                    merged.extend(offset_segments(cached, start))
+                    continue
+                cut_segment(audio, dest, start, end, self.settings)
+                segments = self._stream(dest)
+                if not segments:
+                    raise AsrError(f"第 {index + 1} 段 ASR 返回空结果：{dest.name}")
+                self._write_part(index, segments, start, end)
+                merged.extend(offset_segments(segments, start))
             except Exception as exc:  # noqa: BLE001 - 单段失败不阻塞其他段
                 self.failures.append(
                     {"chunk": index, "error": f"{type(exc).__name__}: {exc}"}
@@ -121,27 +132,12 @@ class DashScopeRealtimeAsr:
 
     # ------------------------------------------------------------------ 单段
 
-    def _transcribe_chunk(
-        self, audio: Path, index: int, start: float, end: float
-    ) -> list[AsrSegment]:
-        cached = self._read_part(index)
-        if cached is not None:
-            self.progress(f"第 {index + 1} 段转写命中缓存，跳过")
-            return offset_segments(cached, start)
-
-        segments = self._stream(audio)
-        if not segments:
-            raise AsrError(f"第 {index + 1} 段 ASR 返回空结果：{audio.name}")
-
-        self._write_part(index, segments)
-        return offset_segments(segments, start)
-
     def _stream(self, audio: Path) -> list[AsrSegment]:
-        frames, sample_rate = _read_pcm_frames(audio)
-        return asyncio.run(self._stream_async(frames, sample_rate, audio.name))
+        sample_rate = _pcm_sample_rate(audio)
+        return asyncio.run(self._stream_async(audio, sample_rate, audio.name))
 
     async def _stream_async(
-        self, frames: list[bytes], sample_rate: int, name: str
+        self, audio: Path, sample_rate: int, name: str
     ) -> list[AsrSegment]:
         task_id = uuid.uuid4().hex
         collected: list[AsrSegment] = []
@@ -223,11 +219,23 @@ class DashScopeRealtimeAsr:
                     raise AsrError(f"实时 ASR 未收到 task-started：{name}") from exc
 
                 deadline = time.monotonic() + ASR_SEGMENT_TIMEOUT_SEC
-                for frame in frames:
-                    await ws.send(frame)
-                    if time.monotonic() > deadline:
-                        receiver.cancel()
-                        raise AsrError(f"实时 ASR 推流超时：{name}")
+                # 边读边推：每次只从磁盘读 _BLOCK_SECONDS 秒再切成帧发送，
+                # 2 小时音频不再整段载入内存（约 230MB）
+                loop = asyncio.get_running_loop()
+                step = max(2, int(sample_rate * _FRAME_SECONDS) * 2)  # 16bit 单声道
+                block_frames = int(sample_rate * _BLOCK_SECONDS)
+                with wave.open(str(audio), "rb") as fh:
+                    while True:
+                        block = await loop.run_in_executor(
+                            None, fh.readframes, block_frames
+                        )
+                        if not block:
+                            break
+                        for offset in range(0, len(block), step):
+                            await ws.send(block[offset : offset + step])
+                            if time.monotonic() > deadline:
+                                receiver.cancel()
+                                raise AsrError(f"实时 ASR 推流超时：{name}")
 
                 await ws.send(
                     json.dumps(
@@ -259,13 +267,14 @@ class DashScopeRealtimeAsr:
 
     # ------------------------------------------------------------------ 缓存
 
-    def _part_path(self, index: int) -> Path | None:
+    def _part_path(self, index: int, start: float, end: float) -> Path | None:
         if self.cache_dir is None:
             return None
-        return self.cache_dir / f"asr.part.{index:03d}.jsonl"
+        # 文件名带切段边界：静音点漂移导致切段点变化后，旧缓存自动失效
+        return self.cache_dir / f"asr.part.{index:03d}.{start:.0f}-{end:.0f}.jsonl"
 
-    def _read_part(self, index: int) -> list[AsrSegment] | None:
-        path = self._part_path(index)
+    def _read_part(self, index: int, start: float, end: float) -> list[AsrSegment] | None:
+        path = self._part_path(index, start, end)
         if path is None or not path.is_file():
             return None
         from .base import load_raw_jsonl
@@ -276,8 +285,10 @@ class DashScopeRealtimeAsr:
             return None
         return segments or None
 
-    def _write_part(self, index: int, segments: list[AsrSegment]) -> None:
-        path = self._part_path(index)
+    def _write_part(
+        self, index: int, segments: list[AsrSegment], start: float, end: float
+    ) -> None:
+        path = self._part_path(index, start, end)
         if path is not None:
             write_raw_jsonl(segments, path)
 
@@ -292,14 +303,13 @@ def _seconds(value: float | int | str | None) -> float:
         return 0.0
 
 
-def _read_pcm_frames(audio: Path) -> tuple[list[bytes], int]:
-    """读取 wav 并切成定长 PCM 帧（单声道 16bit，即 ffmpeg 转码产物）。"""
+def _pcm_sample_rate(audio: Path) -> int:
+    """校验 wav 为单声道 16bit PCM 并返回采样率（只读文件头，不载入数据）。"""
     try:
         with wave.open(str(audio), "rb") as fh:
             channels = fh.getnchannels()
             width = fh.getsampwidth()
             rate = fh.getframerate()
-            frames = fh.readframes(fh.getnframes())
     except wave.Error as exc:
         raise AsrError(f"实时 ASR 只接受 PCM wav，读取失败：{audio.name}：{exc}") from exc
 
@@ -308,6 +318,4 @@ def _read_pcm_frames(audio: Path) -> tuple[list[bytes], int]:
             f"实时 ASR 需要单声道 16bit PCM：{audio.name} "
             f"（当前 {channels} 声道 / {width * 8}bit）"
         )
-
-    step = max(2, int(rate * _FRAME_SECONDS) * width)
-    return [frames[i : i + step] for i in range(0, len(frames), step)], rate
+    return rate

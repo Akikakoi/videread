@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
@@ -48,6 +48,7 @@ class DashScopeAsr:
         self.settings = settings
         self.api_key = settings.require_dashscope()
         self.model = settings.dashscope_model
+        self.language = settings.dashscope_language
         self.cache_dir = cache_dir
         self.progress = progress or (lambda _msg: None)
         self.failures: list[dict[str, object]] = []
@@ -88,7 +89,8 @@ class DashScopeAsr:
                 pool.submit(self._transcribe_chunk, path, index, start, end): index
                 for index, start, end, path in chunk_files
             }
-            for future, index in futures.items():
+            for future in as_completed(futures):
+                index = futures[future]
                 try:
                     results[index] = future.result()
                 except Exception as exc:  # noqa: BLE001 - 单段失败不阻塞其他段
@@ -117,7 +119,7 @@ class DashScopeAsr:
     def _transcribe_chunk(
         self, audio: Path, index: int, start: float, end: float
     ) -> list[AsrSegment]:
-        cached = self._read_part(index)
+        cached = self._read_part(index, start, end)
         if cached is not None:
             self.progress(f"第 {index + 1} 段转写命中缓存，跳过")
             return offset_segments(cached, start)
@@ -126,7 +128,7 @@ class DashScopeAsr:
         if not segments:
             raise AsrError(f"第 {index + 1} 段 ASR 返回空结果：{audio.name}")
 
-        self._write_part(index, segments)
+        self._write_part(index, segments, start, end)
         return offset_segments(segments, start)
 
     def _transcribe_file(self, audio: Path) -> list[AsrSegment]:
@@ -142,13 +144,15 @@ class DashScopeAsr:
         directory.mkdir(parents=True, exist_ok=True)
         return directory
 
-    def _part_path(self, index: int) -> Path | None:
+    def _part_path(self, index: int, start: float, end: float) -> Path | None:
         if self.cache_dir is None:
             return None
-        return self.cache_dir / f"asr.part.{index:03d}.jsonl"
+        # 文件名带切段边界：静音点漂移导致切段点变化后，旧缓存自动失效，
+        # 不会把上一个音频的段错位拼进新结果
+        return self.cache_dir / f"asr.part.{index:03d}.{start:.0f}-{end:.0f}.jsonl"
 
-    def _read_part(self, index: int) -> list[AsrSegment] | None:
-        path = self._part_path(index)
+    def _read_part(self, index: int, start: float, end: float) -> list[AsrSegment] | None:
+        path = self._part_path(index, start, end)
         if path is None or not path.is_file():
             return None
         from .base import load_raw_jsonl
@@ -159,8 +163,10 @@ class DashScopeAsr:
             return None
         return segments or None
 
-    def _write_part(self, index: int, segments: list[AsrSegment]) -> None:
-        path = self._part_path(index)
+    def _write_part(
+        self, index: int, segments: list[AsrSegment], start: float, end: float
+    ) -> None:
+        path = self._part_path(index, start, end)
         if path is None:
             return
         write_raw_jsonl(segments, path)
@@ -221,6 +227,14 @@ class DashScopeAsr:
 
         return retry_call(_do, attempts=3, base=1.0)
 
+    def _task_parameters(self) -> dict[str, object]:
+        # 语言提示可经 DASHSCOPE_LANGUAGE 覆盖；auto 表示交给服务端自动识别，
+        # 此时完全不传 language_hints（避免英文视频被强行按中文识别）
+        parameters: dict[str, object] = {"channel_id": [0]}
+        if self.language != "auto":
+            parameters["language_hints"] = [self.language]
+        return parameters
+
     def _submit(self, file_url: str) -> str:
         def _do() -> str:
             response = self._client.post(
@@ -234,7 +248,7 @@ class DashScopeAsr:
                 json={
                     "model": self.model,
                     "input": {"file_urls": [file_url]},
-                    "parameters": {"channel_id": [0], "language_hints": ["zh"]},
+                    "parameters": self._task_parameters(),
                 },
             )
             output = self._check(response, "提交转写任务").get("output") or {}
