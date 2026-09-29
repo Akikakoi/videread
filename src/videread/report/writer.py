@@ -27,7 +27,7 @@ _ANY_TAG = re.compile(r"<[^>]+>")
 # 模型偶发输出的 Markdown 强调标记：模板只认 HTML，字面 `**` 会原样显示给读者
 _MD_BOLD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 _MD_BOLD_UNDERSCORE = re.compile(r"__(.+?)__", re.DOTALL)
-_CLASS_ATTR = re.compile(r'class\s*=\s*"([^"]*)"', re.IGNORECASE)
+_CLASS_ATTR = re.compile(r'(\s*)class\s*=\s*"([^"]*)"', re.IGNORECASE)
 
 BRIEF_TARGET_MIN = 1600
 BRIEF_TARGET_MAX = 2200
@@ -81,15 +81,18 @@ def strip_unknown_classes(html: str, allowed: set[str]) -> tuple[str, list[str]]
 
     def _fix(match: re.Match[str]) -> str:
         kept: list[str] = []
-        for name in match.group(1).split():
+        for name in match.group(2).split():
             if name in allowed:
                 kept.append(name)
             else:
                 dropped.append(name)
-        return f'class="{" ".join(kept)}"' if kept else ""
+        if not kept:
+            # 连同属性前的空白一起吞掉，避免留下 `<p >` 之类的悬空空格；
+            # 也因此不再需要全局 `\s+>` 清理——那会误改正文里的字面 `>`。
+            return ""
+        return f'{match.group(1)}class="{" ".join(kept)}"'
 
     cleaned = _CLASS_ATTR.sub(_fix, html)
-    cleaned = re.sub(r"\s+>", ">", cleaned)
     return cleaned, list(dict.fromkeys(dropped))
 
 
@@ -290,7 +293,7 @@ def write_sections(
             index, section = futures[future]
             try:
                 html = future.result()
-            except BaseException as exc:  # noqa: BLE001 - 收集后统一抛出
+            except Exception as exc:  # noqa: BLE001 - 收集后统一抛出；用户中断不在此列
                 failures.append((index, exc))
                 continue
             path = directory / f"{section.id}.html"

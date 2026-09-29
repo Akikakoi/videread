@@ -55,11 +55,13 @@ def retry_call(
     if attempts < 1:
         raise ValueError("attempts 必须 >= 1")
 
-    last_error: BaseException | None = None
+    last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
             return fn()
-        except BaseException as exc:  # noqa: BLE001 - 由 is_retryable 决定是否继续
+        except Exception as exc:  # noqa: BLE001 - 由 is_retryable 决定是否继续
+            # 只捕获 Exception：KeyboardInterrupt / SystemExit 属于用户意图，
+            # 必须立即终止，否则 Ctrl+C 会被当成可重试错误继续休眠重跑。
             last_error = exc
             if attempt >= attempts or not is_retryable(exc):
                 raise
