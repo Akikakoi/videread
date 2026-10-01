@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Callable
 
 from . import audio as audio_mod
-from . import download, render
+from . import download, frames as frames_mod, markdown as markdown_mod, pdf as pdf_mod
+from . import png as png_mod
+from . import render
 from .asr import get_backend, load_raw_jsonl, write_raw_jsonl
 from .asr.base import AsrSegment
 from .config import MAX_VIDEO_DURATION_SEC, Settings, get_settings
@@ -47,7 +49,7 @@ from .transcript import (
 )
 
 _MODES = ("standard", "brief")
-_STAGE_LABELS = ("下载", "音频处理", "转写", "规范化", "结构规划", "逐节写作", "渲染")
+_STAGE_LABELS = ("下载", "音频处理", "转写", "规范化", "结构规划", "截图", "逐节写作", "渲染")
 
 # 字幕至少覆盖视频时长的这个比例，才允许用它替代 ASR（§6.3）
 _SUBTITLE_MIN_COVERAGE = 0.5
@@ -57,6 +59,23 @@ def _nonempty(path: Path) -> bool:
     return path.is_file() and path.stat().st_size > 0
 
 
+def _resolve_run_dir(out_root: Path, base_id: str, fresh: bool) -> Path:
+    """定位本次运行的目录；`fresh`（重新解析）时避开已有目录，另起 `-rN` 后缀。
+
+    重新解析的产物落新目录：之前那份报告原样保留，报告库里两次解析各占
+    一条。后缀从 `-r2` 起递增取第一个不存在的名字；`-rN` 刻意沿用 run_id
+    白名单字符（报告库正则可识别），而 `~` 等符号会让新报告从列表里消失。
+    """
+    candidate = out_root / base_id
+    if not fresh:
+        return candidate
+    index = 2
+    while candidate.exists():
+        candidate = out_root / f"{base_id}-r{index}"
+        index += 1
+    return candidate
+
+
 def _cached(text: str) -> str:
     return f"{text}  (缓存命中，跳过)"
 
@@ -64,6 +83,11 @@ def _cached(text: str) -> str:
 def _sections_complete(out_dir: Path, outline: Outline) -> bool:
     directory = section_dir(out_dir)
     return all(_nonempty(directory / f"{section.id}.html") for section in outline.sections)
+
+
+def _asr_cached(use_cache: bool, run_dir: Path) -> bool:
+    """ASR 原始结果是否已落盘（它落盘后，音频就再没有消费方了）。"""
+    return use_cache and _nonempty(run_dir / "asr.raw.jsonl")
 
 
 @dataclass
@@ -81,6 +105,7 @@ class _RunState:
     progress: Callable[[str], None]
 
     is_local: bool = False
+    fresh_dir: bool = False
     run_dir: Path | None = None
     trace: TraceWriter | None = None
     meta: VideoMeta | None = None
@@ -92,10 +117,14 @@ class _RunState:
     outline: Outline | None = None
     parts: list[str] | None = None
     client: LlmClient | None = None
+    frame_files: dict[str, Path] = field(default_factory=dict)
+    frame_moments: dict[str, float] = field(default_factory=dict)
     produced: list[Path] = field(default_factory=list)
 
     def say(self, index: int, detail: str) -> None:
-        self.progress(f"[{index}/7] {_STAGE_LABELS[index - 1]} ✓ {detail}")
+        self.progress(
+            f"[{index}/{len(_STAGE_LABELS)}] {_STAGE_LABELS[index - 1]} ✓ {detail}"
+        )
 
 
 def run(
@@ -109,15 +138,28 @@ def run(
     force_asr: bool = False,
     open_report: bool = False,
     force_report: bool = False,
+    frames: bool | None = None,
+    export_pdf: bool = False,
+    export_png: bool = False,
+    export_md: bool = False,
+    fresh_dir: bool = False,
     progress: Callable[[str], None] = print,
 ) -> Path:
-    """执行完整流水线，返回 report.html 路径。"""
+    """执行完整流水线，返回 report.html 路径。
+
+    `frames=None` 表示跟随配置（.env 的 FRAMES / 默认关）；
+    显式 True / False 覆盖配置。`export_pdf` / `export_png` / `export_md`
+    为 True 时在渲染后分别导出 report.pdf / report.png / report.md
+    （PDF 与长图由本机 Edge / Chrome 无头打印 / 截图，已存在且较新则复用）。
+    `fresh_dir=True`（重新解析）落 `-rN` 新目录，不覆盖已有报告；
+    调用方应同时给 `use_cache=False`，否则等于照抄旧产物没有意义。
+    """
     mode = (mode or "").strip().lower()
     if mode not in _MODES:
         raise UsageError(f"未知模式：{mode!r}（可选 standard / brief）")
     url = download.normalize_source(url)
     out_root = Path(out_root)
-    settings = get_settings(asr_backend=asr_backend)
+    settings = get_settings(asr_backend=asr_backend, frames_enabled=frames)
     # 启动即校验 LLM 密钥：结构规划在下载与 ASR 之后，等到第 5 阶段才
     # 发现缺 key，前面的下载与转写成本就白花了。ASR 密钥不在此列：
     # 字幕优先路径不经过 ASR，其校验留在后端构造时进行。
@@ -131,6 +173,7 @@ def run(
         keep_audio=keep_audio,
         force_asr=force_asr,
         force_report=force_report,
+        fresh_dir=fresh_dir,
         settings=settings,
         progress=progress,
     )
@@ -147,8 +190,10 @@ def run(
         current = _STAGE_LABELS[4]
         _stage_outline(state)
         current = _STAGE_LABELS[5]
-        _stage_sections(state)
+        _stage_frames(state)
         current = _STAGE_LABELS[6]
+        _stage_sections(state)
+        current = _STAGE_LABELS[7]
         report_path = _stage_render(state)
 
         # 跑完自动清理中间产物。audio.wav 是这里体积最大的一项（2h 视频约 230MB，
@@ -160,6 +205,30 @@ def run(
             freed = state.wav.stat().st_size / 1024 / 1024
             state.wav.unlink(missing_ok=True)
             progress(f"已清理中间产物 audio.wav，释放 {freed:.1f} MB")
+
+        if export_pdf:
+            pdf_path = pdf_mod.export_pdf(report_path, state.run_dir / "report.pdf", settings)
+            state.produced.append(pdf_path)
+            progress(f"已导出 PDF → {pdf_path.name}")
+
+        if export_png:
+            png_path = png_mod.export_png(report_path, state.run_dir / "report.png", settings)
+            state.produced.append(png_path)
+            progress(f"已导出长图 → {png_path.name}")
+
+        if export_md:
+            if frames_mod.has_frames(state.run_dir):
+                raise UsageError(
+                    "带截图的报告无法导出 Markdown：截图以相对路径引用会离开 run 目录"
+                    "就失效，请改用 --pdf / --png，或去掉 --frames 重新解析"
+                )
+            md_path = state.run_dir / "report.md"
+            md_path.write_text(
+                markdown_mod.html_to_markdown(report_path.read_text(encoding="utf-8")),
+                encoding="utf-8",
+            )
+            state.produced.append(md_path)
+            progress(f"已导出 Markdown → {md_path.name}")
 
         if open_report:
             webbrowser.open(report_path.resolve().as_uri())
@@ -195,7 +264,11 @@ def _stage_download(state: _RunState) -> None:
 def _download_local(state: _RunState, local_path: Path) -> str:
     """本地文件：探测时长、构造 meta、统一时长上限。"""
     assert local_path is not None
-    run_dir = state.out_root / download.make_run_id(local_path.resolve().as_uri(), "local")
+    run_dir = _resolve_run_dir(
+        state.out_root,
+        download.make_run_id(local_path.resolve().as_uri(), "local"),
+        state.fresh_dir,
+    )
     run_dir.mkdir(parents=True, exist_ok=True)
     trace = TraceWriter(run_dir / "run.trace.jsonl")
     meta_path = run_dir / "meta.json"
@@ -231,8 +304,10 @@ def _download_local(state: _RunState, local_path: Path) -> str:
 def _download_remote(state: _RunState) -> str:
     """远程视频：抓取元信息与字幕（合并为一次 yt-dlp 调用），按需下载音频。"""
     url_text = (state.url or "").strip()
-    guess_dir = state.out_root / download.make_run_id(
-        url_text, download.extract_bvid(url_text)
+    guess_dir = _resolve_run_dir(
+        state.out_root,
+        download.make_run_id(url_text, download.extract_bvid(url_text)),
+        state.fresh_dir,
     )
     meta_cached = state.use_cache and _nonempty(guess_dir / "meta.json")
     if meta_cached:
@@ -278,9 +353,14 @@ def _download_remote(state: _RunState) -> str:
                         "判为不完整，回退到下载音频 + ASR"
                     )
 
-        source_audio = download.find_audio(run_dir)
+        # 音频的唯一消费方是 ASR：字幕优先或 ASR 已缓存时，下载与转码都应跳过，
+        # 否则缓存命中的重跑也会把刚删掉的音频重新下载一遍
+        need_audio = state.subtitle_path is None and not _asr_cached(
+            state.use_cache, run_dir
+        )
+        source_audio = download.find_audio(run_dir) if need_audio else None
         if (
-            state.subtitle_path is None
+            need_audio
             and source_audio is None
             and not (state.use_cache and _nonempty(wav_path))
         ):
@@ -311,7 +391,9 @@ def _fetch_meta_with_subtitles(state: _RunState, url_text: str) -> tuple[Path, V
     staging = state.out_root / f".staging-{uuid.uuid4().hex[:8]}"
     try:
         meta = download.fetch_meta(url_text, state.settings, subtitle_dir=staging)
-        run_dir = state.out_root / download.make_run_id(meta.url, meta.bvid)
+        run_dir = _resolve_run_dir(
+            state.out_root, download.make_run_id(meta.url, meta.bvid), state.fresh_dir
+        )
         run_dir.mkdir(parents=True, exist_ok=True)
         if staging.is_dir():
             for srt in sorted(staging.glob("subtitle.*.srt")):
@@ -333,6 +415,11 @@ def _stage_audio(state: _RunState) -> None:
         if state.subtitle_path is not None:
             stage.detail["skipped"] = "字幕优先，无需音频"
             detail = "字幕优先，跳过音频处理"
+        elif _asr_cached(state.use_cache, state.run_dir):
+            # ASR 结果已缓存时音频没有消费方：不转码；残留的旧 wav
+            # 由跑完后的统一清理兜底删除
+            stage.detail["skipped"] = "ASR 已缓存，无需音频"
+            detail = "ASR 已缓存，跳过音频处理"
         elif state.use_cache and _nonempty(wav):
             stage.detail["cached"] = True
             detail = _cached("16kHz 单声道 wav")
@@ -475,7 +562,71 @@ def _stage_outline(state: _RunState) -> None:
     state.say(5, detail)
 
 
-# -------------------------------------------------------- [6/7] 逐节写作
+# ------------------------------------------------------------ [6/8] 截图
+
+
+def _stage_frames(state: _RunState) -> None:
+    """按大纲节定点抽帧（纯展示模式）。任何失败降级为纯文字报告。"""
+    assert state.run_dir is not None and state.trace is not None
+    assert state.outline is not None and state.units is not None and state.meta is not None
+    with state.trace.stage("frames") as stage:
+        if not state.settings.frames_enabled:
+            stage.detail["skipped"] = "未开启截图"
+            detail = "截图未开启（--frames 或 FRAMES=1 可开启）"
+        else:
+            try:
+                points = frames_mod.plan_points(state.outline, state.units)
+                state.frame_moments = {
+                    section_id: moment for section_id, moment, _ in points
+                }
+                directory = frames_mod.frame_dir(state.run_dir)
+                for index, (section_id, moment, label) in enumerate(points):
+                    dest = directory / f"{section_id}.jpg"
+                    if _nonempty(dest):
+                        state.frame_files[section_id] = dest
+                        state.progress(f"第 {section_id} 节截图缓存命中，跳过")
+                        continue  # 断点续跑：已有的帧不重复抽
+                    if state.is_local:
+                        # 本地文件本身就是完整视频，直接按绝对时间抽帧
+                        assert state.source_audio is not None
+                        frames_mod.extract_frame(
+                            state.source_audio, dest, at=moment, settings=state.settings
+                        )
+                    else:
+                        start, offset = frames_mod.clip_bounds(moment)
+                        clip = download.download_video_section(
+                            state.meta.url,
+                            state.run_dir,
+                            index,
+                            start,
+                            5.0,
+                            state.settings,
+                            max_height=720,
+                        )
+                        try:
+                            frames_mod.extract_frame(
+                                clip, dest, at=offset, settings=state.settings
+                            )
+                        finally:
+                            clip.unlink(missing_ok=True)
+                    state.frame_files[section_id] = dest
+                    state.progress(f"第 {section_id} 节截图完成 @ {label}")
+                manifest = frames_mod.write_manifest(
+                    state.run_dir, state.outline, state.frame_files, state.frame_moments
+                )
+                state.produced.append(manifest)
+                stage.detail["frames"] = len(state.frame_files)
+                detail = f"{len(state.frame_files)}/{len(points)} 节"
+            except VidereadError as exc:
+                # 截图是增强能力：失败不阻断报告，已成功的帧照常内嵌
+                stage.detail["degraded"] = str(exc)[:300]
+                detail = f"截图失败已降级：{str(exc)[:80]}"
+                state.progress(f"提示：截图阶段降级，报告将以纯文字为主（{exc}）")
+    state.produced.extend(state.frame_files.values())
+    state.say(6, detail)
+
+
+# -------------------------------------------------------- [7/8] 逐节写作
 
 
 def _stage_sections(state: _RunState) -> None:
@@ -520,10 +671,10 @@ def _stage_sections(state: _RunState) -> None:
                     "删除 runs/<run-id>/sections/ 后重跑可重新生成，或改用 --mode standard"
                 )
     state.parts = parts
-    state.say(6, detail)
+    state.say(7, detail)
 
 
-# ------------------------------------------------------------ [7/7] 渲染
+# ------------------------------------------------------------ [8/8] 渲染
 
 
 def _stage_render(state: _RunState) -> Path:
@@ -536,15 +687,32 @@ def _stage_render(state: _RunState) -> Path:
     )
     report_path = state.run_dir / "report.html"
     with state.trace.stage("render") as stage:
-        if state.use_cache and not state.force_report and _nonempty(report_path):
+        cached_ok = state.use_cache and not state.force_report and _nonempty(report_path)
+        if cached_ok:
             html = report_path.read_text(encoding="utf-8")
+            # 截图晚于报告生成时（如先跑完文字、再开 --frames 重跑），
+            # 老报告里的帧数少于本次持有数，必须重新渲染而不是吃缓存
+            if state.frame_files:
+                figures_in_html = html.count("data:image/jpeg;base64,")
+                if figures_in_html < len(state.frame_files):
+                    cached_ok = False
+                    stage.detail["rerender_for_frames"] = True
+        if cached_ok:
             stage.detail["cached"] = True
             detail = _cached("report.html  自包含检查通过")
         else:
+            # 截图注入在渲染前：落盘的分节片段不含 figure，
+            # 每次真实渲染都从 frame_files 现注入
+            if state.frame_files:
+                parts = frames_mod.inject_figures(
+                    state.parts, state.outline, state.frame_files, state.frame_moments
+                )
+            else:
+                parts = state.parts
             ctx = render.context(
                 state.meta,
                 state.outline,
-                state.parts,
+                parts,
                 state.units,
                 state.settings,
                 mode=state.mode,
@@ -561,5 +729,5 @@ def _stage_render(state: _RunState) -> Path:
         if violations:
             raise RenderError("自包含检查未通过：" + "；".join(violations))
     state.produced.append(report_path)
-    state.say(7, detail)
+    state.say(8, detail)
     return report_path

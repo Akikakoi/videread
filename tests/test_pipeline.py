@@ -9,7 +9,7 @@ import pytest
 
 from videread import download, pipeline
 from videread.config import get_settings
-from videread.errors import AsrError, LlmError, UsageError, VidereadError
+from videread.errors import AsrError, AudioError, LlmError, UsageError, VidereadError
 from videread.pipeline import run
 
 URL = "https://www.bilibili.com/video/BV1xx411c7mD"
@@ -244,6 +244,94 @@ def test_subtitle_first_can_be_disabled_by_env(tmp_path: Path, monkeypatch: pyte
     assert "字幕优先" not in "\n".join(lines)
 
 
+def test_cached_asr_run_skips_audio_download(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """ASR 已缓存的重跑不应重新下载音频：wav 跑完即清后，重跑不碰网络。"""
+    run_dir = _seed_run(tmp_path)
+    (run_dir / "audio.wav").unlink()
+    (run_dir / "sections" / "s1.html").unlink()  # 逼逐节写作真的跑起来
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("ASR 已缓存时不应下载音频或转码")
+
+    monkeypatch.setattr(download, "download_audio", _boom)
+    monkeypatch.setattr(pipeline.audio_mod, "to_wav_16k_mono", _boom)
+
+    class _BrokenLlm:
+        def __init__(self, _settings: object) -> None:
+            raise LlmError("模拟 LLM 不可用")
+
+    monkeypatch.setattr(pipeline, "LlmClient", _BrokenLlm)
+
+    lines: list[str] = []
+    with pytest.raises(LlmError):
+        run(URL, out_root=tmp_path, progress=lines.append)
+
+    joined = "\n".join(lines)
+    assert "ASR 已缓存" in joined
+    # 音频全程未被重建
+    assert not (run_dir / "audio.wav").exists()
+
+
+def test_frames_stage_skipped_by_default(tmp_path: Path):
+    """截图默认关：阶段仍出现在 trace 里，但标记为跳过，报告不含 figure。"""
+    run_dir = _seed_run(tmp_path)
+    lines: list[str] = []
+
+    run(URL, out_root=tmp_path, progress=lines.append)
+
+    assert "截图未开启" in "\n".join(lines)
+    report = (run_dir / "report.html").read_text(encoding="utf-8")
+    assert "<figure" not in report
+
+
+def test_frames_enabled_injects_figures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """开启截图后：定点下载 + 抽帧各节执行一次，渲染时注入 figure。"""
+    run_dir = _seed_run(tmp_path)
+
+    def _fake_section(url: str, dest_dir: Path, index: int, start: float, duration: float, settings: object, **_kw: object) -> Path:
+        clip = dest_dir / f"clip.{index:03d}.mp4"
+        clip.write_bytes(b"fakevideo")
+        return clip
+
+    def _fake_extract(src: Path, dest: Path, *, at: float, settings: object = None) -> None:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"\xff\xd8frame")
+
+    monkeypatch.setattr(pipeline.download, "download_video_section", _fake_section)
+    monkeypatch.setattr(pipeline.frames_mod, "extract_frame", _fake_extract)
+    (run_dir / "report.html").unlink()  # 逼渲染真的跑起来
+
+    lines: list[str] = []
+    run(URL, out_root=tmp_path, frames=True, progress=lines.append)
+
+    joined = "\n".join(lines)
+    assert "截图完成" in joined
+    manifest = (run_dir / "frames.jsonl").read_text(encoding="utf-8")
+    assert '"section": "s1"' in manifest
+    report = (run_dir / "report.html").read_text(encoding="utf-8")
+    assert "data:image/jpeg;base64," in report
+    # 片段用完即删
+    assert not list(run_dir.glob("clip.*"))
+
+
+def test_frames_degrade_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """截图失败降级：报告照常生成，只是没有 figure，不新增退出码。"""
+    run_dir = _seed_run(tmp_path)
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise pipeline.frames_mod.FramesError("片段下载被拒")
+
+    monkeypatch.setattr(pipeline.download, "download_video_section", _boom)
+    (run_dir / "report.html").unlink()
+
+    lines: list[str] = []
+    report = run(URL, out_root=tmp_path, frames=True, progress=lines.append)
+
+    assert report.is_file()
+    assert "降级" in "\n".join(lines)
+    assert "<figure" not in report.read_text(encoding="utf-8")
+
+
 def test_force_asr_overrides_subtitle_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """--force-asr 无视配置与字幕，坚持走 ASR。"""
     run_dir = _seed_subtitle_run(tmp_path, SRT_FULL)
@@ -274,6 +362,31 @@ def test_pick_subtitle_prefers_chinese_and_checks_existence(tmp_path: Path):
     assert picked is not None and picked.name == "subtitle.zh-CN.srt"
     assert download.pick_subtitle([{"lang": "zh-CN", "path": "gone.srt"}], tmp_path) is None
     assert download.pick_subtitle([], tmp_path) is None
+
+
+def test_pick_subtitle_ranks_ai_subs_between_cc_and_english(tmp_path: Path):
+    """B 站 AI 字幕（ai-zh）：排在人手 CC 之后、英文之前。"""
+    _write(tmp_path / "subtitle.ai-zh.srt", SRT_FULL)
+    _write(tmp_path / "subtitle.en.srt", "1\n00:00:00,000 --> 00:00:01,000\nhello\n")
+    # 只有 AI 字幕 + 英文时选 AI 字幕
+    picked = download.pick_subtitle(
+        [
+            {"lang": "en", "path": "subtitle.en.srt"},
+            {"lang": "ai-zh", "path": "subtitle.ai-zh.srt"},
+        ],
+        tmp_path,
+    )
+    assert picked is not None and picked.name == "subtitle.ai-zh.srt"
+    # 人手 CC（zh-CN）存在时压过 AI 字幕
+    _write(tmp_path / "subtitle.zh-CN.srt", SRT_FULL)
+    picked = download.pick_subtitle(
+        [
+            {"lang": "ai-zh", "path": "subtitle.ai-zh.srt"},
+            {"lang": "zh-CN", "path": "subtitle.zh-CN.srt"},
+        ],
+        tmp_path,
+    )
+    assert picked is not None and picked.name == "subtitle.zh-CN.srt"
 
 
 def test_sources_label_is_honest_about_skipping_asr():
@@ -510,3 +623,46 @@ def test_wav_kept_when_run_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         run(URL, out_root=tmp_path)
 
     assert (run_dir / "audio.wav").exists()
+
+def test_resolve_run_dir_fresh_suffix(tmp_path: Path):
+    """重新解析的目录递增：-r2 起、避开已存在目录、沿用 run_id 白名单字符。"""
+    from videread.pipeline import _resolve_run_dir
+
+    base = download.make_run_id(URL, BVID)
+    # 非 fresh：恒为原名；目录不存在时 fresh 也是原名
+    assert _resolve_run_dir(tmp_path, base, fresh=False) == tmp_path / base
+    assert _resolve_run_dir(tmp_path, base, fresh=True) == tmp_path / base
+
+    (tmp_path / base).mkdir()
+    second = _resolve_run_dir(tmp_path, base, fresh=True)
+    assert second == tmp_path / f"{base}-r2"
+    second.mkdir()
+    assert _resolve_run_dir(tmp_path, base, fresh=True) == tmp_path / f"{base}-r3"
+    # -rN 与报告库 run_id 正则兼容，新报告不会从列表里消失
+    from videread.web.library import _RUN_ID_RE
+
+    assert _RUN_ID_RE.match(second.name)
+
+
+def test_fresh_dir_reparse_lands_in_new_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """重新解析落 -rN 新目录：旧目录与旧报告原样保留。"""
+    old_dir = _seed_run(tmp_path)
+    old_html = (old_dir / "report.html").read_text(encoding="utf-8")
+
+    def _fake_fetch(url, settings=None, *, enforce_limit=True, subtitle_dir=None):
+        return download.VideoMeta(
+            bvid=BVID, title="重新解析", uploader="某UP主", duration=12.0, url=URL,
+        )
+
+    def _no_audio(*_args: object, **_kwargs: object) -> None:
+        raise AudioError("测试到此为止：目录行为已可断言")
+
+    monkeypatch.setattr(download, "fetch_meta", _fake_fetch)
+    monkeypatch.setattr(download, "download_audio", _no_audio)
+
+    with pytest.raises(VidereadError):
+        run(URL, out_root=tmp_path, use_cache=False, fresh_dir=True, progress=lambda _l: None)
+
+    new_dir = tmp_path / f"{download.make_run_id(URL, BVID)}-r2"
+    assert new_dir.is_dir() and (new_dir / "meta.json").is_file()
+    assert (old_dir / "report.html").read_text(encoding="utf-8") == old_html
