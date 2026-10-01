@@ -522,7 +522,25 @@ body {
   .meta-fold,
   .sources,
   .brief-case-card,
-  .brief-fold-card { break-inside: avoid; }
+  .brief-fold-card,
+  .report-figure { break-inside: avoid; }
+}
+
+/* ── 视频截图（--frames 开启时由程序注入，非 LLM 输出）── */
+.report-figure { margin: 18px 0; }
+.report-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, .08);
+}
+.report-figure figcaption {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #666666;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 </style>
 </head>
@@ -566,5 +584,15 @@ body {
     </details>
   </footer>
 </main>
+<script>
+/* 外部链接新窗口打开 */
+(function () {
+  var links = document.querySelectorAll('a[href^="http"]');
+  for (var i = 0; i < links.length; i++) {
+    links[i].target = '_blank';
+    links[i].rel = 'noopener noreferrer';
+  }
+})();
+</script>
 </body>
 </html>

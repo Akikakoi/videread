@@ -532,7 +532,31 @@ body {
   .meta-fold,
   .sources,
   .cards > *,
-  .tiles > * { break-inside: avoid; }
+  .tiles > *,
+  .report-figure,
+  .callout,
+  .keyline,
+  .comparison > *,
+  .categories > *,
+  .table-details,
+  .table-compact { break-inside: avoid; }
+}
+
+/* ── 视频截图（--frames 开启时由程序注入，非 LLM 输出）── */
+.report-figure { margin: 18px 0; }
+.report-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, .08);
+}
+.report-figure figcaption {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #666666;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 </style>
 </head>
@@ -581,6 +605,16 @@ body {
     </details>
   </footer>
 </main>
+<script>
+/* 外部链接新窗口打开；站内锚点（章节导航）不受影响 */
+(function () {
+  var links = document.querySelectorAll('a[href^="http"]');
+  for (var i = 0; i < links.length; i++) {
+    links[i].target = '_blank';
+    links[i].rel = 'noopener noreferrer';
+  }
+})();
+</script>
 <script>
 (function () {
   var body = document.querySelector('.report-body');
