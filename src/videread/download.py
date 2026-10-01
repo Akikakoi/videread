@@ -14,6 +14,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import httpx
+
 from . import execution
 from .config import MAX_VIDEO_DURATION_SEC, Settings, get_settings
 from .errors import DownloadError
@@ -35,11 +37,18 @@ _TRACKING_PARAMS = {
     "is_room_feed",
 }
 
-_SUBTITLE_LANGS = "zh-CN,zh-Hans,zh,zh-Hant,en"
+# B 站 AI 生成字幕的语言代码是 ai-zh / ai-en（UP 主手传 CC 为 zh-CN / zh-Hans）；
+# 不在请求列表里 yt-dlp 就不会下载，这正是 B 站视频"明明有字幕却走了 ASR"的主因
+_SUBTITLE_LANGS = "zh-CN,zh-Hans,zh,zh-Hant,ai-zh,ai-en,en"
 
-# 多字幕并存时的取用优先级：中文优先，避免双语视频误选英文字幕
+# B 站分P探测用的公开 view 接口：无需登录，一次请求带回全部分P 的标题与时长
+_VIEW_API = "https://api.bilibili.com/x/web-interface/view"
+_VIEW_TIMEOUT_SEC = 8.0
+
+# 多字幕并存时的取用优先级：中文优先，避免双语视频误选英文字幕；
+# 人手 CC 排在 AI 字幕之前（质量通常更好），ai-zh 排在 en 之前
 # （yt-dlp 的 --sub-langs 只做过滤，不决定我们取哪一份）
-_SUBTITLE_PRIORITY = ("zh-CN", "zh-Hans", "zh", "zh-Hant", "en")
+_SUBTITLE_PRIORITY = ("zh-CN", "zh-Hans", "zh", "zh-Hant", "ai-zh", "en", "ai-en")
 
 
 @dataclass
@@ -70,6 +79,24 @@ class VideoMeta:
             description=str(data.get("description", "") or ""),
             subtitles=list(data.get("subtitles") or []),
         )
+
+
+@dataclass(frozen=True)
+class VideoPage:
+    """B 站多 P 视频中的一个分P（view API 的 `pages` 项）。"""
+
+    page: int
+    title: str
+    duration: float
+
+
+@dataclass(frozen=True)
+class VideoInfo:
+    """B 站 view API 返回的视频概要：主标题、UP主与分P列表。"""
+
+    title: str
+    uploader: str
+    pages: list[VideoPage]
 
 
 def canonical_url(url: str) -> str:
@@ -166,9 +193,36 @@ def local_meta(path: Path, duration: float) -> VideoMeta:
 
 
 def _yt_dlp(args: list[str], settings: Settings, *, timeout: float = 900) -> subprocess.CompletedProcess[str]:
+    use_cookies = bool(settings.cookies_file or settings.cookies_from_browser)
+    result = _run_yt_dlp(args, settings, timeout=timeout, use_cookies=use_cookies)
+    if result.returncode != 0 and use_cookies and "cookie" in (result.stderr or "").lower():
+        # Cookie 读取失败（浏览器未关闭锁库、加密不兼容、文件失效等）不应
+        # 拖垮整个流水线：去掉 Cookie 重试，代价只是拿不到登录态内容（如 B 站 AI 字幕）
+        result = _run_yt_dlp(args, settings, timeout=timeout, use_cookies=False)
+    return result
+
+
+def _run_yt_dlp(
+    args: list[str],
+    settings: Settings,
+    *,
+    timeout: float,
+    use_cookies: bool,
+) -> subprocess.CompletedProcess[str]:
     cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-playlist"]
     if settings.proxy:
         cmd += ["--proxy", settings.proxy]
+    if use_cookies:
+        # B 站 AI 字幕等登录态内容：优先用 cookies.txt 文件（浏览器直读会被
+        # 新版 Chrome/Edge 的 App-Bound 加密挡住），其次从本机浏览器读
+        if settings.cookies_file:
+            cmd += ["--cookies", settings.cookies_file]
+        else:
+            cmd += ["--cookies-from-browser", settings.cookies_from_browser]
+    if settings.ffmpeg:
+        # yt-dlp 自己只在 PATH 上找 ffmpeg；项目 bin/ 的静态包必须显式指路，
+        # 否则分段下载（--download-sections）等功能会报 "ffmpeg is not installed"
+        cmd += ["--ffmpeg-location", settings.ffmpeg]
     cmd += args
     return execution.run_command(
         cmd,
@@ -184,6 +238,83 @@ def _fail(action: str, result: subprocess.CompletedProcess[str]) -> DownloadErro
     return DownloadError(f"{action}失败：{tail}")
 
 
+def page_url(url: str, page: int) -> str:
+    """给链接指定分P：追加或替换 `p` 参数；page <= 1 时移除该参数。
+
+    移除而非写 `p=1` 是有意的：裸链接与 `?p=1` 的 canonical_url 不同，
+    会算出两个 run-id 把同一份缓存劈成两半；裸链接 yt-dlp 本来就取 P1。
+    非 B 站链接原样返回，由调用方保证只在拿到 BV 号时才调用。
+    """
+    parts = urlsplit(url)
+    query = [(key, value) for key, value in parse_qsl(parts.query) if key != "p"]
+    if page <= 1:
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+    query.append(("p", str(page)))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+
+
+def current_page(url: str) -> int:
+    """读出链接里的 `p` 参数；没有或不合法时按第 1 个分P 处理。"""
+    for key, value in parse_qsl(urlsplit(url).query):
+        if key == "p":
+            try:
+                return max(1, int(value))
+            except ValueError:
+                return 1
+    return 1
+
+
+def fetch_video_info(url: str, settings: Settings | None = None) -> VideoInfo | None:
+    """用 B 站 view API 拉视频概要（主标题 / UP主 / 分P列表）。
+
+    任何失败都返回 None（按单P处理，不阻断预检）：预检只是给前端一个
+    「让用户选分P、看清标题作者」的机会，探测失败不应比现状更糟——
+    真正的链接有效性仍由 fetch_meta / 流水线的下载阶段兜底。
+    """
+    bvid = extract_bvid(url)
+    if not bvid:
+        return None
+    settings = settings or get_settings()
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(_VIEW_TIMEOUT_SEC),
+            proxy=settings.proxy,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (videread)"},
+        ) as client:
+            response = client.get(_VIEW_API, params={"bvid": bvid})
+        payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("code") != 0:
+        return None
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    pages: list[VideoPage] = []
+    for item in data.get("pages") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            pages.append(
+                VideoPage(
+                    page=int(item.get("page", 0)),
+                    title=str(item.get("part") or "").strip(),
+                    duration=float(item.get("duration") or 0),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    owner = data.get("owner")
+    return VideoInfo(
+        title=str(data.get("title") or "").strip(),
+        uploader=str((owner or {}).get("name") or "").strip()
+        if isinstance(owner, dict)
+        else "",
+        pages=[item for item in pages if item.page >= 1],
+    )
+
+
 def fetch_meta(
     url: str,
     settings: Settings | None = None,
@@ -195,25 +326,11 @@ def fetch_meta(
 
     `enforce_limit=False` 时不校验时长上限，供提交前预检拿到真实时长后自行判定
     「超长」与「抓取失败」——流水线仍按默认 `True` 调用。
-    传入 `subtitle_dir` 时顺带下载平台字幕到该目录：与元信息共用一次 yt-dlp
-    调用，省一次解释器启动；无字幕时 yt-dlp 仅告警不报错。
+    传入 `subtitle_dir` 时顺带下载平台字幕到该目录。字幕必须单独一次
+    不带 `-J` 的调用：`-J` 隐含 simulate 模式，`--write-subs` 不落文件。
     """
     settings = settings or get_settings()
-    args = ["-J", "--skip-download"]
-    timeout = 180.0
-    if subtitle_dir is not None:
-        subtitle_dir.mkdir(parents=True, exist_ok=True)
-        args += [
-            "--write-subs",
-            "--sub-langs",
-            _SUBTITLE_LANGS,
-            "--convert-subs",
-            "srt",
-            "-o",
-            str(subtitle_dir / "subtitle.%(ext)s"),
-        ]
-        timeout = 300.0
-    result = _yt_dlp([*args, url], settings, timeout=timeout)
+    result = _yt_dlp(["-J", "--skip-download", url], settings, timeout=180.0)
     if result.returncode != 0:
         raise _fail("获取视频元信息", result)
     try:
@@ -246,8 +363,31 @@ def fetch_meta(
     if not meta.title:
         raise DownloadError("视频标题为空，链接可能无效")
     if subtitle_dir is not None:
-        meta.subtitles = collect_subtitles(subtitle_dir)
+        meta.subtitles = _download_subtitles_into(url, subtitle_dir, settings)
     return meta
+
+
+def _download_subtitles_into(
+    url: str, subtitle_dir: Path, settings: Settings
+) -> list[dict]:
+    """单独一次 yt-dlp 调用下载平台字幕；没有可用字幕时返回空列表。"""
+    subtitle_dir.mkdir(parents=True, exist_ok=True)
+    _yt_dlp(
+        [
+            "--skip-download",
+            "--write-subs",
+            "--sub-langs",
+            _SUBTITLE_LANGS,
+            "--convert-subs",
+            "srt",
+            "-o",
+            str(subtitle_dir / "subtitle.%(ext)s"),
+            url,
+        ],
+        settings,
+        timeout=300.0,
+    )
+    return collect_subtitles(subtitle_dir)
 
 
 def download_audio(url: str, dest_dir: Path, settings: Settings | None = None) -> Path:
@@ -292,6 +432,48 @@ def find_audio(dest_dir: Path) -> Path | None:
     return candidates[0]
 
 
+def download_video_section(
+    url: str,
+    dest_dir: Path,
+    index: int,
+    start: float,
+    duration: float,
+    settings: Settings | None = None,
+    *,
+    max_height: int = 720,
+) -> Path:
+    """定点拉取视频的一个片段（仅画面轨，不含音轨），供抽帧使用。
+
+    `--force-keyframes-at-cuts` 保证切点精确（切点处重编码），片段起点
+    即请求的 `start`，抽帧位置可据此换算。多个片段分多次调用而不是合并成
+    一次：输出按 `clip.{index:03d}.%(ext)s` 命名，失败可单段重试。
+    """
+    settings = settings or get_settings()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    result = _yt_dlp(
+        [
+            "-f",
+            f"bestvideo[height<={max_height}][ext=mp4]/bestvideo[height<={max_height}]/bestvideo",
+            "--download-sections",
+            f"*{start:.3f}-{start + duration:.3f}",
+            "--force-keyframes-at-cuts",
+            "-o",
+            str(dest_dir / f"clip.{index:03d}.%(ext)s"),
+            url,
+        ],
+        settings,
+        timeout=600,
+    )
+    if result.returncode != 0:
+        raise _fail("下载视频片段", result)
+    from .frames import clip_path
+
+    clip = clip_path(dest_dir, index)
+    if clip is None:
+        raise DownloadError(f"片段下载完成但未找到文件：{dest_dir} clip.{index:03d}.*")
+    return clip
+
+
 def collect_subtitles(dest_dir: Path) -> list[dict]:
     """收集目录中的 `subtitle.<lang>.srt` 为 meta 记录（lang + 相对文件名）。"""
     return [
@@ -305,25 +487,7 @@ def download_subtitles(
 ) -> list[dict]:
     """下载平台自带字幕到 `subtitle.<lang>.srt`；没有字幕时返回空列表。"""
     settings = settings or get_settings()
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    result = _yt_dlp(
-        [
-            "--skip-download",
-            "--write-subs",
-            "--sub-langs",
-            _SUBTITLE_LANGS,
-            "--convert-subs",
-            "srt",
-            "-o",
-            str(dest_dir / "subtitle.%(ext)s"),
-            url,
-        ],
-        settings,
-        timeout=300,
-    )
-    if result.returncode != 0:
-        return []
-    return collect_subtitles(dest_dir)
+    return _download_subtitles_into(url, dest_dir, settings)
 
 
 def pick_subtitle(subtitles: list[dict], run_dir: Path) -> Path | None:

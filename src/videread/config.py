@@ -41,6 +41,19 @@ TRANSCRIPT_MAX_CHARS = 160
 # 字幕优先：视频带平台字幕时直接用它构造转写稿，跳过音频下载与 ASR（§6.3）
 SUBTITLE_FIRST = True
 
+# 截图（纯展示模式）：按大纲节定点拉取视频小段抽帧，以 base64 内嵌报告。
+# 默认关：--frames 显式开启，或 .env 设 FRAMES=1。
+FRAMES_ENABLED = False
+FRAME_MAX_TOTAL = 16      # 全片截图上限，超出按节顺序截断
+FRAME_CLIP_SECONDS = 5.0  # 每个截图点定点拉取的视频时长
+FRAME_SOURCE_HEIGHT = 720  # 拉取的视频轨最大高度（抽帧后缩到 FRAME_WIDTH 需要 ≥960 源宽）
+FRAME_WIDTH = 960          # 输出图片宽度（等比缩放）
+FRAME_JPEG_QUALITY = 4     # ffmpeg mjpeg -q:v（2 最优、数值越大越差，4 ≈ JPEG 80）
+FRAME_LEAD_IN = 1.0        # 定点片段向前多取的秒数，用于抵消关键帧对齐误差
+
+# PDF 导出：用本机 Edge / Chrome 无头打印，不引入额外依赖。
+PDF_TIMEOUT_SEC = 120.0
+
 # DashScope 接入点；专属/私有化（MaaS）部署可用 DASHSCOPE_BASE_URL 覆盖（§6.5）
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
 
@@ -49,6 +62,7 @@ DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
 class Settings:
     asr_backend: str
     subtitle_first: bool
+    frames_enabled: bool
     dashscope_api_key: str
     dashscope_base_url: str
     dashscope_model: str
@@ -61,8 +75,11 @@ class Settings:
     llm_write_concurrency: int
     llm_timeout: float
     proxy: str | None
+    cookies_from_browser: str | None
+    cookies_file: str | None
     ffmpeg: str | None
     ffprobe: str | None
+    pdf_browser: str | None
 
     def require_dashscope(self) -> str:
         if not self.dashscope_api_key:
@@ -143,9 +160,17 @@ def get_settings(**overrides: object) -> Settings:
         or os.environ.get("HTTP_PROXY", "").strip()
         or None
     )
+    cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "").strip() or None
+    if cookies_file:
+        # 相对路径以项目根为基准，避免 yt-dlp 按 CWD 解析导致找不到文件
+        path = Path(cookies_file).expanduser()
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        cookies_file = str(path) if path.is_file() else None
     settings = Settings(
         asr_backend=(os.environ.get("ASR_BACKEND", "dashscope").strip() or "dashscope"),
         subtitle_first=_env_bool("SUBTITLE_FIRST", SUBTITLE_FIRST),
+        frames_enabled=_env_bool("FRAMES", FRAMES_ENABLED),
         dashscope_api_key=os.environ.get("DASHSCOPE_API_KEY", "").strip(),
         dashscope_base_url=(
             os.environ.get("DASHSCOPE_BASE_URL", "").strip() or DASHSCOPE_BASE_URL
@@ -163,8 +188,13 @@ def get_settings(**overrides: object) -> Settings:
         llm_write_concurrency=_env_int("LLM_WRITE_CONCURRENCY", LLM_WRITE_CONCURRENCY),
         llm_timeout=_env_float("LLM_TIMEOUT", LLM_TIMEOUT_SEC),
         proxy=proxy,
+        cookies_from_browser=(
+            os.environ.get("YTDLP_COOKIES_FROM_BROWSER", "").strip() or None
+        ),
+        cookies_file=cookies_file,
         ffmpeg=resolve_binary("FFMPEG_BIN", "ffmpeg"),
         ffprobe=resolve_binary("FFPROBE_BIN", "ffprobe"),
+        pdf_browser=(os.environ.get("PDF_BROWSER_BIN", "").strip() or None),
     )
     applied = {k: v for k, v in overrides.items() if v is not None}
     return replace(settings, **applied) if applied else settings

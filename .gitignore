@@ -25,3 +25,5 @@ build/
 Thumbs.db
 # --- 本地 AI 工作区 ---
 .workbuddy/
+bilibili_cookies.txt
+.bili_login_status.txt
