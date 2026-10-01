@@ -90,7 +90,17 @@ class DashScopeRealtimeAsr:
         total = duration if duration is not None else probe_duration(audio, self.settings)
 
         if total <= ASR_SEGMENT_SECONDS:
-            return self._transcribe_chunk(audio, 0, 0.0, total)
+            # 短音频单段直推；缓存语义与下方长音频切段一致，
+            # 分段文件名为 asr.part.000.<0>-<total>，重跑免重复付费
+            cached = self._read_part(0, 0.0, total)
+            if cached is not None:
+                self.progress("转写命中缓存，跳过")
+                return cached
+            segments = self._stream(audio)
+            if not segments:
+                raise AsrError(f"ASR 返回空结果：{audio.name}")
+            self._write_part(0, segments, 0.0, total)
+            return segments
 
         silences = detect_silence(audio, settings=self.settings)
         chunks = plan_chunks(total, silences, limit=ASR_SEGMENT_SECONDS)
