@@ -20,7 +20,7 @@ from ..errors import EXIT_OK, EXIT_USAGE, VidereadError
 from ..pipeline import run as pipeline_run
 
 _MODES = ("standard", "brief")
-_STAGE_RE = re.compile(r"^\[(\d)/7\]")
+_STAGE_RE = re.compile(r"^\[(\d)/8\]")
 _TERMINAL = ("done", "error")
 
 #: SSE 事件的类型：status / stage / log / done / error
@@ -46,13 +46,18 @@ class Job:
         no_cache: bool,
         keep_audio: bool,
         asr_backend: str | None,
+        frames: bool | None = None,
+        retry: bool = False,
     ) -> None:
         self.id = uuid.uuid4().hex[:12]
         self.url = url
         self.mode = mode
-        self.no_cache = no_cache
+        # 重新解析隐含忽略缓存：否则只会照抄旧产物，「再解析一次」就不成立了
+        self.no_cache = no_cache or retry
+        self.retry = retry
         self.keep_audio = keep_audio
         self.asr_backend = asr_backend
+        self.frames = frames
         self.state = "queued"
         self.stage_index = 0
         self.logs: list[str] = []
@@ -150,6 +155,8 @@ class JobManager:
         no_cache: bool = False,
         keep_audio: bool = False,
         asr_backend: str | None = None,
+        frames: bool | None = None,
+        retry: bool = False,
     ) -> Job:
         url = (url or "").strip()
         mode = (mode or "standard").strip().lower()
@@ -168,6 +175,8 @@ class JobManager:
                 no_cache=no_cache,
                 keep_audio=keep_audio,
                 asr_backend=asr_backend,
+                frames=frames,
+                retry=retry,
             )
             self._job = job
 
@@ -194,6 +203,8 @@ class JobManager:
                 keep_audio=job.keep_audio,
                 asr_backend=job.asr_backend,
                 open_report=False,
+                frames=job.frames,
+                fresh_dir=job.retry,
                 progress=job.progress,
             )
         except VidereadError as exc:

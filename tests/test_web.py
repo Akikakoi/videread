@@ -122,15 +122,17 @@ def fake_pipeline(report_body: str = REPORT_HTML, run_id: str = RUN_ID):
         keep_audio: bool = False,
         asr_backend: str | None = None,
         open_report: bool = False,
+        frames: bool | None = None,
+        fresh_dir: bool = False,
         progress=print,
     ) -> Path:
-        progress("[1/7] 下载 ✓ meta.json  BV1xx411c7mD  时长 35:37")
-        progress("[3/7] 转写 ✓ 412 段")
+        progress("[1/8] 下载 ✓ meta.json  BV1xx411c7mD  时长 35:37")
+        progress("[3/8] 转写 ✓ 412 段")
         run_dir = Path(out_root) / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         report = run_dir / "report.html"
         report.write_text(report_body, encoding="utf-8")
-        progress("[7/7] 渲染 ✓ report.html  自包含检查通过")
+        progress("[8/8] 渲染 ✓ report.html  自包含检查通过")
         return report
 
     return _run
@@ -283,6 +285,33 @@ def test_run_detail_route_404s_unknown(tmp_path: Path):
         assert client.get("/api/runs/BV1xx411c7mD-ffffffff").status_code == 404
 
 
+# ------------------------------------------------------------- 删除记录
+
+
+def test_delete_run_removes_directory(tmp_path: Path):
+    make_run(tmp_path, RUN_ID)
+    with TestClient(create_app(tmp_path)) as client:
+        response = client.delete(f"/api/runs/{RUN_ID}")
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted": RUN_ID}
+    assert not (tmp_path / RUN_ID).exists()
+    # 删除后列表立即反映状态（条目缓存按 mtime 失效，不残留已删目录）
+    assert client.get("/api/runs").json()["runs"] == []
+
+
+def test_delete_run_404s_unknown(tmp_path: Path):
+    with TestClient(create_app(tmp_path)) as client:
+        assert client.delete("/api/runs/BV1xx411c7mD-ffffffff").status_code == 404
+
+
+def test_delete_run_rejects_traversal(tmp_path: Path):
+    (tmp_path / "secret.txt").write_text("nope", encoding="utf-8")
+    with TestClient(create_app(tmp_path)) as client:
+        assert client.delete("/api/runs/..%2f..%2fsecret.txt").status_code != 200
+    assert (tmp_path / "secret.txt").is_file()
+
+
 # ------------------------------------------------------------------- 预检
 
 
@@ -299,8 +328,21 @@ def _fake_meta(duration: float, title: str = "示例视频"):
     return _fetch
 
 
+def _fake_pages(pages: list[download.VideoPage]):
+    def _fetch(url, settings=None):
+        return download.VideoInfo(title="系列课", uploader="某UP主", pages=pages)
+
+    return _fetch
+
+
+def _patch_pages_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """预检默认不打网络：概要探测一律短路为 None（按单P处理）。"""
+    monkeypatch.setattr(probe.download, "fetch_video_info", lambda *_a, **_k: None)
+
+
 def test_probe_reports_short_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(probe.download, "fetch_meta", _fake_meta(1234.0))
+    _patch_pages_off(monkeypatch)
     with TestClient(create_app(tmp_path)) as client:
         response = client.post("/api/probe", json={"url": URL})
 
@@ -314,6 +356,7 @@ def test_probe_reports_short_video(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 def test_probe_flags_over_long_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(probe.download, "fetch_meta", _fake_meta(2 * 3600 + 60))
+    _patch_pages_off(monkeypatch)
     with TestClient(create_app(tmp_path)) as client:
         body = client.post("/api/probe", json={"url": URL}).json()
 
@@ -353,6 +396,70 @@ def test_probe_maps_fetch_failure_to_400(tmp_path: Path, monkeypatch: pytest.Mon
     assert response.status_code == 400
 
 
+# --------------------------------------------------------- 预检 · 分P 探测
+
+PAGES = [
+    download.VideoPage(page=1, title="第一集", duration=158.0),
+    download.VideoPage(page=2, title="第二集", duration=154.6),
+    download.VideoPage(page=3, title="第三集", duration=200.0),
+]
+
+
+def test_probe_returns_pages_for_multi_p(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(probe.download, "fetch_meta", _fake_meta(158.0))
+    monkeypatch.setattr(probe.download, "fetch_video_info", _fake_pages(PAGES))
+    with TestClient(create_app(tmp_path)) as client:
+        body = client.post("/api/probe", json={"url": URL}).json()
+
+    assert [item["page"] for item in body["pages"]] == [1, 2, 3]
+    assert body["pages"][0]["title"] == "第一集"
+    assert body["pages"][0]["duration_text"] == "02:38"
+    assert body["current_page"] == 1
+    # 概要探测成功时展示主标题与 UP主（主标题优先于 yt-dlp 的「xxx p01 xxx」）
+    assert body["uploader"] == "某UP主"
+    assert body["title"] == "系列课"
+
+
+def test_probe_reads_current_page_from_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(probe.download, "fetch_meta", _fake_meta(154.6))
+    monkeypatch.setattr(probe.download, "fetch_video_info", _fake_pages(PAGES))
+    with TestClient(create_app(tmp_path)) as client:
+        body = client.post("/api/probe", json={"url": URL + "?p=2"}).json()
+
+    assert body["current_page"] == 2
+    assert len(body["pages"]) == 3
+
+
+def test_probe_omits_pages_for_single_p(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(probe.download, "fetch_meta", _fake_meta(158.0))
+    monkeypatch.setattr(probe.download, "fetch_video_info", _fake_pages(PAGES[:1]))
+    with TestClient(create_app(tmp_path)) as client:
+        body = client.post("/api/probe", json={"url": URL}).json()
+
+    assert "pages" not in body
+    assert "current_page" not in body
+    assert body["uploader"] == "某UP主"  # meta 兜底，概要探测不成功也有 UP主
+
+
+def test_probe_survives_pages_probe_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """概要探测失败只降级为单P，不能拖垮预检本身。"""
+
+    def boom(*args, **kwargs):
+        raise DownloadError("网络不可用")
+
+    monkeypatch.setattr(probe.download, "fetch_meta", _fake_meta(158.0))
+    monkeypatch.setattr(probe.download, "fetch_video_info", boom)
+    with TestClient(create_app(tmp_path)) as client:
+        response = client.post("/api/probe", json={"url": URL})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "pages" not in body
+    assert body["uploader"] == "某UP主"  # 仍来自 fetch_meta
+
+
 # ------------------------------------------------------------------- 任务
 
 
@@ -383,7 +490,7 @@ def test_job_manager_runs_pipeline_and_emits_events(
     kinds = [event["type"] for event in job._events]  # noqa: SLF001 - 用例内窥事件序列
     assert "stage" in kinds and "log" in kinds
     assert kinds[-1] == "done"
-    assert job.stage_index == 7
+    assert job.stage_index == 8
 
 
 def test_job_manager_maps_videread_error_to_exit_code(
@@ -503,3 +610,118 @@ def test_events_replay_since_returns_tail_only(
 
     _, backlog = job.subscribe(since=len(job._events) - 1)  # noqa: SLF001 - 用例内窥
     assert [event["type"] for event in backlog] == ["done"]
+
+
+def test_markdown_endpoint_blocked_for_framed_runs(tmp_path: Path):
+    """带截图的报告不提供 MD 导出：409 + 指路 PDF/PNG；纯文本报告不受影响。"""
+    make_run(tmp_path, RUN_ID)
+    frames = tmp_path / RUN_ID / "frames"
+    frames.mkdir()
+    (frames / "s1.jpg").write_bytes(b"\xff\xd8\xff fake")
+
+    client = TestClient(create_app(tmp_path))
+    blocked = client.get(f"/api/runs/{RUN_ID}/markdown")
+    assert blocked.status_code == 409
+    assert "PDF / PNG" in blocked.json()["detail"]
+
+    (frames / "s1.jpg").unlink()  # 截图产物清空即视为纯文本，照常导出
+    ok = client.get(f"/api/runs/{RUN_ID}/markdown")
+    assert ok.status_code == 200
+
+
+def test_probe_reports_existing_run(tmp_path: Path):
+    """已解析过的视频：probe 带上 existing_run（含最新一份的报告入口）。"""
+    from videread import download as dl
+
+    run_dir = tmp_path / dl.make_run_id(URL, "BV1xx411c7mD")
+    run_dir.mkdir(parents=True)
+    (run_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "bvid": "BV1xx411c7mD",
+                "title": "示例视频",
+                "uploader": "某UP主",
+                "duration": 1234.0,
+                "url": URL,
+                "cover": "",
+                "description": "",
+                "subtitles": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "report.html").write_text("<html><body>r</body></html>", encoding="utf-8")
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(probe.download, "fetch_video_info", lambda *_a, **_k: None)
+        with TestClient(create_app(tmp_path)) as client:
+            response = client.post("/api/probe", json={"url": URL})
+    finally:
+        monkeypatch.undo()
+
+    body = response.json()
+    assert body["existing_run"]["run_id"] == run_dir.name
+    assert body["existing_run"]["report_url"] == f"/report/{run_dir.name}"
+    assert body["existing_run"]["generated_at"]
+
+    # 没有报告产物（只跑了一半）不算已解析
+    (run_dir / "report.html").unlink()
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(probe.download, "fetch_video_info", lambda *_a, **_k: None)
+        with TestClient(create_app(tmp_path)) as client:
+            response = client.post("/api/probe", json={"url": URL})
+    finally:
+        monkeypatch.undo()
+    assert "existing_run" not in response.json()
+
+
+def test_probe_reports_existing_run(tmp_path: Path):
+    """已解析过的视频：probe 带上 existing_run（含最新一份的报告入口）。"""
+    from videread import download as dl
+
+    run_dir = tmp_path / dl.make_run_id(URL, "BV1xx411c7mD")
+    run_dir.mkdir(parents=True)
+    (run_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "bvid": "BV1xx411c7mD",
+                "title": "示例视频",
+                "uploader": "某UP主",
+                "duration": 1234.0,
+                "url": URL,
+                "cover": "",
+                "description": "",
+                "subtitles": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "report.html").write_text("<html><body>r</body></html>", encoding="utf-8")
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(probe.download, "fetch_video_info", lambda *_a, **_k: None)
+        with TestClient(create_app(tmp_path)) as client:
+            response = client.post("/api/probe", json={"url": URL})
+    finally:
+        monkeypatch.undo()
+
+    body = response.json()
+    assert body["existing_run"]["run_id"] == run_dir.name
+    assert body["existing_run"]["report_url"] == f"/report/{run_dir.name}"
+    assert body["existing_run"]["generated_at"]
+
+    # 没有报告产物（只跑了一半）不算已解析
+    (run_dir / "report.html").unlink()
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(probe.download, "fetch_video_info", lambda *_a, **_k: None)
+        with TestClient(create_app(tmp_path)) as client:
+            response = client.post("/api/probe", json={"url": URL})
+    finally:
+        monkeypatch.undo()
+    assert "existing_run" not in response.json()

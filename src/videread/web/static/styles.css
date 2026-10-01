@@ -250,6 +250,13 @@ select option { color: var(--ink); background: var(--paper); }
 }
 .btn-block { width: 100%; padding: 10px 14px; font-size: 14px; }
 .btn-small { padding: 4px 10px; font-size: 12px; }
+/* 危险操作（删除记录）：默认低调只染字色，悬停才亮出红底，误触率低 */
+.btn-danger { color: var(--bad); }
+.btn-danger:hover {
+  color: var(--bad);
+  background: rgba(251, 238, 237, .85);
+  border-color: rgba(240, 212, 210, .9);
+}
 
 .probe-hint {
   margin: 8px 0 0;
@@ -257,6 +264,14 @@ select option { color: var(--ink); background: var(--paper); }
   color: var(--ink-mute);
 }
 .probe-hint[data-tone="bad"] { color: var(--bad); font-weight: 600; }
+/* 预检加载中：小号转圈与文字同行（复用 .spinner 动画，仅缩尺寸） */
+.probe-hint .spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
 
 .form-error, .job-error {
   margin: 12px 0 0;
@@ -528,6 +543,64 @@ select option { color: var(--ink); background: var(--paper); }
 .run-meta span { white-space: nowrap; }
 .run-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
+/* 导出下拉：触发按钮 + 浮出的格式菜单。
+   菜单是对齐预览浮层 / 卡片的磨砂玻璃：半透明表面 + 边缘高光 +
+   顶部内高光模拟玻璃厚度 + 饱和度补偿，与站内浮层同一套配方。 */
+.export-dropdown { position: relative; }
+/* 菜单打开时挂到 body 下（见 app.js）：玻璃卡片的 backdrop-filter 会成为
+   Backdrop Root，把菜单自己的模糊采样困在卡片内——溢出卡片的部分磨砂失效、
+   底下文字透上来。挂到 body 后模糊对整个页面背景生效，z-index 也真正独立。
+   fixed 定位由 JS 按触发按钮的位置计算。 */
+.export-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 132px;
+  padding: 6px;
+  border-radius: 12px;
+  /* 浮在小字上方的紧凑浮层：比大面板（.72）更实的一层，模糊后的
+     残影只剩淡淡的色块，菜单文字不被底下卡片内容干扰 */
+  background: rgba(255, 255, 255, .92);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--sheen), var(--shadow-raised);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+}
+.export-item {
+  display: block;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--ink);
+  text-decoration: none;
+  transition: background .15s ease, color .15s ease;
+}
+.export-item:hover { background: var(--accent-soft); color: var(--accent); }
+/* 预检提示条里的动作入口：已解析过时的「查看上次报告 / 重新解析」 */
+.probe-action {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.probe-action:hover { border-color: var(--accent); }
+button.probe-action { padding: 0 8px; }
+/* 带截图报告的提示：MD 不可用的原因就地说明 */
+.export-note {
+  margin: 4px 0 0;
+  padding: 4px 10px 2px;
+  font-size: 11px;
+  color: var(--ink-mute);
+  border-top: 1px solid var(--hairline);
+}
+
 .run-detail { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--hairline); }
 table.trace { width: 100%; border-collapse: collapse; font-size: 12px; }
 table.trace th, table.trace td { padding: 4px 8px; text-align: left; border-bottom: 1px solid var(--hairline); }
@@ -590,7 +663,7 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .topbar, .panel { background: rgba(255, 255, 255, .94); }
   input[type="text"], input[type="search"], select,
-  .btn, .run-card, .preview-box { background: rgba(255, 255, 255, .96); }
+  .btn, .run-card, .preview-box, .export-menu { background: rgba(255, 255, 255, .96); }
   /* 主按钮在无模糊能力的环境回退为不透明浅玻璃（深色字，不存在白底白字问题） */
   .btn-primary,
   .btn-primary:hover { background: rgba(255, 255, 255, .96); }

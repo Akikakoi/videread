@@ -29,6 +29,14 @@
       </label>
       <p id="probe-hint" class="probe-hint" hidden></p>
 
+      <div class="field-group" id="page-group" hidden>
+        <label class="field" for="page">
+          <span class="field-label">选择分P</span>
+          <select id="page"></select>
+        </label>
+        <p class="field-hint">该视频有多个分P，只解析所选的一个。</p>
+      </div>
+
       <div class="grid-2">
         <div class="field-group">
           <label class="field">
@@ -67,6 +75,13 @@
           <span class="check-text">
             <span>保留音频文件</span>
             <span class="check-hint">跑完不自动删除音频，便于排查问题</span>
+          </span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="frames">
+          <span class="check-text">
+            <span>截取视频画面</span>
+            <span class="check-hint">按章节截取画面嵌入报告，会额外下载少量视频片段</span>
           </span>
         </label>
       </div>

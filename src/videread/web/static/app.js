@@ -4,7 +4,7 @@
 (function () {
   "use strict";
 
-  var STAGES = ["下载", "音频处理", "转写", "规范化", "结构规划", "逐节写作", "渲染"];
+  var STAGES = ["下载", "音频处理", "转写", "规范化", "结构规划", "截图", "逐节写作", "渲染"];
   var STAGE_COUNT = STAGES.length;
   // 逐节写作在 STAGES 里的序号（1 起）：只有这个阶段有「第 k/n 节」的子进度
   var WRITER_STAGE = STAGES.indexOf("逐节写作") + 1;
@@ -17,12 +17,15 @@
     form: document.getElementById("job-form"),
     url: document.getElementById("url"),
     probeHint: document.getElementById("probe-hint"),
+    pageGroup: document.getElementById("page-group"),
+    page: document.getElementById("page"),
     mode: document.getElementById("mode"),
     asr: document.getElementById("asr-backend"),
     modeHint: document.getElementById("mode-hint"),
     asrHint: document.getElementById("asr-hint"),
     noCache: document.getElementById("no-cache"),
     keepAudio: document.getElementById("keep-audio"),
+    frames: document.getElementById("frames"),
     submit: document.getElementById("submit"),
     formError: document.getElementById("form-error"),
     progress: document.getElementById("progress"),
@@ -63,6 +66,10 @@
   var runsCache = [];
   var probeCache = { key: null, promise: null };  // 同一输入值只预检一次
   var probeTooLong = false;                        // 当前输入是否已被判超长
+  var probeTimer = null;                           // 输入防抖：粘贴后自动预检的定时器
+  var PROBE_DEBOUNCE_MS = 500;                     // 停止输入半秒后再探测，逐字输入不刷请求
+  var probePages = [];                             // 预检拿到的分P列表（多P视频才有值）
+  var probeLimitSeconds = 7200;                    // 服务端下发的时长上限
 
   /* ───────────────────────────── 工具 ───────────────────────────── */
 
@@ -302,6 +309,15 @@
     show(el.probeHint, Boolean(text));
   }
 
+  /* 预检进行中：转圈 + 文案。textContent 一旦被结果覆盖，spinner 自然移除 */
+  function showProbeLoading() {
+    el.probeHint.textContent = "";
+    delete el.probeHint.dataset.tone;
+    el.probeHint.appendChild(node("span", "spinner probe-spinner"));
+    el.probeHint.appendChild(document.createTextNode(" 正在获取视频信息…"));
+    show(el.probeHint, true);
+  }
+
   /* 两个下拉下方的一句话说明。用大白话，避免只看到选项名不知差别在哪 */
   var FIELD_HINTS = {
     mode: {
@@ -326,6 +342,139 @@
     el.submit.disabled = tooLong;
   }
 
+  /* ──────────────── 分P 选择：多P 视频在提交前选好集数 ──────────────── */
+
+  function hidePageSelector() {
+    probePages = [];
+    pageSelectorKey = null;
+    el.page.textContent = "";
+    show(el.pageGroup, false);
+  }
+
+  function selectedPage() {
+    return parseInt(el.page.value, 10) || 1;
+  }
+
+  function selectedPageDuration() {
+    var page = selectedPage();
+    for (var i = 0; i < probePages.length; i++) {
+      if (probePages[i].page === page) return probePages[i].duration;
+    }
+    return 0;
+  }
+
+  /* 把所选分P 写进提交链接：P1 保持裸链接（缓存与裸 BV 提交同目录），
+     其他分P 追加 ?p=N；已有 p 参数则替换。裸 BV 号先补全成标准链接。 */
+  function withPage(source, page) {
+    var url = /^BV[0-9A-Za-z]{10}$/i.test(source)
+      ? "https://www.bilibili.com/video/" + source
+      : source;
+    var queryAt = url.indexOf("?");
+    if (queryAt < 0) return page > 1 ? url + "?p=" + page : url;
+    var base = url.slice(0, queryAt);
+    var params = url.slice(queryAt + 1).split("&").filter(function (pair) {
+      return pair.split("=")[0] !== "p";
+    });
+    if (page > 1) params.push("p=" + page);
+    return params.length ? base + "?" + params.join("&") : base;
+  }
+
+  function renderPageSelector(pages, current, rebuild) {
+    probePages = pages;
+    if (rebuild) {
+      // 仅在换了一个输入源时重建选项；同视频的重复预检必须保留用户已选的分P
+      el.page.textContent = "";
+      pages.forEach(function (item) {
+        var label = "P" + item.page + " " + (item.title || "") +
+          " · " + fmtClock(item.duration);
+        var option = node("option", null, label);
+        option.value = String(item.page);
+        el.page.appendChild(option);
+      });
+      el.page.value = String(current > 1 ? current : 1);
+      if (el.page.selectedIndex < 0) el.page.selectedIndex = 0;
+    }
+    show(el.pageGroup, true);
+  }
+
+  // 分P 视频的时长/超长判定跟随所选分P；单P 视频走服务端给的 duration
+  function applyDurationHint(data) {
+    var durationText = data.duration_text;
+    if (probePages.length) {
+      var pageDuration = selectedPageDuration();
+      if (!pageDuration) {
+        showProbeHint("分P信息已变化，请重新预检", "bad");
+        setProbeGate(true);
+        return true;
+      }
+      durationText = fmtClock(pageDuration);
+      if (pageDuration > probeLimitSeconds) {
+        showProbeHint(
+          "该分P时长 " + durationText + "，超过 " + data.limit_text +
+          "上限，已禁止提交。", "bad");
+        setProbeGate(true);
+        return true;
+      }
+    } else if (data.too_long) {
+      showProbeHint(
+        "该视频时长 " + data.duration_text + "，超过 " + data.limit_text +
+        "上限，已禁止提交。", "bad");
+      setProbeGate(true);
+      return true;
+    }
+    var parts = ["时长 " + durationText];
+    if (data.uploader) parts.push("UP主 " + data.uploader);
+    if (data.title) parts.push(data.title);
+    var text = parts.join(" · ");
+    // blur 重放防护：点击提示条上的按钮会先让输入框失焦，失焦复用缓存
+    // 重放这条渲染路径；若此时重写 textContent，「查看上次报告 / 重新解析」
+    // 会被拆掉重建，mousedown 与 mouseup 落在不同节点上，click 永远不触发。
+    // 同一内容直接沿用现有 DOM。
+    if (el.probeHint.textContent === text && !el.probeHint.hidden) {
+      setProbeGate(false);
+      return false;
+    }
+    showProbeHint(text);
+    renderExistingHint(data.existing_run);
+    setProbeGate(false);
+    return false;
+  }
+
+  el.page.addEventListener("change", function () {
+    if (probePages.length) applyDurationHint(lastProbeData);
+  });
+
+  /* 已解析过的视频：提示 + 「查看上次报告 / 重新解析」入口。
+     普通提交仍走缓存（不覆盖旧报告）；重新解析落 -rN 新目录全量重跑。 */
+  function renderExistingHint(existing) {
+    if (!existing) return;
+    var box = el.probeHint;
+    // 幂等守卫：动作按钮已在位就不重建（配合 applyDurationHint 的重放防护）
+    if (box.querySelector("button.probe-action")) return;
+    box.appendChild(document.createTextNode(" · 已解析过（" + existing.generated_at + "）"));
+    var view = node("a", "probe-action", "查看上次报告");
+    view.href = existing.report_url;
+    view.target = "_blank";
+    view.rel = "noopener";
+    var retry = node("button", "probe-action", "重新解析");
+    retry.type = "button";
+    retry.addEventListener("click", function () {
+      var source = currentSource();
+      if (!source || el.submit.disabled) return;
+      submitJob({
+        url: probePages.length ? withPage(source, selectedPage()) : source,
+        mode: el.mode.value,
+        no_cache: true,
+        keep_audio: el.keepAudio.checked,
+        frames: el.frames && el.frames.checked ? true : null,
+        asr_backend: el.asr.value || null,
+        retry: true
+      });
+    });
+    box.appendChild(view);
+    box.appendChild(retry);
+  }
+
   // 同一输入值只探测一次：失焦给出即时反馈，提交时复用同一次结果
   function ensureProbe(value) {
     if (probeCache.key === value && probeCache.promise) return probeCache.promise;
@@ -345,25 +494,44 @@
     return promise;
   }
 
-  function renderProbeHint(result) {
+  function renderProbeHint(result, probedValue) {
     if (!result.ok) {
-      // 预检失败不应卡住用户，超长由流水线的下载阶段兜底校验
+      // 服务端返回了 400 + 具体原因（输入既不是链接也不是存在的本地文件、
+      // 链接已失效等）：这是确定性失败，流水线跑到下载阶段也会同样失败，
+      // 直接拦下并展示原因，不浪费一次提交。没有 detail（网络抖动等）
+      // 才降级放行，交给执行时校验。
+      if (result.detail) {
+        showProbeHint("无法预检：" + result.detail, "bad");
+        setProbeGate(true);
+        hidePageSelector();
+        pageSelectorKey = null;
+        return true;
+      }
       showProbeHint("无法预检时长，将在执行时校验");
       setProbeGate(false);
+      hidePageSelector();
+      pageSelectorKey = null;
       return false;
     }
     var data = result.data;
-    if (data.too_long) {
-      showProbeHint(
-        "该视频时长 " + data.duration_text + "，超过 " + data.limit_text +
-        "上限，已禁止提交。", "bad");
-      setProbeGate(true);
-      return true;
+    lastProbeData = data;
+    probeLimitSeconds = data.limit_seconds || 7200;
+    var pages = data.pages || [];
+    // 换输入源才重建选项；同一视频重复预检（如提交时复用）保留已选分P
+    var rebuild = pageSelectorKey !== probedValue;
+    pageSelectorKey = probedValue;
+    if (pages.length > 1) {
+      renderPageSelector(pages, data.current_page || 1, rebuild);
+    } else {
+      hidePageSelector();
     }
-    showProbeHint("时长 " + data.duration_text + (data.title ? " · " + data.title : ""));
-    setProbeGate(false);
-    return false;
+    return applyDurationHint(data);
   }
+
+  // 最近一次预检的完整数据：切换分P时免二次请求即可刷新时长提示
+  var lastProbeData = null;
+  // 选项当前对应的输入源：区分「换视频」与「同视频重复预检」
+  var pageSelectorKey = null;
 
   // 返回 Promise<是否超长>；输入为空时不拦截（交给提交处的空值校验）
   function runProbe(value) {
@@ -372,21 +540,42 @@
       setProbeGate(false);
       return Promise.resolve(false);
     }
-    showProbeHint("正在预检时长…");
+    showProbeLoading();
     return ensureProbe(value).then(function (result) {
       if (currentSource() !== value) return false;  // 输入已改，丢弃过期结果
-      return renderProbeHint(result);
+      return renderProbeHint(result, value);
     });
   }
 
-  el.url.addEventListener("blur", function () { runProbe(currentSource()); });
+  // 取消尚未触发的防抖预检（失焦/提交时会立即探测，不需要定时器再跑一次）
+  function cancelProbeTimer() {
+    if (probeTimer !== null) {
+      window.clearTimeout(probeTimer);
+      probeTimer = null;
+    }
+  }
+
+  el.url.addEventListener("blur", function () {
+    cancelProbeTimer();
+    runProbe(currentSource());
+  });
   el.url.addEventListener("change", function () { runProbe(currentSource()); });
-  // 输入变化即失效旧结论，避免拿着上一个视频的判定挡住新输入
+  // 输入变化即失效旧结论，避免拿着上一个视频的判定挡住新输入；
+  // 停止输入半秒后自动预检——粘贴整段链接后马上就能看到加载动画，
+  // 不必等失焦，逐字输入也不会每个字符刷一次请求。
   el.url.addEventListener("input", function () {
+    cancelProbeTimer();
     if (currentSource() !== probeCache.key) {
       showProbeHint("");
       setProbeGate(false);
+      hidePageSelector();
     }
+    var value = currentSource();
+    if (!value) return;  // 空输入不预检（交给提交处的空值校验）
+    probeTimer = window.setTimeout(function () {
+      probeTimer = null;
+      runProbe(value);
+    }, PROBE_DEBOUNCE_MS);
   });
 
   el.mode.addEventListener("change", syncFieldHints);
@@ -422,11 +611,14 @@
   el.form.addEventListener("submit", function (event) {
     event.preventDefault();
     var source = currentSource();
+    // 回车提交不经过失焦：取消挂起的防抖预检，避免任务开跑后提示闪烁
+    cancelProbeTimer();
     var payload = {
       url: source,
       mode: el.mode.value,
       no_cache: el.noCache.checked,
       keep_audio: el.keepAudio.checked,
+      frames: el.frames && el.frames.checked ? true : null,
       asr_backend: el.asr.value || null
     };
     if (!source) {
@@ -439,6 +631,9 @@
     // 保证「超长」一定在创建任务之前被拦下。
     runProbe(source).then(function (tooLong) {
       if (tooLong) return;
+      // 仅在分P选择器可见（多P 视频预检成功）时改写链接；
+      // 其余情况（含手动带 ?p=N 的短链）提交原文，避免误改用户输入。
+      payload.url = probePages.length ? withPage(source, selectedPage()) : source;
       submitJob(payload);
     });
   });
@@ -605,6 +800,16 @@
     });
   }
 
+  /* 收起所有展开的导出菜单：点其他位置、滚动或改窗口时调用
+     （菜单是视口定位，页面一动位置就失效，直接收起最干净） */
+  function closeExportMenus() {
+    var open = document.querySelectorAll(".export-menu:not([hidden])");
+    for (var i = 0; i < open.length; i++) open[i].hidden = true;
+  }
+  document.addEventListener("click", closeExportMenus);
+  window.addEventListener("scroll", closeExportMenus, true);
+  window.addEventListener("resize", closeExportMenus);
+
   function runCard(run) {
     var card = node("div", "run-card");
 
@@ -644,10 +849,42 @@
       fresh.rel = "noopener";
       actions.appendChild(fresh);
 
-      // 让服务端下发 Content-Disposition 决定文件名，因此不设 download 属性
-      var exportMd = node("a", "btn btn-small", "导出 MD");
-      exportMd.href = "/api/runs/" + encodeURIComponent(run.run_id) + "/markdown";
-      actions.appendChild(exportMd);
+      // 导出统一收进下拉：PDF / PNG 长图 / Markdown 三种格式
+      var dropdown = node("div", "export-dropdown");
+      var trigger = node("button", "btn btn-small", "导出 ▾");
+      trigger.type = "button";
+      trigger.setAttribute("aria-haspopup", "true");
+      var menu = node("div", "export-menu");
+      menu.hidden = true;
+      // 导出统一收进下拉：PDF / PNG 长图 / Markdown 三种格式。
+      // 带截图的报告不给 MD：截图引用离开 run 目录就裂图（服务端同样拦截）
+      var EXPORTS = [{ label: "PDF 文档", ext: "pdf" }, { label: "PNG 长图", ext: "png" }];
+      if (!run.has_frames) EXPORTS.push({ label: "Markdown", ext: "markdown" });
+      EXPORTS.forEach(function (item) {
+        var link = node("a", "export-item", item.label);
+        link.href = "/api/runs/" + encodeURIComponent(run.run_id) + "/" + item.ext;
+        menu.appendChild(link);
+      });
+      if (run.has_frames) {
+        menu.appendChild(node("p", "export-note", "带截图报告不提供 MD"));
+      }
+      trigger.addEventListener("click", function (event) {
+        event.stopPropagation();
+        var willOpen = menu.hidden;
+        closeExportMenus();
+        if (willOpen) {
+          // 玻璃卡片的 backdrop-filter 会困住菜单的模糊采样与 z-index：
+          // 打开时挂到 body 下，按触发按钮的位置做视口定位
+          document.body.appendChild(menu);
+          var rect = trigger.getBoundingClientRect();
+          menu.style.top = rect.bottom + 6 + "px";
+          menu.style.left = rect.left + "px";
+          menu.hidden = false;
+        }
+      });
+      dropdown.appendChild(trigger);
+      dropdown.appendChild(menu);
+      actions.appendChild(dropdown);
     } else {
       actions.appendChild(node("span", "tag", "无 report.html"));
     }
@@ -655,6 +892,11 @@
     var detailButton = node("button", "btn btn-small", "阶段耗时");
     detailButton.type = "button";
     actions.appendChild(detailButton);
+
+    var deleteButton = node("button", "btn btn-small btn-danger", "删除");
+    deleteButton.type = "button";
+    deleteButton.addEventListener("click", function () { confirmDelete(run); });
+    actions.appendChild(deleteButton);
     card.appendChild(actions);
 
     var detail = node("div", "run-detail");
@@ -668,6 +910,27 @@
     });
 
     return card;
+  }
+
+  /* 删除记录：二次确认里说明后果（转写缓存一并删除，重新生成要重新付费）。
+     确认后调删除接口，无论成败都刷新列表——删掉了列表变短，没删掉保持原状。 */
+  function confirmDelete(run) {
+    var label = run.title || run.run_id;
+    var message = "确定删除「" + label + "」吗？\n\n" +
+      "该记录的全部产物会被删除且无法恢复；\n" +
+      "重新生成需要重新下载与转写（产生 ASR 费用）。";
+    if (!window.confirm(message)) return;
+    fetch("/api/runs/" + encodeURIComponent(run.run_id), { method: "DELETE" })
+      .then(function (response) {
+        if (!response.ok) {
+          window.alert("删除失败（HTTP " + response.status + "），请重试。");
+        }
+        loadRuns();
+      })
+      .catch(function () {
+        window.alert("无法连接本地服务，删除未执行。");
+        loadRuns();
+      });
   }
 
   function renderDetail(container, runId) {

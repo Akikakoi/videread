@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import re
+import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
 
 from ..download import VideoMeta, read_meta
 from ..errors import VidereadError
+from ..frames import has_frames
 from ..report import Outline
 from ..report import load as load_outline
 from ..transcript import format_time
@@ -32,6 +34,7 @@ _STAGE_LABELS = {
     "asr": "转写",
     "transcript": "规范化",
     "outline": "结构规划",
+    "frames": "截图",
     "sections": "逐节写作",
     "render": "渲染",
 }
@@ -157,6 +160,7 @@ def _entry(run_dir: Path) -> dict | None:
         "profile": outline.profile if outline else "",
         "sections": len(outline.sections) if outline else 0,
         "has_report": report.is_file(),
+        "has_frames": has_frames(run_dir),
         "report_url": f"/report/{run_dir.name}" if report.is_file() else None,
         "generated_at": (
             datetime.fromtimestamp(mtime).astimezone().strftime("%Y-%m-%d %H:%M")
@@ -186,6 +190,19 @@ def list_runs(out_root: Path) -> list[dict]:
             items.append(entry)
     items.sort(key=lambda item: item["mtime"], reverse=True)
     return items
+
+
+def delete_run(out_root: Path, run_id: str) -> bool:
+    """删除整个 run 目录（meta / 音频 / 转写缓存 / 报告全部产物）。
+
+    报告库的「删除记录」走这里：safe_run_dir 先挡住路径穿越，
+    只允许删 out_root 的直接子目录；删除失败或目录不存在返回 False。
+    """
+    run_dir = safe_run_dir(out_root, run_id)
+    if run_dir is None:
+        return False
+    shutil.rmtree(run_dir, ignore_errors=True)
+    return not run_dir.exists()
 
 
 def run_detail(out_root: Path, run_id: str) -> dict | None:
