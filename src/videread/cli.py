@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__, failures
+from . import __version__, download, failures
 from .config import DEFAULT_OUT_ROOT, configure_console
 from .errors import EXIT_OK, EXIT_USAGE, VidereadError
 from .pipeline import run
@@ -47,6 +47,39 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="忽略平台字幕，坚持下载音频走 ASR（字幕优先的兜底开关）",
     )
+    parser.add_argument(
+        "--page",
+        dest="page",
+        type=int,
+        default=1,
+        metavar="N",
+        help="多 P 视频指定解析第 N 个分P（默认 1；本地文件无效）",
+    )
+    parser.add_argument(
+        "--frames",
+        dest="frames",
+        action="store_true",
+        default=None,
+        help="按大纲节截取视频画面并内嵌进报告（默认跟随 .env 的 FRAMES，默认关）",
+    )
+    parser.add_argument(
+        "--pdf",
+        dest="pdf",
+        action="store_true",
+        help="报告生成后用本机 Edge / Chrome 无头打印导出 report.pdf",
+    )
+    parser.add_argument(
+        "--png",
+        dest="png",
+        action="store_true",
+        help="报告生成后用本机 Edge / Chrome 无头截图导出竖长 report.png",
+    )
+    parser.add_argument(
+        "--md",
+        dest="md",
+        action="store_true",
+        help="报告生成后转换导出 report.md（文字层次，适合粘贴进笔记软件）",
+    )
     parser.add_argument("--version", action="version", version=f"videread {__version__}")
     return parser
 
@@ -55,8 +88,12 @@ def main(argv: list[str] | None = None) -> int:
     configure_console()
     args = build_parser().parse_args(argv)
     try:
+        url = download.normalize_source(args.url)
+        if args.page > 1 and download.extract_bvid(url):
+            # 只有确认为 B 站视频才改写链接；裸 BV 号先补全成标准链接
+            url = download.page_url(url, args.page)
         path = run(
-            args.url,
+            url,
             mode=args.mode,
             out_root=Path(args.out),
             use_cache=not args.no_cache,
@@ -64,6 +101,10 @@ def main(argv: list[str] | None = None) -> int:
             asr_backend=args.asr_backend,
             force_asr=args.force_asr,
             open_report=args.open_report,
+            frames=args.frames,
+            export_pdf=args.pdf,
+            export_png=args.png,
+            export_md=args.md,
         )
     except VidereadError as exc:
         code = int(exc.exit_code)

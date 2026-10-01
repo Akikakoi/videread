@@ -266,6 +266,7 @@ videread/
 #   --keep-audio              跑完保留音频中间文件（默认自动清理）
 #   --open                    生成后自动用浏览器打开
 #   --asr NAME                临时覆盖 ASR 后端
+#   --page N                  多 P 视频指定解析第 N 个分P（默认 1）
 ```
 
 **退出码约定**（便于脚本化）：
@@ -315,6 +316,7 @@ def pick_subtitle(subtitles: list[dict], run_dir: Path) -> Path | None
 - 音频格式优先 `m4a`；不支持时回退 `bestaudio`
 - 若视频自带字幕，一并下载到 `subtitle.<lang>.srt`
 - 多字幕并存时按 `zh-CN → zh-Hans → zh → zh-Hant → en` 取用（`pick_subtitle`）；`--sub-langs` 只做过滤，不决定取哪一份
+- **多 P 视频**：预检阶段用 B 站 view API（`fetch_pages`）拉分P列表，Web 控制台在提交前让用户选好分P，CLI 用 `--page N`；选定后给链接追加 `?p=N` 再走现有流程。`p` 参数参与 `canonical_url` 与 run-id 计算，各分P 落到独立 run 目录、缓存互不冲突；`page_url(url, 1)` 会移除 `p` 参数，保证裸链接与 `?p=1` 共享同一份缓存。分P探测失败一律降级为单P，不阻断预检
 - **字幕优先**（`SUBTITLE_FIRST`，默认开）：字幕覆盖视频时长 ≥ 50% 时判为完整，直接由字幕建转写稿，跳过音频下载、音频处理与 ASR；覆盖不足或字幕文件缺失时回退到「下载音频 + ASR」。CLI 可用 `--force-asr` 单次强制走 ASR
 - 校验：`duration > 0` 且 `duration <= 2 * 3600`（超 2 小时拒绝，避免 ASR 成本失控）；本地文件在流水线阶段 1 走同一上限
 - 起子进程一律走 `execution.run_command()`：统一 utf-8 / 文本模式 / 超时，并把「程序缺失」「超时」归一化为 `DownloadError`（本模块与 §6.4 的 ffmpeg 封装共用同一入口）
