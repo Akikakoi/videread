@@ -3,7 +3,8 @@
 只覆盖报告实际会产出的标签子集：标题、段落、列表、引用、表格、行内强调与链接。
 报告自有的 CSS 组件（.callout / .cards / .stats / SVG 示意图等）一律当作透明容器，
 只保留其中的文字层次 —— Markdown 表达不了它们，导出面向粘贴到笔记软件的场景，
-不追求视觉还原。
+不追求视觉还原。截图 `<img>` 同样丢弃：带截图的报告在导出入口处就被拦下
+（见 frames.has_frames 的导出策略），data URI 也无法直接进 Markdown。
 
 用标准库 `html.parser` 而不是正则：报告正文里存在 `<div>` 嵌在 `<p>` 内的非法嵌套，
 逐标签的栈式处理比正则拼接更不容易把内容吃掉。
@@ -152,6 +153,7 @@ class _MarkdownConverter(HTMLParser):
             # 节标题的手写序号 <span class="num">：导出后由 Markdown 标题层次表达顺序
             self.dropped = 1
             return
+        # img（报告截图）：不产出任何标记，保留策略见模块 docstring
 
         if tag == "table":
             self._flush()

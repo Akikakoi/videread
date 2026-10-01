@@ -103,3 +103,4 @@ def test_entities_are_decoded():
 
 def test_empty_html_yields_blank_line():
     assert html_to_markdown("") == "\n"
+
