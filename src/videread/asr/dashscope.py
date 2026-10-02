@@ -22,7 +22,7 @@ from ..config import (
     DASHSCOPE_BASE_URL,
     Settings,
 )
-from ..errors import AsrError
+from ..errors import AsrError, CancelledError
 from ..retry import retry_call
 from .base import AsrSegment, offset_segments, sort_segments, write_raw_jsonl
 
@@ -44,6 +44,7 @@ class DashScopeAsr:
         *,
         cache_dir: Path | None = None,
         progress: Callable[[str], None] | None = None,
+        cancel_check: Callable[[], None] | None = None,
     ) -> None:
         self.settings = settings
         self.api_key = settings.require_dashscope()
@@ -51,6 +52,7 @@ class DashScopeAsr:
         self.language = settings.dashscope_language
         self.cache_dir = cache_dir
         self.progress = progress or (lambda _msg: None)
+        self.cancel_check = cancel_check
         self.failures: list[dict[str, object]] = []
         self._client = httpx.Client(
             base_url=settings.dashscope_base_url.rstrip("/") + "/",
@@ -58,6 +60,13 @@ class DashScopeAsr:
             proxy=settings.proxy,
             follow_redirects=True,
         )
+
+    # ------------------------------------------------------------------ 取消
+
+    def _checkpoint(self) -> None:
+        """切段/收结果之间的取消检查点：抛 CancelledError 由上层归类。"""
+        if self.cancel_check is not None:
+            self.cancel_check()
 
     # ------------------------------------------------------------------ 接口
 
@@ -69,6 +78,7 @@ class DashScopeAsr:
         if total <= ASR_SEGMENT_SECONDS:
             chunks = [(0.0, total)]
         else:
+            self._checkpoint()
             silences = detect_silence(audio, settings=self.settings)
             chunks = plan_chunks(total, silences, limit=ASR_SEGMENT_SECONDS)
             self.progress(f"长音频切段：{len(chunks)} 段（并发 {ASR_MAX_CONCURRENCY}）")
@@ -92,7 +102,13 @@ class DashScopeAsr:
             for future in as_completed(futures):
                 index = futures[future]
                 try:
+                    self._checkpoint()
                     results[index] = future.result()
+                except CancelledError:
+                    # 撤销还没开始的段；已完成的段结果已落盘（asr.part.*），不白花钱
+                    for pending in futures:
+                        pending.cancel()
+                    raise
                 except Exception as exc:  # noqa: BLE001 - 单段失败不阻塞其他段
                     self.failures.append(
                         {"chunk": index, "error": f"{type(exc).__name__}: {exc}"}

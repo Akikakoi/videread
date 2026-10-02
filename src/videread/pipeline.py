@@ -24,7 +24,15 @@ from .asr import get_backend, load_raw_jsonl, write_raw_jsonl
 from .asr.base import AsrSegment
 from .config import MAX_VIDEO_DURATION_SEC, Settings, get_settings
 from .download import VideoMeta
-from .errors import AsrError, AudioError, LlmError, RenderError, UsageError, VidereadError
+from .errors import (
+    AsrError,
+    AudioError,
+    CancelledError,
+    LlmError,
+    RenderError,
+    UsageError,
+    VidereadError,
+)
 from .report import (
     LlmClient,
     Outline,
@@ -103,6 +111,7 @@ class _RunState:
     force_report: bool
     settings: Settings
     progress: Callable[[str], None]
+    cancel_check: Callable[[], None] | None = None
 
     is_local: bool = False
     fresh_dir: bool = False
@@ -143,6 +152,7 @@ def run(
     export_png: bool = False,
     export_md: bool = False,
     fresh_dir: bool = False,
+    cancel_check: Callable[[], None] | None = None,
     progress: Callable[[str], None] = print,
 ) -> Path:
     """执行完整流水线，返回 report.html 路径。
@@ -153,6 +163,10 @@ def run(
     （PDF 与长图由本机 Edge / Chrome 无头打印 / 截图，已存在且较新则复用）。
     `fresh_dir=True`（重新解析）落 `-rN` 新目录，不覆盖已有报告；
     调用方应同时给 `use_cache=False`，否则等于照抄旧产物没有意义。
+
+    `cancel_check` 是取消检查点回调（Web 控制台取消任务用）：在每个阶段
+    边界与长阶段内部（ASR 切段之间、逐节写作各节之间）被调用，抛
+    `CancelledError` 即终止；已落盘产物照常保留，重跑可续。
     """
     mode = (mode or "").strip().lower()
     if mode not in _MODES:
@@ -176,24 +190,38 @@ def run(
         fresh_dir=fresh_dir,
         settings=settings,
         progress=progress,
+        cancel_check=cancel_check,
     )
+
+    def _checkpoint() -> None:
+        """阶段边界的取消检查点：抛 CancelledError 时已完成阶段不受影响。"""
+        if cancel_check is not None:
+            cancel_check()
 
     current = _STAGE_LABELS[0]
     try:
+        _checkpoint()
         _stage_download(state)
         current = _STAGE_LABELS[1]
+        _checkpoint()
         _stage_audio(state)
         current = _STAGE_LABELS[2]
+        _checkpoint()
         _stage_asr(state)
         current = _STAGE_LABELS[3]
+        _checkpoint()
         _stage_transcript(state)
         current = _STAGE_LABELS[4]
+        _checkpoint()
         _stage_outline(state)
         current = _STAGE_LABELS[5]
+        _checkpoint()
         _stage_frames(state)
         current = _STAGE_LABELS[6]
+        _checkpoint()
         _stage_sections(state)
         current = _STAGE_LABELS[7]
+        _checkpoint()
         report_path = _stage_render(state)
 
         # 跑完自动清理中间产物。audio.wav 是这里体积最大的一项（2h 视频约 230MB，
@@ -233,6 +261,12 @@ def run(
         if open_report:
             webbrowser.open(report_path.resolve().as_uri())
         return report_path
+    except CancelledError:
+        # 取消不是失败：照常列出已生成产物，提示可以续跑
+        progress("任务已取消，已生成产物保留（可据此续跑）：")
+        for path in state.produced:
+            progress(f"  - {path}")
+        raise
     except VidereadError as exc:
         progress(f"[错误] 阶段「{current}」失败：{type(exc).__name__}")
         if state.produced:
@@ -465,7 +499,10 @@ def _stage_asr(state: _RunState) -> None:
         else:
             assert state.wav is not None
             backend = get_backend(
-                state.settings, cache_dir=state.run_dir, progress=state.progress
+                state.settings,
+                cache_dir=state.run_dir,
+                progress=state.progress,
+                cancel_check=state.cancel_check,
             )
             segments = backend.transcribe(state.wav, duration=state.meta.duration)
             write_raw_jsonl(segments, raw_path)
@@ -581,6 +618,9 @@ def _stage_frames(state: _RunState) -> None:
                 }
                 directory = frames_mod.frame_dir(state.run_dir)
                 for index, (section_id, moment, label) in enumerate(points):
+                    # 取消不属于「可降级失败」：必须直接向上抛，不能被吞成降级
+                    if state.cancel_check is not None:
+                        state.cancel_check()
                     dest = directory / f"{section_id}.jpg"
                     if _nonempty(dest):
                         state.frame_files[section_id] = dest
@@ -617,6 +657,8 @@ def _stage_frames(state: _RunState) -> None:
                 state.produced.append(manifest)
                 stage.detail["frames"] = len(state.frame_files)
                 detail = f"{len(state.frame_files)}/{len(points)} 节"
+            except CancelledError:
+                raise
             except VidereadError as exc:
                 # 截图是增强能力：失败不阻断报告，已成功的帧照常内嵌
                 stage.detail["degraded"] = str(exc)[:300]
@@ -650,6 +692,7 @@ def _stage_sections(state: _RunState) -> None:
             progress=state.progress,
             force=state.force_report,
             allowed_classes=render.template_classes(render.template_for(state.mode)),
+            cancel_check=state.cancel_check,
         )
         stage.detail["sections"] = len(parts)
         detail = f"{len(parts)}/{len(state.outline.sections)} 节"

@@ -28,6 +28,7 @@ _DASHSCOPE_REALTIME_ALIASES = {
     "paraformer-realtime-v2",
 }
 _OPENAI_ALIASES = {"openai", "openai-whisper", "whisper", "whisper-1"}
+_LOCAL_ALIASES = {"local", "local-whisper", "faster-whisper", "whisper-local"}
 
 
 def get_backend(
@@ -35,21 +36,35 @@ def get_backend(
     *,
     cache_dir: Path | None = None,
     progress: Callable[[str], None] | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> AsrBackend:
     name = (settings.asr_backend or "dashscope").strip().lower()
     if name in _DASHSCOPE_ALIASES:
         from .dashscope import DashScopeAsr
 
-        return DashScopeAsr(settings, cache_dir=cache_dir, progress=progress)
+        return DashScopeAsr(
+            settings, cache_dir=cache_dir, progress=progress, cancel_check=cancel_check
+        )
     if name in _DASHSCOPE_REALTIME_ALIASES:
         from .realtime import DashScopeRealtimeAsr
 
-        return DashScopeRealtimeAsr(settings, cache_dir=cache_dir, progress=progress)
+        return DashScopeRealtimeAsr(
+            settings, cache_dir=cache_dir, progress=progress, cancel_check=cancel_check
+        )
     if name in _OPENAI_ALIASES:
         from .openai_whisper import OpenAiWhisperAsr
 
-        return OpenAiWhisperAsr(settings, cache_dir=cache_dir, progress=progress)
+        return OpenAiWhisperAsr(
+            settings, cache_dir=cache_dir, progress=progress, cancel_check=cancel_check
+        )
+    if name in _LOCAL_ALIASES:
+        from .local_whisper import LocalWhisperAsr
+
+        return LocalWhisperAsr(
+            settings, cache_dir=cache_dir, progress=progress, cancel_check=cancel_check
+        )
     raise UsageError(
         "未知的 ASR_BACKEND："
-        f"{settings.asr_backend!r}（可选 dashscope / dashscope-realtime / openai）"
+        f"{settings.asr_backend!r}"
+        "（可选 dashscope / dashscope-realtime / openai / local）"
     )

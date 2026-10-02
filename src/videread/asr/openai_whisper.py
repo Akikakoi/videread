@@ -18,7 +18,7 @@ from ..config import (
     ASR_SEGMENT_TIMEOUT_SEC,
     Settings,
 )
-from ..errors import AsrError, UsageError
+from ..errors import AsrError, CancelledError, UsageError
 from .base import AsrSegment, offset_segments, sort_segments
 
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -36,10 +36,12 @@ class OpenAiWhisperAsr:
         *,
         cache_dir: Path | None = None,
         progress: Callable[[str], None] | None = None,
+        cancel_check: Callable[[], None] | None = None,
     ) -> None:
         self.settings = settings
         self.cache_dir = cache_dir
         self.progress = progress or (lambda _msg: None)
+        self.cancel_check = cancel_check
         self.model = os.environ.get("OPENAI_ASR_MODEL", "").strip() or _DEFAULT_MODEL
         self.base_url = (
             os.environ.get("OPENAI_BASE_URL", "").strip() or _DEFAULT_BASE_URL
@@ -77,6 +79,11 @@ class OpenAiWhisperAsr:
         chunk_dir = (self.cache_dir or audio.parent) / "asr_chunks"
         chunk_dir.mkdir(parents=True, exist_ok=True)
 
+        def _checkpoint() -> None:
+            if self.cancel_check is not None:
+                self.cancel_check()
+
+        _checkpoint()
         results: dict[int, list[AsrSegment]] = {}
         with ThreadPoolExecutor(max_workers=ASR_MAX_CONCURRENCY) as pool:
             futures = {}
@@ -86,7 +93,12 @@ class OpenAiWhisperAsr:
                 futures[pool.submit(self._transcribe_file, dest)] = (index, start, dest)
             for future, (index, start, dest) in futures.items():
                 try:
+                    _checkpoint()
                     results[index] = offset_segments(future.result(), start)
+                except CancelledError:
+                    for pending in futures:
+                        pending.cancel()
+                    raise
                 except Exception as exc:  # noqa: BLE001 - 单段失败不阻塞其他段
                     self.failures.append(
                         {"chunk": index, "error": f"{type(exc).__name__}: {exc}"}

@@ -23,7 +23,13 @@ build/
 .trae/
 .DS_Store
 Thumbs.db
+# --- 控制台本地配置（自定义背景图）---
+.ui/
+
 # --- 本地 AI 工作区 ---
 .workbuddy/
 bilibili_cookies.txt
 .bili_login_status.txt
+
+# --- 浏览器自动化工具缓存 ---
+.playwright-cli/

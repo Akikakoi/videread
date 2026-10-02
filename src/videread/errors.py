@@ -9,6 +9,7 @@ EXIT_DOWNLOAD = 2
 EXIT_AUDIO_OR_ASR = 3
 EXIT_LLM = 4
 EXIT_RENDER = 5
+EXIT_CANCELLED = 130  # 与 CLI 的 KeyboardInterrupt 返回值一致（128 + SIGINT）
 
 
 class VidereadError(RuntimeError):
@@ -57,6 +58,12 @@ class RenderError(VidereadError):
     """渲染或写盘失败：占位符缺失、磁盘满。"""
 
     exit_code = EXIT_RENDER
+
+
+class CancelledError(VidereadError):
+    """任务被用户取消：在检查点抛出，已落盘产物照常保留、可据此续跑。"""
+
+    exit_code = EXIT_CANCELLED
 
 
 class PdfError(RenderError):

@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+local = ["faster-whisper>=1.0"]  # 本地转写后端（ASR_BACKEND=local），可选
 
 [project.scripts]
 videread = "videread.cli:main"

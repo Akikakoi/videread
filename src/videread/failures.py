@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from .errors import (
     EXIT_AUDIO_OR_ASR,
+    EXIT_CANCELLED,
     EXIT_DOWNLOAD,
     EXIT_LLM,
     EXIT_OK,
@@ -26,6 +27,7 @@ GROUPS: dict[int, str] = {
     EXIT_AUDIO_OR_ASR: "processing",
     EXIT_LLM: "external",
     EXIT_RENDER: "processing",
+    EXIT_CANCELLED: "runtime",
 }
 
 #: 退出码 → 用户文案（CLI 与 Web 提示共用，新增码必须在此登记）
@@ -35,6 +37,7 @@ HINTS: dict[int, str] = {
     EXIT_AUDIO_OR_ASR: "音频处理或 ASR 失败",
     EXIT_LLM: "LLM 调用失败（超时、限流、JSON 非法）",
     EXIT_RENDER: "渲染或写盘失败",
+    EXIT_CANCELLED: "任务已被用户取消（已生成产物保留，可续跑）",
 }
 
 #: 未登记码的兜底类别 / 文案

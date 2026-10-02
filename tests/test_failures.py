@@ -16,7 +16,7 @@ def _declared_exit_codes() -> set[int]:
 def test_every_declared_exit_code_is_registered():
     """errors.py 里新增退出码却忘了登记文案，必须在这里被挡住。"""
     declared = _declared_exit_codes()
-    assert len(declared) == 6  # 防止取到空集导致假绿
+    assert len(declared) == 7  # 防止取到空集导致假绿
     assert declared - set(failures.GROUPS) == set()
     assert declared - {errors.EXIT_OK} - set(failures.HINTS) == set()
 
@@ -28,6 +28,7 @@ def test_group_mapping_matches_documented_semantics():
     assert failures.group(errors.EXIT_LLM) == "external"
     assert failures.group(errors.EXIT_AUDIO_OR_ASR) == "processing"
     assert failures.group(errors.EXIT_RENDER) == "processing"
+    assert failures.group(errors.EXIT_CANCELLED) == "runtime"
 
 
 def test_unknown_exit_code_falls_back():

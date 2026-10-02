@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..config import Settings, get_settings
-from ..errors import LlmError
+from ..errors import CancelledError, LlmError
 from ..transcript import TranscriptUnit, units_to_markdown
 from . import prompts
 from .llm import LlmClient
@@ -206,12 +206,17 @@ def write_sections(
     progress: Callable[[str], None] | None = None,
     force: bool = False,
     allowed_classes: set[str] | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> list[str]:
     """逐节生成正文片段，返回按大纲顺序排好的 HTML 列表。
 
     各节互相独立：只读自己那节的转写单元、只写自己的 `sections/sN.html`，
     因此除缓存命中的节先按序快速处理外，其余各节用有界线程池并发调用，
     把串行的 LLM 等待时间压到最短；返回顺序始终与大纲一致。
+
+    `cancel_check` 在每节完成后的检查点被调用（Web 控制台取消任务用）：
+    抛 `CancelledError` 即终止。已收到结果的节照常落盘——钱已经花了，
+    产物不该丢；未开始的节全部撤销，重跑时从断点续写。
 
     返回值是**已完成标题拼装**的整节 HTML（标题由 `assemble_section` 注入）。
     落盘的 `sections/sN.html` 只存 LLM 片段，标题在拼装时确定性生成，
@@ -221,6 +226,10 @@ def write_sections(
         raise LlmError("大纲为空，无法逐节写作")
     settings = settings or get_settings()
     progress = progress or (lambda _msg: None)
+
+    def _checkpoint() -> None:
+        if cancel_check is not None:
+            cancel_check()
 
     directory = section_dir(out_dir)
     directory.mkdir(parents=True, exist_ok=True)
@@ -254,6 +263,7 @@ def write_sections(
     if not pending:
         return [parts[section.id] for section in outline.sections]
 
+    _checkpoint()  # 缓存处理期间也可能已请求取消：不再提交新的 LLM 调用
     llm = client or LlmClient(settings)
     counter = _Counter(done)
 
@@ -281,6 +291,7 @@ def write_sections(
 
     # 单节失败不打断其他节：已成功的节照常落盘，最后统一抛出最先失败的那一节
     failures: list[tuple[int, BaseException]] = []
+    cancelled: CancelledError | None = None
     workers = max(1, min(settings.llm_write_concurrency, len(pending)))
     with ThreadPoolExecutor(
         max_workers=workers, thread_name_prefix="videread-writer"
@@ -292,7 +303,11 @@ def write_sections(
         for future in as_completed(futures):
             index, section = futures[future]
             try:
+                _checkpoint()
                 html = future.result()
+            except CancelledError as exc:
+                cancelled = exc
+                break
             except Exception as exc:  # noqa: BLE001 - 收集后统一抛出；用户中断不在此列
                 failures.append((index, exc))
                 continue
@@ -301,6 +316,24 @@ def write_sections(
             done = counter.next()
             progress(f"第 {done}/{total} 节完成")
             parts[section.id] = assemble_section(section, index, html, mode=mode)
+
+    if cancelled is not None:
+        # 撤销未开始的节；已经拿到结果的节照常落盘（调用已付费，产物不丢）
+        for future in futures:
+            future.cancel()
+        for future, (index, section) in futures.items():
+            if not future.done() or future.cancelled():
+                continue
+            if future.exception() is not None:
+                continue
+            html = future.result()
+            (directory / f"{section.id}.html").write_text(
+                html + "\n", encoding="utf-8", newline="\n"
+            )
+            parts[section.id] = assemble_section(section, index, html, mode=mode)
+        saved = len(parts)
+        progress(f"已取消：已完成的 {saved}/{total} 节已保留，重跑将从断点续写")
+        raise cancelled
 
     if failures:
         _index, first = min(failures, key=lambda item: item[0])

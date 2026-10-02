@@ -30,7 +30,7 @@ from websockets.exceptions import WebSocketException
 
 from ..audio import cut_segment, detect_silence, plan_chunks, probe_duration
 from ..config import ASR_SEGMENT_SECONDS, ASR_SEGMENT_TIMEOUT_SEC, Settings
-from ..errors import AsrError
+from ..errors import AsrError, CancelledError
 from .base import AsrSegment, offset_segments, sort_segments, write_raw_jsonl
 
 # 实时接口与异步接口不在同一个路径下：/api/v1 → /api-ws/v1/inference
@@ -72,6 +72,7 @@ class DashScopeRealtimeAsr:
         *,
         cache_dir: Path | None = None,
         progress: Callable[[str], None] | None = None,
+        cancel_check: Callable[[], None] | None = None,
     ) -> None:
         self.settings = settings
         self.api_key = settings.require_dashscope()
@@ -80,7 +81,13 @@ class DashScopeRealtimeAsr:
         self.url = realtime_url(settings.dashscope_base_url)
         self.cache_dir = cache_dir
         self.progress = progress or (lambda _msg: None)
+        self.cancel_check = cancel_check
         self.failures: list[dict[str, object]] = []
+
+    def _checkpoint(self) -> None:
+        """切段之间的取消检查点：抛 CancelledError 由上层归类。"""
+        if self.cancel_check is not None:
+            self.cancel_check()
 
     # ------------------------------------------------------------------ 接口
 
@@ -111,6 +118,8 @@ class DashScopeRealtimeAsr:
 
         merged: list[AsrSegment] = []
         for index, (start, end) in enumerate(chunks):
+            # 取消不属于「单段失败」：必须在 except Exception 之前直接向上抛
+            self._checkpoint()
             dest = chunk_dir / f"chunk.{index:03d}.wav"
             try:
                 # 缓存判断只做一次：命中则跳过切段与推流，未命中才落到磁盘
@@ -125,6 +134,8 @@ class DashScopeRealtimeAsr:
                     raise AsrError(f"第 {index + 1} 段 ASR 返回空结果：{dest.name}")
                 self._write_part(index, segments, start, end)
                 merged.extend(offset_segments(segments, start))
+            except CancelledError:
+                raise
             except Exception as exc:  # noqa: BLE001 - 单段失败不阻塞其他段
                 self.failures.append(
                     {"chunk": index, "error": f"{type(exc).__name__}: {exc}"}
