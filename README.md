@@ -52,7 +52,7 @@ pip install -e .
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
-| `ASR_BACKEND` | 是 | `dashscope` / `dashscope-realtime` / `openai` |
+| `ASR_BACKEND` | 是 | `dashscope` / `dashscope-realtime` / `openai` / `local` |
 | `DASHSCOPE_API_KEY` | 用 `dashscope*` 时 | 阿里云百炼（Model Studio）API Key |
 | `DASHSCOPE_BASE_URL` | 否 | 默认 `https://dashscope.aliyuncs.com/api/v1`；私有化 MaaS 部署可覆盖 |
 | `DASHSCOPE_MODEL` | 否 | 默认 `paraformer-v2`；实时后端未含 `realtime` 关键字时自动改用 `paraformer-realtime-v2` |
@@ -63,6 +63,7 @@ pip install -e .
 | `LLM_WRITE_CONCURRENCY` | 否 | 逐节写作并发路数，默认 3；各节互相独立，加大可缩短总耗时，注意接口限流 |
 | `LLM_TIMEOUT` | 否 | 单次 LLM 调用超时秒数，默认 180 |
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_ASR_MODEL` | 用 `openai` 后端时 | 未配置时回退复用 `LLM_*` |
+| `LOCAL_ASR_MODEL` / `LOCAL_ASR_DEVICE` / `LOCAL_ASR_COMPUTE_TYPE` / `LOCAL_ASR_LANGUAGE` | 用 `local` 后端时 | 模型规格（tiny/base/small/medium/large-v3，默认 small）、设备（默认 auto）、计算精度（默认 auto）、语言提示（默认 auto） |
 | `FFMPEG_BIN` / `FFPROBE_BIN` | 否 | 留空则按 `bin/` → PATH 顺序探测 |
 | `PDF_BROWSER_BIN` | 否 | PDF / PNG 长图导出用的浏览器路径；留空自动探测 Edge / Chrome（Windows 10/11 自带 Edge，无需安装） |
 | `HTTP_PROXY` / `HTTPS_PROXY` | 否 | 同时作用于 `httpx` 与 `yt-dlp` |
@@ -82,7 +83,7 @@ python -m videread.cli BV1xx411c7mD
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `url` | — | Bilibili 视频链接或 BV 号（如 `BV1xx411c7mD`），或本地音视频文件路径 |
+| `url` | — | Bilibili 视频链接或 BV 号（如 `BV1xx411c7mD`）、本地音视频文件路径；也可以是一个 `.txt` 批量列表（每行一个来源，`#` 为注释，逐个顺序解析，失败不中断） |
 | `--mode` | `standard` | `standard` / `brief`，对应两套模板 |
 | `--out` | 项目根 `runs/` | 产物根目录 |
 | `--no-cache` | 关 | 忽略已有产物，全部重跑 |
@@ -105,12 +106,13 @@ python -m videread.cli BV1xx411c7mD
 | 3 | 音频处理或 ASR 失败 |
 | 4 | LLM 调用失败（超时、限流、JSON 非法且重试耗尽） |
 | 5 | 渲染或写盘失败 |
+| 130 | 任务被用户取消（已生成产物保留，可续跑） |
 
 ---
 
 ## Web 控制台
 
-不想敲命令时用本地控制台：浏览器里填链接、看 8 阶段实时进度、完成后就地预览报告，并浏览 `runs/` 里已生成的全部报告。
+不想敲命令时用本地控制台：浏览器里填链接、看 8 阶段实时进度、执行中可随时取消、忙碌时新任务自动排队、完成后就地预览报告；报告库支持全文检索转写稿、按日查看耗时与 token 统计，并可浏览 `runs/` 里已生成的全部报告。
 
 ```powershell
 run.bat                          # Windows 一键启动（无参数即起控制台并开浏览器）
@@ -130,9 +132,12 @@ videread-web                     # 安装后的控制台命令
 
 约定与限制：
 
-- **同一时刻只跑一个任务**：上一个任务结束前再次提交返回 409。串行既是个人工具的取舍，也避免争用同一 run 目录、重复付费。
+- **同一时刻只执行一个任务，其余排队**：提交时若已有任务在跑，新任务进入 FIFO 队列（上限 10 个，超出返回 409），前一个结束后自动开跑；串行既是个人工具的取舍，也避免争用同一 run 目录、重复付费。批量场景也可以直接用 CLI 的 `.txt` 列表。
+- **支持取消**：任务执行中可点「取消」，流水线在最近的检查点（阶段边界、ASR 切段之间、逐节写作各节之间）停止；排队中的任务直接出队。已落盘产物照常保留，重新提交同一视频即可从断点续跑，已完成的节不再重复付费。
+- **自定义背景**：顶栏「自定义背景」可上传一张本地图片（JPG / PNG / WebP，≤15MB）替换默认背景，选择会持久保存（存于项目根 `.ui/`，不入库）；「恢复默认背景」一键还原默认壁纸。
+- **全文检索**：报告库过滤框旁的「全文」开关会把过滤改为在所有报告的转写稿正文里搜关键词（≥2 个字），结果带命中摘要与次数。
+- **统计**：报告库头部的「统计」按钮按日汇总所有 run 的总耗时与 token 用量（读自各 run 的 `run.trace.jsonl`）。
 - **重复解析不覆盖旧报告**：输入已解析过的视频，预检提示条会标注「已解析过（时间）」并给出两个入口——「查看上次报告」直接打开旧报告；「重新解析」忽略缓存全量重跑，落到 `-r2`、`-r3`…新目录，旧报告原样保留。
-- **不支持中断**：流水线没有取消钩子，关掉页面不会停止任务，退出服务进程才会终止。
 - **改 `.env` 后需重启控制台**：`.env` 以 `override=False` 加载，已在进程里生效的键改值不会立刻刷新（新增的键可以）。
 
 ---
@@ -165,6 +170,7 @@ videread-web                     # 安装后的控制台命令
 | `dashscope` | 异步：`getPolicy` → OSS 直传 → 提交任务 → 轮询 | 账号对 `dashscope-instant` 即时桶有授权时，可并行切段 |
 | `dashscope-realtime` | 实时：WebSocket 二进制帧直推 | 不经 OSS 桶，**不受对象归属校验限制**；长音频按静音点切段后顺序提交 |
 | `openai` | OpenAI 兼容 `audio/transcriptions` | 自备 whisper 类服务 |
+| `local` | 本地 faster-whisper（CTranslate2） | **离线、免费**；可选依赖（`pip install -e ".[local]"`），首次运行下载模型（国内可设 `HF_ENDPOINT=https://hf-mirror.com` 走镜像），速度取决于机器性能 |
 
 若异步后端报 `403 Resource.AccessDenied`（提示 `OSS Resource oss://dashscope-instant/... access denied`），属账号对即时桶无读取授权，换 Key 不解决，改用 `dashscope-realtime` 即可。
 

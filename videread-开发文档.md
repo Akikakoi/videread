@@ -46,7 +46,7 @@
 | 语言 / 环境 | Python 3.12 + `uv`                        | Windows 友好，依赖隔离干净，`uv run` 免手动建环境           |
 | 视频下载    | `yt-dlp`                                  | B 站支持最好，可同时拿到标题 / UP主 / 时长 / 封面 / 字幕        |
 | 音视频处理   | `ffmpeg` + `ffprobe`                      | 抽音频、静音点检测、时长探测                              |
-| ASR     | 通义 Paraformer（阿里百炼）｜备用 OpenAI `whisper-1` | 云端、免显卡、按量付费；用 adapter 抽象便于替换                |
+| ASR     | 通义 Paraformer（阿里百炼）｜备用 OpenAI `whisper-1` / 本地 faster-whisper | 云端、免显卡、按量付费；用 adapter 抽象便于替换。faster-whisper 为可选依赖（`local` 后端），离线免费 |
 | LLM     | DeepSeek / 通义千问（OpenAI 兼容接口）              | 中文表现好、成本低、`openai` SDK 直接调用                 |
 | HTTP    | `httpx`                                   | 超时与重试控制比 `requests` 更清晰                     |
 | 模板渲染    | 纯字符串占位符替换（**不用 Jinja2**）                  | 模板本身是完整 HTML，替换 `{{BODY}}` 即可，避免 HTML 被二次转义 |
@@ -260,12 +260,15 @@ videread/
 
 ```bash
 # 命令：videread <url> [options]
+#   <url>                     链接 / BV 号 / 本地文件；指向存在的 .txt 时进入批量模式
+#                             （每行一个来源，# 为注释，逐个顺序解析，失败不中断，
+#                             退出码取第一个失败的任务）
 #   --mode {standard,brief}   阅读模式，默认 standard
 #   --out DIR                 产物根目录，默认 ./runs
 #   --no-cache                忽略已有产物，全部重跑
 #   --keep-audio              跑完保留音频中间文件（默认自动清理）
 #   --open                    生成后自动用浏览器打开
-#   --asr NAME                临时覆盖 ASR 后端
+#   --asr NAME                临时覆盖 ASR 后端（dashscope / dashscope-realtime / openai / local）
 #   --page N                  多 P 视频指定解析第 N 个分P（默认 1）
 ```
 
@@ -279,6 +282,7 @@ videread/
 | 3 | 音频处理或 ASR 失败                |
 | 4 | LLM 调用失败（含 JSON 解析失败重试耗尽）   |
 | 5 | 渲染或写盘失败                     |
+| 130 | 任务被用户取消（已生成产物保留，可续跑）      |
 
 退出码常量与异常分类定义在 `errors.py`；每个码对应的**失败类别与用户文案**由 `failures.py`
 用纯函数提供（`group()` / `hint()`），CLI 与 Web 控制台共用这一份，前端不再各自维护码表。
@@ -290,7 +294,9 @@ videread/
 
 ```python
 def run(url: str, *, mode: str = "standard", out_root: Path,
-        use_cache: bool = True, keep_audio: bool = False) -> Path:
+        use_cache: bool = True, keep_audio: bool = False,
+        terms: list[str] | None = None,
+        cancel_check: Callable[[], None] | None = None) -> Path:
     """执行完整流水线，返回 report.html 路径。"""
 ```
 
@@ -300,6 +306,9 @@ def run(url: str, *, mode: str = "standard", out_root: Path,
 - 阶段边界记录 `run.trace.jsonl`
 - 将底层异常归类为上面 5 类退出码
 - **不吞异常**，失败时打印出错阶段与已生成产物路径（便于手工续跑）
+- **取消检查点**（Web 控制台取消任务用）：`cancel_check` 在每个阶段边界与
+  长阶段内部（ASR 切段之间 / 逐节写作各节之间）被调用，抛 `CancelledError`
+  （退出码 130）即终止；已落盘产物照常保留，重新提交可断点续跑
 
 ### 6.3 `download.py`
 
@@ -359,6 +368,13 @@ class DashScopeAsr:
 # asr/realtime.py
 class DashScopeRealtimeAsr:
     """通义 Paraformer 实时（WebSocket）实现：本地音频直推，不经 OSS。"""
+
+# asr/local_whisper.py
+class LocalWhisperAsr:
+    """faster-whisper 本地实现：离线、免费；可选依赖，模型懒加载（首次转写才下载）。
+    环境变量 LOCAL_ASR_MODEL / DEVICE / COMPUTE_TYPE / LANGUAGE 可调，
+    首次下载模型可经 HF_ENDPOINT=https://hf-mirror.com 走镜像。
+    """
 ```
 
 要点：
@@ -378,7 +394,7 @@ class DashScopeRealtimeAsr:
   **这条路径不读写 OSS 上传桶**，适用于只发放工作空间 `sk-ws-` 凭据、异步上传路径报
   `Resource.AccessDenied (ownership check failed)` 的账号。收发必须并发，故用 asyncio 版 WebSocket 客户端
   （同步 API 跨线程收发会卡住）。模型取 `DASHSCOPE_MODEL`（含 `realtime` 时）否则 `paraformer-realtime-v2`
-- **长音频切段**：云 ASR 通常有单次时长上限。用 `detect_silence` 找到接近上限的静音点切分；异步后端切段后**并行提交**（建议并发 2–3），实时后端因单连接顺序流式，**顺序提交**，最后按 `start` 排序拼接
+- **长音频切段**：云 ASR 通常有单次时长上限。用 `detect_silence` 找到接近上限的静音点切分；异步后端切段后**并行提交**（建议并发 2–3），实时后端因单连接顺序流式，**顺序提交**，最后按 `start` 排序拼接。切段之间有取消检查点（Web 控制台取消任务用）：抛 `CancelledError` 时撤销未开始的段，已完成的段缓存已落盘不白花
 - 时间戳修正：每段 ASR 返回的时间戳是**段内相对时间**，需要加上该段的全局偏移
 - 失败重试：指数退避，最多 3 次；单段失败不影响其他段，失败段写进 `run.trace.jsonl`
 - 结果**立即落盘** `asr.raw.jsonl`，避免重试导致重复付费
@@ -418,13 +434,17 @@ def plan_outline(meta: VideoMeta, units: list[TranscriptUnit], *,
 
 ```python
 def write_sections(outline: Outline, units: list[TranscriptUnit], *,
-                   mode: str, out_dir: Path) -> list[str]
+                   mode: str, out_dir: Path, *,
+                   cancel_check: Callable[[], None] | None = None) -> list[str]
 ```
 
 要点：
 
 - **每节一次独立调用**，只喂该节 `source_ids` 对应的转写片段
 - 每节输出写入 `sections/s1.html` 等，**单节失败可单独重试**，已成功的节不重跑
+- **取消检查点**：每节完成后的检查点调用 `cancel_check`，抛 `CancelledError` 即终止；
+  已拿到结果的节照常落盘（调用已付费，产物不丢），未开始的节全部撤销，
+  重跑时从断点续写
 - 组装顺序：`sections` 数组顺序即为正文顺序
 - 输出片段禁止出现 `<html>` / `<body>` / `<style>` / `<script>`，只允许模板已定义的组件类
 - 节标题 `<h2>` 不由模型输出：`sections/sN.html` 只存 LLM 片段，标题在拼装时确定性注入（§8.4）
@@ -688,6 +708,12 @@ OPENAI_API_KEY=
 OPENAI_BASE_URL=
 OPENAI_ASR_MODEL=whisper-1
 
+# --- 本地 ASR（可选）：把 ASR_BACKEND 改为 local 时生效；需 pip install -e ".[local]" ---
+LOCAL_ASR_MODEL=small
+LOCAL_ASR_DEVICE=auto
+LOCAL_ASR_COMPUTE_TYPE=auto
+LOCAL_ASR_LANGUAGE=auto
+
 # --- LLM ---
 LLM_BASE_URL=https://api.deepseek.com/v1
 LLM_API_KEY=
@@ -718,6 +744,7 @@ HTTPS_PROXY=
 | 音频处理失败 | ffmpeg 缺失、文件损坏 | 立即失败，提示检查 ffmpeg |
 | ASR 失败 | 密钥无效、余额不足、单段超时 | 指数退避重试 3 次；单段失败不阻塞其他段 |
 | LLM 失败 | 超时、限流、JSON 非法 | 退避重试 3 次；JSON 非法时回灌报错重试 2 次 |
+| 用户取消 | Web 控制台点「取消」 | 检查点抛 `CancelledError`（退出码 130），已落盘产物保留可续跑，不重试 |
 | 渲染失败 | 模板占位符缺失、磁盘满 | 立即失败，提示具体缺失的占位符 |
 
 ### 11.2 重试策略
@@ -862,7 +889,7 @@ def retry(fn, *, attempts=3, base=1.0, jitter=0.2): ...
 | 云 ASR 长音频限制 | 转写中断 | 按静音点切段 + 并行 + 单段落盘，失败只重跑单段 |
 | LLM 输出非法 JSON | 规划失败 | `json_object` 模式 + 报错回灌重试 + 严格校验 `source_ids` |
 | LLM 幻觉补充内容 | 报告不忠实 | prompt 强约束"只用给定转写"；保留 `data-source-units` 便于人工抽查 |
-| 转写专有名词错误 | 报告出现错词 | 允许用户提供 `terms.txt` 词表，注入 prompt 作为"术语参考"（不作为事实来源） |
+| 转写专有名词错误 | 报告出现错词 | 由逐节写作 prompt 的忠实性规则约束；`data-source-units` 保留便于人工抽查（曾实现过 terms.txt 词表注入，按需求已移除） |
 | 报告过长导致不可读 | 质量下降 | Standard 分节字数建议；Brief 硬上限 + 实测计数 |
 
 ---
