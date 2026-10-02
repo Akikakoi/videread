@@ -9,9 +9,22 @@
 <body>
 
 <header class="topbar">
-  <div class="brand">
-    <span class="brand-name">videread</span>
-    <span class="brand-sub">把视频转写重组成可读报告</span>
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-name">videread</span>
+      <span class="brand-sub">把视频转写重组成可读报告</span>
+    </div>
+    <div class="topbar-actions">
+      <select id="bg-overlay" title="背景遮罩风格">
+        <option value="default">遮罩：默认</option>
+        <option value="strong">遮罩：加深白纱</option>
+        <option value="dark">遮罩：深色纱</option>
+        <option value="none">遮罩：无</option>
+      </select>
+      <button id="bg-reset" type="button" class="btn btn-small" hidden>恢复默认背景</button>
+      <button id="bg-btn" type="button" class="btn btn-small">自定义背景</button>
+      <input id="bg-file" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+    </div>
   </div>
 </header>
 
@@ -56,6 +69,7 @@
               <option value="dashscope">阿里云 · 标准</option>
               <option value="dashscope-realtime">阿里云 · 实时</option>
               <option value="openai">OpenAI</option>
+              <option value="local">本地 faster-whisper（离线免费）</option>
             </select>
           </label>
           <p id="asr-hint" class="field-hint"></p>
@@ -65,6 +79,7 @@
       <div class="checks">
         <label class="check">
           <input type="checkbox" id="no-cache">
+          <span class="box" aria-hidden="true"></span>
           <span class="check-text">
             <span>全部重新生成</span>
             <span class="check-hint">忽略已有结果，所有步骤从头跑，更慢</span>
@@ -72,6 +87,7 @@
         </label>
         <label class="check">
           <input type="checkbox" id="keep-audio">
+          <span class="box" aria-hidden="true"></span>
           <span class="check-text">
             <span>保留音频文件</span>
             <span class="check-hint">跑完不自动删除音频，便于排查问题</span>
@@ -79,6 +95,7 @@
         </label>
         <label class="check">
           <input type="checkbox" id="frames">
+          <span class="box" aria-hidden="true"></span>
           <span class="check-text">
             <span>截取视频画面</span>
             <span class="check-hint">按章节截取画面嵌入报告，会额外下载少量视频片段</span>
@@ -98,6 +115,7 @@
           <span id="elapsed" class="elapsed" hidden>已用 00:00</span>
           <span id="tokens" class="tokens" hidden></span>
           <span id="state-pill" class="pill">排队中</span>
+          <button id="cancel-job" type="button" class="btn btn-small btn-danger" hidden>取消</button>
         </span>
       </div>
 
@@ -131,10 +149,18 @@
       <h2 class="panel-title">
         报告库 <span id="runs-count" class="muted"></span>
       </h2>
-      <button id="refresh-runs" type="button" class="btn btn-small">刷新</button>
+      <div class="panel-head-actions">
+        <button id="toggle-stats" type="button" class="btn btn-small">统计</button>
+        <button id="refresh-runs" type="button" class="btn btn-small">刷新</button>
+      </div>
     </div>
 
-    <input id="filter" class="filter" type="search" placeholder="按标题 / UP主 / BV 号过滤" autocomplete="off">
+    <div id="stats" class="stats-panel" hidden></div>
+
+    <div class="filter-row">
+      <input id="filter" class="filter" type="search" placeholder="按标题 / UP主 / BV 号过滤" autocomplete="off">
+      <button id="fulltext-toggle" type="button" class="btn btn-small" title="在全部报告的转写稿正文里搜索关键词">全文</button>
+    </div>
 
     <p id="runs-empty" class="muted empty" hidden>还没有生成过报告。</p>
     <div id="runs" class="runs"></div>

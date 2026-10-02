@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -22,6 +22,7 @@ from .. import png as png_mod
 from .. import frames as frames_mod
 from ..config import get_settings
 from ..errors import VidereadError
+from . import background as bg_mod
 from . import library, probe
 from .jobs import Job, JobBusy, JobManager
 
@@ -75,7 +76,7 @@ async def _event_stream(job: Job, request: Request, since: int):
                 yield ": keep-alive\n\n"
                 continue
             yield _frame(item)
-            if item.get("type") in ("done", "error"):
+            if item.get("type") in ("done", "error", "cancelled"):
                 return
     finally:
         job.unsubscribe(channel)
@@ -95,7 +96,14 @@ def create_app(out_root: Path) -> FastAPI:
         page = STATIC_DIR / "index.html"
         if not page.is_file():
             raise HTTPException(status_code=500, detail=f"缺少控制台页面：{page}")
-        return HTMLResponse(page.read_text(encoding="utf-8"))
+        html = page.read_text(encoding="utf-8")
+        # 给静态资源引用注入 mtime 版本号：JS/CSS 改动后浏览器立即拉新版，
+        # 避免「新 HTML 配旧 JS」导致按钮存在但事件处理器缺失（点击无反应）
+        for name in ("app.js", "styles.css"):
+            asset = STATIC_DIR / name
+            stamp = int(asset.stat().st_mtime) if asset.is_file() else 0
+            html = html.replace(f"/static/{name}", f"/static/{name}?v={stamp}")
+        return HTMLResponse(html)
 
     @app.get("/report/{run_id}", response_class=HTMLResponse)
     def report(run_id: str) -> HTMLResponse:
@@ -207,6 +215,16 @@ def create_app(out_root: Path) -> FastAPI:
     def api_runs() -> dict:
         return {"out_root": str(out_root), "runs": library.list_runs(out_root)}
 
+    @app.get("/api/search")
+    def api_search(q: str = "") -> dict:
+        """全文检索转写稿：q 过短返回空，前端据此回退到标题过滤。"""
+        return {"query": q, "results": library.search_runs(out_root, q)}
+
+    @app.get("/api/stats")
+    def api_stats() -> dict:
+        """按日汇总各 run 的耗时与 token 用量（成本面板数据源）。"""
+        return {"days": library.usage_stats(out_root)}
+
     @app.get("/api/runs/{run_id}")
     def api_run(run_id: str) -> dict:
         detail = library.run_detail(out_root, run_id)
@@ -220,6 +238,49 @@ def create_app(out_root: Path) -> FastAPI:
         if not library.delete_run(out_root, run_id):
             raise HTTPException(status_code=404, detail="未找到该 run")
         return {"deleted": run_id}
+
+    # ------------------------------------------------------------------ 背景
+
+    @app.get("/api/ui/background")
+    def get_background() -> dict:
+        """当前背景：url 为 None 表示默认背景；overlay 为遮罩风格名。"""
+        return {"url": bg_mod.background_url(), "overlay": bg_mod.overlay_style()}
+
+    @app.post("/api/ui/background")
+    async def upload_background(request: Request) -> dict:
+        """上传自定义背景图（原始字节流，走魔数校验，不依赖 python-multipart）。"""
+        data = await request.body()
+        try:
+            url = bg_mod.save_background(data)
+        except VidereadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"url": url, "overlay": bg_mod.overlay_style()}
+
+    @app.post("/api/ui/background/overlay")
+    async def set_background_overlay(request: Request) -> dict:
+        """设置遮罩风格：JSON {"name": default / strong / dark / none}。"""
+        try:
+            payload = json.loads((await request.body()) or b"{}")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="请求体不是合法 JSON") from exc
+        try:
+            name = bg_mod.set_overlay(str(payload.get("name", "")))
+        except VidereadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"overlay": name}
+
+    @app.delete("/api/ui/background")
+    def reset_background() -> dict:
+        bg_mod.reset_background()
+        return {"url": None}
+
+    @app.get("/api/ui/background/image")
+    def background_image() -> Response:
+        path = bg_mod.background_path()
+        if path is None:
+            raise HTTPException(status_code=404, detail="未设置自定义背景")
+        ext = path.suffix.lstrip(".").lower()
+        return FileResponse(path, media_type=bg_mod.mime_for(ext))
 
     # ------------------------------------------------------------------ 预检
 
@@ -251,12 +312,24 @@ def create_app(out_root: Path) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"job_id": job.id, "state": job.state}
 
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_job(job_id: str) -> dict:
+        """请求取消任务：在最近的检查点停止，已落盘产物保留（可续跑）。"""
+        result = manager.cancel(job_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="未找到该任务")
+        if result is False:
+            raise HTTPException(status_code=409, detail="任务已结束，无需取消")
+        return {"job_id": job_id, "cancel_requested": True}
+
     @app.get("/api/jobs/{job_id}")
     def job_status(job_id: str) -> dict:
         job = manager.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="未找到该任务")
-        return job.snapshot()
+        snap = job.snapshot()
+        snap["queue_position"] = manager.queue_position(job_id)
+        return snap
 
     @app.get("/api/jobs/{job_id}/events")
     async def job_events(job_id: str, request: Request, since: int = 0):

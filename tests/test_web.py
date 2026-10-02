@@ -124,6 +124,7 @@ def fake_pipeline(report_body: str = REPORT_HTML, run_id: str = RUN_ID):
         open_report: bool = False,
         frames: bool | None = None,
         fresh_dir: bool = False,
+        cancel_check=None,
         progress=print,
     ) -> Path:
         progress("[1/8] 下载 ✓ meta.json  BV1xx411c7mD  时长 35:37")
@@ -533,9 +534,135 @@ def test_job_manager_hint_for_unclassified_exception(
     assert job.hint == "未归类异常，请查看运行日志"
 
 
-def test_job_manager_serialises_concurrent_submits(
+def test_cancel_running_job_reaches_cancelled_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    """取消是独立终态：状态 cancelled、退出码 130、不产生 report。"""
+
+    def long_pipeline(*_args, cancel_check=None, progress=None, **_kwargs):
+        progress("[1/8] 下载 ✓ meta.json")
+        for _ in range(500):
+            if cancel_check is not None:
+                cancel_check()  # 在检查点抛 CancelledError
+            time.sleep(0.01)
+        raise AssertionError("取消检查点应在此之前终止流水线")
+
+    monkeypatch.setattr(jobs, "pipeline_run", long_pipeline)
+    manager = jobs.JobManager(tmp_path)
+
+    job = manager.submit(url=URL)
+    deadline = time.monotonic() + 5
+    while job.state != "running" and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert manager.cancel(job.id) is True
+    wait_terminal(job)
+
+    assert job.state == "cancelled"
+    assert job.cancel_requested is True
+    assert job.exit_code == 130
+    snapshot = job.snapshot()
+    assert snapshot["state"] == "cancelled"
+    assert snapshot["cancel_requested"] is True
+    # cancelled 已是终态：不允许重复取消
+    assert manager.cancel(job.id) is False
+    # 任务结束后可再次提交（取消不占坑）
+    monkeypatch.setattr(jobs, "pipeline_run", fake_pipeline())
+    next_job = manager.submit(url=URL)
+    wait_terminal(next_job)
+    assert next_job.state == "done"
+
+
+def test_cancel_unknown_job_returns_none(tmp_path: Path):
+    manager = jobs.JobManager(tmp_path)
+    assert manager.cancel("deadbeef") is None
+
+
+def test_cancel_route_maps_unknown_and_terminal_to_http_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(jobs, "pipeline_run", fake_pipeline())
+    with TestClient(create_app(tmp_path)) as client:
+        assert client.post("/api/jobs/deadbeef/cancel").status_code == 404
+
+        created = client.post("/api/jobs", json={"url": URL})
+        job_id = created.json()["job_id"]
+        # 等任务自然结束后再取消 → 409
+        deadline = time.monotonic() + 5
+        while client.get(f"/api/jobs/{job_id}").json()["state"] != "done":
+            if time.monotonic() > deadline:
+                break
+            time.sleep(0.01)
+        response = client.post(f"/api/jobs/{job_id}/cancel")
+
+    assert response.status_code == 409
+
+
+def test_job_manager_queues_concurrent_submits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """忙碌时新任务排队而非拒绝：第一个结束后第二个自动开跑。"""
+    gate = threading.Event()
+    order: list[str] = []
+    inner = fake_pipeline()
+
+    def gated(*args, progress=None, **kwargs):
+        gate.wait(5)
+        order.append(kwargs["url"] if "url" in kwargs else args[0] if args else "?")
+        return inner(*args, **kwargs)
+
+    monkeypatch.setattr(jobs, "pipeline_run", gated)
+    manager = jobs.JobManager(tmp_path)
+
+    first = manager.submit(url=URL)
+    # 第一个还在跑：第二个任务应被受理（排队），不再抛 JobBusy
+    second = manager.submit(url=URL + "?p=2")
+    assert second.state == "queued"
+    assert manager.queue_position(first.id) == 0
+    assert manager.queue_position(second.id) == 1
+
+    gate.set()
+    wait_terminal(first)
+    wait_terminal(second)
+
+    assert first.state == "done" and second.state == "done"
+    # FIFO：先提交的先执行
+    assert order[0] == URL and order[1] == URL + "?p=2"
+
+
+def test_cancel_queued_job_never_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """排队中的任务可直接取消：置为 cancelled 终态，轮到它时跳过。"""
+    gate = threading.Event()
+    inner = fake_pipeline()
+
+    def gated(*args, **kwargs):
+        gate.wait(5)
+        return inner(*args, **kwargs)
+
+    monkeypatch.setattr(jobs, "pipeline_run", gated)
+    manager = jobs.JobManager(tmp_path)
+
+    first = manager.submit(url=URL)
+    second = manager.submit(url=URL + "?p=2")
+    assert second.state == "queued"
+
+    assert manager.cancel(second.id) is True
+    assert second.state == "cancelled"
+    assert second.exit_code == 130
+
+    gate.set()
+    wait_terminal(first)
+    wait_terminal(second)
+    # 第二个任务从未真正执行：没有 report 产物
+    assert second.report_path is None
+
+
+def test_queue_full_rejects_with_409(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """排队超出上限直接拒绝（JobBusy → 409），避免任务无限堆积。"""
     gate = threading.Event()
     inner = fake_pipeline()
 
@@ -548,13 +675,59 @@ def test_job_manager_serialises_concurrent_submits(
 
     first = manager.submit(url=URL)
     try:
+        for _ in range(jobs.JobManager.MAX_QUEUE):
+            manager.submit(url=URL)
         with pytest.raises(jobs.JobBusy):
             manager.submit(url=URL)
     finally:
         gate.set()
-    wait_terminal(first)
+        wait_terminal(first)
 
-    assert first.state == "done"
+
+def test_search_runs_finds_transcript_text(tmp_path: Path):
+    """全文检索：命中转写稿正文，返回带关键词的摘要。"""
+    make_run(tmp_path, RUN_ID, title="示例视频")
+    (tmp_path / RUN_ID / "transcript.md").write_text(
+        "## u0001 [00:00-00:12]\n我们今天讲缓存预热的三种姿势。\n",
+        encoding="utf-8",
+    )
+
+    hits = library.search_runs(tmp_path, "缓存预热")
+
+    assert len(hits) == 1
+    assert hits[0]["run_id"] == RUN_ID
+    assert hits[0]["count"] == 1
+    assert "缓存预热" in hits[0]["snippet"]
+
+
+def test_search_runs_case_insensitive_and_miss(tmp_path: Path):
+    make_run(tmp_path, RUN_ID, title="Redis Deep Dive")
+    (tmp_path / RUN_ID / "transcript.md").write_text(
+        "## u0001 [00:00-00:12]\nUse lazy loading to avoid cache stampsede.\n",
+        encoding="utf-8",
+    )
+
+    assert [item["run_id"] for item in library.search_runs(tmp_path, "REDIS")] == [RUN_ID]
+    assert library.search_runs(tmp_path, "kubernetes") == []
+    # 过短的关键词不进检索（避免全库刷屏）
+    assert library.search_runs(tmp_path, "R") == []
+
+
+def test_usage_stats_aggregates_by_day(tmp_path: Path):
+    """统计：同一天的两个 run 聚合成一行，耗时与 token 相加。"""
+    make_run(tmp_path, RUN_ID)
+    second = make_run(tmp_path, "BV1xx411c7mD-bbbbbbbb")
+    # 追加第二个 stage 让 total 不同，验证聚合而非覆盖
+    with (second / "run.trace.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"ts": "t", "stage": "render", "event": "end", "dur_ms": 500}) + "\n")
+
+    days = library.usage_stats(tmp_path)
+
+    assert len(days) == 1
+    assert days[0]["runs"] == 2
+    # 两个 run 的 make_run 模板各 4768+1000，第二个再追加 render 500
+    assert days[0]["total_ms"] == (4768 + 1000) * 2 + 500
+    assert days[0]["tokens"] == 1234 * 2  # 每份 run 的 outline 阶段各记 1234
 
 
 def test_job_status_and_events_routes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -725,3 +898,141 @@ def test_probe_reports_existing_run(tmp_path: Path):
     finally:
         monkeypatch.undo()
     assert "existing_run" not in response.json()
+
+
+# ------------------------------------------------------------- 自定义背景
+
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def test_background_upload_serve_and_reset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """上传 → 带缓存戳的 URL 可取回原图 → 恢复默认后 404。"""
+    from videread.web import background as bg_mod
+
+    monkeypatch.setattr(bg_mod, "BG_DIR", tmp_path / ".ui")
+    png = PNG_MAGIC + b"fake-png-body"
+
+    with TestClient(create_app(tmp_path)) as client:
+        assert client.get("/api/ui/background").json()["url"] is None
+
+        created = client.post("/api/ui/background", content=png)
+        assert created.status_code == 200
+        url = created.json()["url"]
+        assert url.startswith("/api/ui/background/image?v=")
+
+        image = client.get(url)
+        assert image.status_code == 200
+        assert image.headers["content-type"].startswith("image/png")
+        assert image.content == png
+
+        # 列表接口与 GET 一致
+        assert client.get("/api/ui/background").json()["url"] == url
+
+        # 再传一张 jpg：覆盖旧图（只保留一份）
+        jpg = b"\xff\xd8\xff" + b"fake-jpeg"
+        url2 = client.post("/api/ui/background", content=jpg).json()["url"]
+        assert client.get(url2).headers["content-type"].startswith("image/jpeg")
+
+        # 恢复默认
+        assert client.delete("/api/ui/background").json()["url"] is None
+        assert client.get("/api/ui/background").json()["url"] is None
+        assert client.get("/api/ui/background/image").status_code == 404
+
+
+def test_background_rejects_invalid_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """魔数不对 / 空内容一律 400，不落盘。"""
+    from videread.web import background as bg_mod
+
+    monkeypatch.setattr(bg_mod, "BG_DIR", tmp_path / ".ui")
+
+    with TestClient(create_app(tmp_path)) as client:
+        assert client.post("/api/ui/background", content=b"not-an-image").status_code == 400
+        assert client.post("/api/ui/background", content=b"").status_code == 400
+
+    assert not (tmp_path / ".ui").exists() or not list((tmp_path / ".ui").glob("background.*"))
+
+
+# ------------------------------------------------------------- 自定义背景
+
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def test_background_upload_serve_and_reset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """上传 → 带缓存戳的 URL 可取回原图 → 恢复默认后 404。"""
+    from videread.web import background as bg_mod
+
+    monkeypatch.setattr(bg_mod, "BG_DIR", tmp_path / ".ui")
+    png = PNG_MAGIC + b"fake-png-body"
+
+    with TestClient(create_app(tmp_path)) as client:
+        assert client.get("/api/ui/background").json()["url"] is None
+
+        created = client.post("/api/ui/background", content=png)
+        assert created.status_code == 200
+        url = created.json()["url"]
+        assert url.startswith("/api/ui/background/image?v=")
+
+        image = client.get(url)
+        assert image.status_code == 200
+        assert image.headers["content-type"].startswith("image/png")
+        assert image.content == png
+
+        # 列表接口与 GET 一致
+        assert client.get("/api/ui/background").json()["url"] == url
+
+        # 再传一张 jpg：覆盖旧图（只保留一份）
+        jpg = b"\xff\xd8\xff" + b"fake-jpeg"
+        url2 = client.post("/api/ui/background", content=jpg).json()["url"]
+        assert client.get(url2).headers["content-type"].startswith("image/jpeg")
+
+        # 恢复默认
+        assert client.delete("/api/ui/background").json()["url"] is None
+        assert client.get("/api/ui/background").json()["url"] is None
+        assert client.get("/api/ui/background/image").status_code == 404
+
+
+def test_background_rejects_invalid_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """魔数不对 / 空内容一律 400，不落盘。"""
+    from videread.web import background as bg_mod
+
+    monkeypatch.setattr(bg_mod, "BG_DIR", tmp_path / ".ui")
+
+    with TestClient(create_app(tmp_path)) as client:
+        assert client.post("/api/ui/background", content=b"not-an-image").status_code == 400
+        assert client.post("/api/ui/background", content=b"").status_code == 400
+
+    assert not (tmp_path / ".ui").exists() or not list((tmp_path / ".ui").glob("background.*"))
+
+
+def test_background_overlay_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """遮罩独立保存：设置/读取/非法名 400，换背景图不丢遮罩选择。"""
+    from videread.web import background as bg_mod
+
+    monkeypatch.setattr(bg_mod, "BG_DIR", tmp_path / ".ui")
+
+    with TestClient(create_app(tmp_path)) as client:
+        assert client.get("/api/ui/background").json()["overlay"] == "default"
+
+        ok = client.post(
+            "/api/ui/background/overlay", json={"name": "dark"}
+        )
+        assert ok.status_code == 200 and ok.json()["overlay"] == "dark"
+        assert client.get("/api/ui/background").json()["overlay"] == "dark"
+
+        # 换背景图不丢遮罩
+        url = client.post(
+            "/api/ui/background", content=PNG_MAGIC + b"x"
+        ).json()["url"]
+        assert client.get("/api/ui/background").json()["overlay"] == "dark"
+        assert client.get("/api/ui/background").json()["url"] == url
+
+        # 非法名 / 非法 JSON
+        assert client.post("/api/ui/background/overlay", json={"name": "epic"}).status_code == 400
+        assert client.post(
+            "/api/ui/background/overlay", content=b"not-json",
+            headers={"Content-Type": "application/json"},
+        ).status_code == 400
+
+        # 恢复默认背景不影响遮罩选择
+        client.delete("/api/ui/background")
+        assert client.get("/api/ui/background").json()["overlay"] == "dark"

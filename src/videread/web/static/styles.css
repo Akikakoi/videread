@@ -70,20 +70,29 @@ body {
   position: sticky;
   top: 0;
   z-index: 30;
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 24px;
+  padding: 16px 0;
   background: var(--glass);
   border-bottom: 1px solid var(--glass-border);
   box-shadow: var(--sheen), var(--shadow-soft);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
   backdrop-filter: blur(var(--glass-blur)) saturate(150%);
 }
+/* 内层容器与 .layout 完全同参（max-width 1460 含 24px 内边距，border-box）：
+   任意窗口宽度下标题都与下方板块左边缘精确对齐 */
+.topbar-inner {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 1460px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
 .brand { display: flex; align-items: baseline; gap: 10px; }
 .brand-name { font-size: 20px; font-weight: 700; letter-spacing: .01em; }
 .brand-sub { color: var(--ink-mute); font-size: 13px; }
+.topbar-actions { display: flex; align-items: baseline; gap: 8px; }
+.topbar-actions select { width: auto; padding: 4px 8px; font-size: 12px; }
 
 /* ── 布局 ── */
 .layout {
@@ -112,6 +121,32 @@ body {
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .panel-title { margin: 0 0 14px; font-size: 16px; font-weight: 700; }
 .panel-head .panel-title { margin-bottom: 14px; }
+.panel-head-actions { display: flex; gap: 8px; margin-bottom: 14px; }
+
+/* ── 成本/用量统计面板（报告库头部，按日聚合 trace） ── */
+.stats-panel {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  background: var(--glass-2);
+}
+.stats-panel table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.stats-panel th, .stats-panel td { padding: 5px 8px; text-align: left; }
+.stats-panel th.num, .stats-panel td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.stats-panel th { color: var(--ink-mute); font-weight: 600; border-bottom: 1px solid var(--glass-border); }
+.stats-note { margin: 8px 0 0; font-size: 12px; color: var(--ink-mute); }
+
+/* ── 过滤行：输入框 + 全文检索开关 ── */
+.filter-row { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+.filter-row .filter { flex: 1; margin-bottom: 0; }
+#fulltext-toggle[data-active="1"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 700;
+}
+/* 全文命中的关键词高亮 */
+.run-snippet mark { background: var(--accent-soft); color: var(--accent); padding: 0 2px; border-radius: 3px; }
 
 /* ── 表单 ── */
 .field { display: block; margin: 0 0 14px; }
@@ -122,7 +157,7 @@ body {
 .field-group .field { margin-bottom: 6px; }
 .field-hint { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ink-mute); }
 
-input[type="text"], input[type="search"], select {
+input[type="text"], input[type="search"], select, textarea {
   width: 100%;
   padding: 8px 10px;
   font: inherit;
@@ -136,10 +171,11 @@ input[type="text"], input[type="search"], select {
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
 }
-input[type="text"]:focus, input[type="search"]:focus, select:focus {
+input[type="text"]:focus, input[type="search"]:focus, select:focus, textarea:focus {
   border-color: var(--accent);
   box-shadow: var(--shadow-inset), 0 0 0 3px var(--accent-soft);
 }
+textarea { resize: vertical; min-height: 44px; line-height: 1.5; }
 select option { color: var(--ink); background: var(--paper); }
 
 /* ── 下拉菜单「展开的那层」──────────────────────────────────────
@@ -200,8 +236,59 @@ select option { color: var(--ink); background: var(--paper); }
 @media (max-width: 520px) { .grid-2 { grid-template-columns: 1fr; } }
 
 .checks { display: flex; flex-wrap: wrap; gap: 14px 28px; margin: 2px 0 18px; }
-.check { display: flex; align-items: flex-start; gap: 6px; font-size: 13px; color: var(--ink-soft); }
-.check input { margin: 1px 0 0; accent-color: var(--accent); }
+.check {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+/* 原生输入框隐身但保留语义与键盘可达性：Tab / 空格切换照常可用 */
+.check input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+}
+/* 扁平方框：白底细灰边，不用玻璃材质 */
+.check .box {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  margin-top: 3px;
+  border-radius: 4px;
+  background: #fff;
+  border: 1.5px solid var(--line-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .14s ease, border-color .14s ease, transform .1s ease;
+}
+/* 对勾由两条白色边框拼出，选中时淡入 */
+.check .box::after {
+  content: "";
+  width: 4.5px;
+  height: 8.5px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) translate(-.5px, -.5px);
+  opacity: 0;
+  transition: opacity .1s ease;
+}
+.check input:checked + .box {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.check input:checked + .box::after { opacity: 1; }
+.check:hover .box { border-color: #b3bfc7; }
+.check input:focus-visible + .box {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.check:active .box { transform: scale(.9); }
 /* 复选框同样配一行说明：名称走「标题 + 小字注释」两行结构 */
 .check-text { display: flex; flex-direction: column; gap: 2px; }
 .check-hint { font-size: 12px; line-height: 1.4; color: var(--ink-mute); }
@@ -499,6 +586,16 @@ select option { color: var(--ink); background: var(--paper); }
 
 /* ── 报告库 ── */
 .filter { margin-bottom: 14px; }
+
+/* ── 全文检索结果 ── */
+.run-snippet {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-mute);
+  word-break: break-all;
+}
+.search-count { font-size: 12px; color: var(--ink-mute); margin: 0 0 10px; }
 .empty { margin: 8px 0 0; }
 
 .runs { display: grid; gap: 20px; }

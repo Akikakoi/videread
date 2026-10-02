@@ -27,6 +27,7 @@
     keepAudio: document.getElementById("keep-audio"),
     frames: document.getElementById("frames"),
     submit: document.getElementById("submit"),
+    cancelJob: document.getElementById("cancel-job"),
     formError: document.getElementById("form-error"),
     progress: document.getElementById("progress"),
     pill: document.getElementById("state-pill"),
@@ -47,15 +48,23 @@
     runsCount: document.getElementById("runs-count"),
     runsEmpty: document.getElementById("runs-empty"),
     filter: document.getElementById("filter"),
+    fulltextToggle: document.getElementById("fulltext-toggle"),
+    toggleStats: document.getElementById("toggle-stats"),
+    statsPanel: document.getElementById("stats"),
     refresh: document.getElementById("refresh-runs"),
     preview: document.getElementById("preview"),
     previewBoxFrame: document.getElementById("preview-frame"),
     previewTitle: document.getElementById("preview-title"),
     previewOpen: document.getElementById("preview-open"),
-    previewClose: document.getElementById("preview-close")
+    previewClose: document.getElementById("preview-close"),
+    bgBtn: document.getElementById("bg-btn"),
+    bgReset: document.getElementById("bg-reset"),
+    bgFile: document.getElementById("bg-file"),
+    bgOverlay: document.getElementById("bg-overlay")
   };
 
   var stream = null;
+  var currentJobId = null; // 当前 attached 的任务：取消按钮据此定位
   var stageIndex = 0;      // 已完成的阶段数：k 表示 k 阶段已过、k+1 正在跑
   var sectionDone = 0;     // 逐节写作：已完成的节数
   var sectionTotal = 0;    // 逐节写作：总节数（来自日志）
@@ -64,6 +73,11 @@
   var startedAt = 0;
   var timerId = null;
   var runsCache = [];
+  var fulltextMode = false;   // 「全文」开关：开着时过滤框改为搜转写稿正文
+  var searchResults = null;   // 最近一次全文检索的结果（null 表示还没搜过）
+  var searchQuery = "";       // 最近一次检索的关键词（丢弃过期响应用）
+  var searchTimer = null;     // 全文检索的输入防抖
+  var SEARCH_DEBOUNCE_MS = 300;
   var probeCache = { key: null, promise: null };  // 同一输入值只预检一次
   var probeTooLong = false;                        // 当前输入是否已被判超长
   var probeTimer = null;                           // 输入防抖：粘贴后自动预检的定时器
@@ -159,7 +173,7 @@
      这样最长的那个阶段里数字也会持续往前走，而不是卡住不动。 */
   function progressPercent() {
     if (currentState === "done") return 100;
-    if (currentState === "error") return null;
+    if (currentState === "error" || currentState === "cancelled") return null;
     var completed = Math.min(stageIndex, STAGE_COUNT);
     var fraction = 0;
     if (completed + 1 === WRITER_STAGE && sectionTotal > 0) {
@@ -171,6 +185,7 @@
 
   function progressNoteText() {
     if (currentState === "done") return "全部阶段完成";
+    if (currentState === "cancelled") return "已取消（已完成部分保留，可续跑）";
     if (currentState === "error") return "已中断";
     if (currentState === "queued") return "等待执行…";
     if (stageIndex >= STAGE_COUNT) return "收尾…";
@@ -219,10 +234,18 @@
 
   function setState(state) {
     currentState = state;
-    var labels = { queued: "排队中", running: "执行中", done: "已完成", error: "失败" };
+    var labels = {
+      queued: "排队中",
+      running: "执行中",
+      done: "已完成",
+      error: "失败",
+      cancelled: "已取消"
+    };
     el.pill.textContent = labels[state] || state;
     el.pill.dataset.state = state;
     el.spinner.hidden = !(state === "queued" || state === "running");
+    // 取消按钮只在任务活着的时候可见；点了之后由服务端状态收敛隐藏
+    show(el.cancelJob, state === "running" || state === "queued");
     if (state === "running") {
       if (timerId === null) startTimer();
     } else if (state === "queued") {
@@ -328,7 +351,8 @@
       "": "用项目默认设置。视频自带字幕时会直接用字幕，不走转写。",
       dashscope: "阿里云标准通道，稳定；需账号开通云存储权限，未开通会失败。",
       "dashscope-realtime": "阿里云实时通道，不需要云存储权限；上一项报错时改用这个。",
-      openai: "调用 OpenAI 转写，需要另外配置 OpenAI 密钥。"
+      openai: "调用 OpenAI 转写，需要另外配置 OpenAI 密钥。",
+      local: "faster-whisper 在本机跑，离线、免费；首次使用会下载模型，速度取决于机器性能。"
     }
   };
 
@@ -640,6 +664,7 @@
 
   function attachJob(jobId, reset) {
     sessionStorage.setItem(STORE_KEY, jobId);
+    currentJobId = jobId;
     if (reset) resetProgress();
     show(el.progress, true);
     if (stream) { stream.close(); stream = null; }
@@ -660,6 +685,9 @@
     stream.addEventListener("done", function (event) {
       finishJob(JSON.parse(event.data));
     });
+    stream.addEventListener("cancelled", function (event) {
+      cancelJobDone(JSON.parse(event.data));
+    });
     stream.addEventListener("error", function (event) {
       if (event.data) {
         failJob(JSON.parse(event.data));
@@ -671,8 +699,37 @@
     });
   }
 
+  /* 取消是独立终态：不算失败，步进器不标红，已完成阶段原样保留 */
+  function cancelJobDone(data) {
+    sessionStorage.removeItem(STORE_KEY);
+    currentJobId = null;
+    setState("cancelled");
+    if (stream) { stream.close(); stream = null; }
+    appendLog(data.message || "任务已取消");
+    loadRuns();
+  }
+
+  el.cancelJob.addEventListener("click", function () {
+    if (!currentJobId || el.cancelJob.hidden) return;
+    var confirmed = window.confirm(
+      "确定取消当前任务吗？\n\n已生成阶段的产物会保留，重新提交可从断点续跑。"
+    );
+    if (!confirmed) return;
+    el.cancelJob.disabled = true;
+    fetch("/api/jobs/" + encodeURIComponent(currentJobId) + "/cancel", { method: "POST" })
+      .then(function (response) {
+        if (!response.ok) {
+          // 409 = 任务已经结束：状态事件随后自己收敛，无需提示
+          if (response.status !== 409) window.alert("取消失败（HTTP " + response.status + "）。");
+        }
+      })
+      .catch(function () { window.alert("无法连接本地服务，取消未执行。"); })
+      .finally(function () { el.cancelJob.disabled = false; });
+  });
+
   function finishJob(data) {
     sessionStorage.removeItem(STORE_KEY);
+    currentJobId = null;
     completeStages();
     setState("done");
     if (stream) { stream.close(); stream = null; }
@@ -686,6 +743,7 @@
 
   function failJob(data) {
     sessionStorage.removeItem(STORE_KEY);
+    currentJobId = null;
     setState("error");
     if (stream) { stream.close(); stream = null; }
     // stageIndex 是已完成数，出错的阶段是它后面那一个
@@ -708,6 +766,8 @@
         if (snapshot.stage_index) setStage(snapshot.stage_index);
         if (snapshot.state === "done") {
           finishJob({ report_url: snapshot.report_url });
+        } else if (snapshot.state === "cancelled") {
+          cancelJobDone({ message: "任务已取消" });
         } else if (snapshot.state === "error") {
           failJob({ exit_code: snapshot.exit_code, hint: snapshot.error_hint, message: snapshot.error || "" });
         } else {
@@ -738,7 +798,8 @@
       .then(function (response) { return response.json(); })
       .then(function (data) {
         runsCache = data.runs || [];
-        renderRuns();
+        if (fulltextMode) runSearch(el.filter.value.trim());
+        else renderRuns();
       })
       .catch(function () {});
   }
@@ -763,6 +824,10 @@
   }
 
   function renderRuns() {
+    if (fulltextMode) {
+      renderSearchResults(searchResults || [], el.filter.value.trim());
+      return;
+    }
     var keyword = el.filter.value.trim().toLowerCase();
     var visible = runsCache.filter(function (run) {
       if (!keyword) return true;
@@ -993,7 +1058,142 @@
       });
   }
 
-  el.filter.addEventListener("input", renderRuns);
+  /* ─────────────────────── 全文检索与用量统计 ─────────────────────── */
+
+  /* 命中词高亮：大小写不敏感拆分，命中片段包进 <mark> */
+  function appendHighlighted(container, text, query) {
+    if (!query) {
+      container.textContent = text;
+      return;
+    }
+    var lower = text.toLowerCase();
+    var q = query.toLowerCase();
+    var pos = 0;
+    var idx;
+    while ((idx = lower.indexOf(q, pos)) >= 0) {
+      if (idx > pos) container.appendChild(document.createTextNode(text.slice(pos, idx)));
+      container.appendChild(node("mark", null, text.slice(idx, idx + q.length)));
+      pos = idx + q.length;
+    }
+    if (pos < text.length) container.appendChild(document.createTextNode(text.slice(pos)));
+  }
+
+  function renderSearchResults(results, query) {
+    el.runs.textContent = "";
+    el.runsCount.textContent = query ? "全文命中 " + results.length + " 份" : "";
+    show(el.runsEmpty, results.length === 0);
+    if (!results.length) {
+      if (query) {
+        el.runs.appendChild(node("p", "muted empty", "转写稿里没有找到「" + query + "」。"));
+      }
+      return;
+    }
+    el.runs.appendChild(node("p", "search-count", "在全部报告的转写稿正文里命中（最多显示 20 份）："));
+    results.forEach(function (item) {
+      var card = runCard({
+        run_id: item.run_id,
+        title: item.title,
+        uploader: item.uploader,
+        bvid: item.bvid,
+        url: item.url,
+        duration_text: item.duration_text,
+        has_report: Boolean(item.report_url),
+        report_url: item.report_url,
+        generated_at: item.generated_at
+      });
+      var snippet = node("p", "run-snippet");
+      appendHighlighted(snippet, item.snippet, query);
+      card.appendChild(snippet);
+      el.runs.appendChild(card);
+    });
+  }
+
+  function runSearch(query) {
+    searchQuery = query;
+    if (!query || query.length < 2) {
+      searchResults = null;
+      renderRuns();
+      return;
+    }
+    fetch("/api/search?q=" + encodeURIComponent(query))
+      .then(function (response) { return response.json(); })
+      .then(function (data) {
+        if (searchQuery !== query) return;  // 输入已变，丢弃过期响应
+        searchResults = data.results || [];
+        renderRuns();
+      })
+      .catch(function () {});
+  }
+
+  el.filter.addEventListener("input", function () {
+    if (!fulltextMode) {
+      renderRuns();
+      return;
+    }
+    if (searchTimer !== null) window.clearTimeout(searchTimer);
+    var value = el.filter.value.trim();
+    searchTimer = window.setTimeout(function () {
+      searchTimer = null;
+      runSearch(value);
+    }, SEARCH_DEBOUNCE_MS);
+  });
+
+  el.fulltextToggle.addEventListener("click", function () {
+    fulltextMode = !fulltextMode;
+    el.fulltextToggle.dataset.active = fulltextMode ? "1" : "0";
+    el.filter.placeholder = fulltextMode
+      ? "在全部报告的转写稿正文里搜索（≥2 个字）"
+      : "按标题 / UP主 / BV 号过滤";
+    if (fulltextMode) runSearch(el.filter.value.trim());
+    else {
+      searchResults = null;
+      renderRuns();
+    }
+  });
+
+  /* 统计面板：按日聚合所有 run 的耗时与 token（数据来自 run.trace.jsonl） */
+  function renderStats(days) {
+    el.statsPanel.textContent = "";
+    if (!days.length) {
+      el.statsPanel.appendChild(node("p", "stats-note", "还没有可统计的运行记录。"));
+      return;
+    }
+    var table = node("table");
+    var head = node("tr");
+    ["日期", "任务数", "总耗时", "token"].forEach(function (label, index) {
+      head.appendChild(node("th", index > 0 ? "num" : null, label));
+    });
+    table.appendChild(head);
+    var totals = { runs: 0, ms: 0, tokens: 0 };
+    days.forEach(function (day) {
+      var row = node("tr");
+      row.appendChild(node("td", null, day.date));
+      row.appendChild(node("td", "num", String(day.runs)));
+      row.appendChild(node("td", "num", fmtMs(day.total_ms)));
+      row.appendChild(node("td", "num", day.tokens ? String(day.tokens) : "—"));
+      table.appendChild(row);
+      totals.runs += day.runs;
+      totals.ms += day.total_ms;
+      totals.tokens += day.tokens || 0;
+    });
+    el.statsPanel.appendChild(table);
+    el.statsPanel.appendChild(node("p", "stats-note",
+      "合计 " + totals.runs + " 个任务 · " + fmtMs(totals.ms) + " · token " + totals.tokens));
+  }
+
+  el.toggleStats.addEventListener("click", function () {
+    if (!el.statsPanel.hidden) {
+      show(el.statsPanel, false);
+      return;
+    }
+    el.statsPanel.textContent = "读取中…";
+    show(el.statsPanel, true);
+    fetch("/api/stats")
+      .then(function (response) { return response.json(); })
+      .then(function (data) { renderStats(data.days || []); })
+      .catch(function () { el.statsPanel.textContent = "读取失败。"; });
+  });
+
   el.refresh.addEventListener("click", loadRuns);
 
   /* ───────────────────────────── 预览浮层 ───────────────────────────── */
@@ -1022,11 +1222,114 @@
     if (href && href !== "#") openPreview(href, "刚刚生成的报告");
   });
 
+  /* ─────────────────────── 自定义背景 ─────────────────────── */
+
+  /* 遮罩风格映射（default 与 styles.css 里 body 的默认纱罩保持同一份）：
+     换背景图时只替换图片层，遮罩独立可调——深色壁纸配深纱、浅色壁纸配白纱 */
+  var BG_OVERLAYS = {
+    default: "linear-gradient(180deg, rgba(247, 250, 252, .34) 0%, rgba(240, 246, 251, .54) 100%)",
+    strong: "linear-gradient(180deg, rgba(247, 250, 252, .55) 0%, rgba(240, 246, 251, .72) 100%)",
+    dark: "linear-gradient(180deg, rgba(22, 28, 34, .30) 0%, rgba(22, 28, 34, .58) 100%)",
+    none: ""
+  };
+  var BG_MAX_BYTES = 15 * 1024 * 1024;
+  var bgUrl = null;          // 当前自定义背景（null = 默认壁纸）
+  var bgOverlayName = "default";
+
+  function applyBackground(url, overlay) {
+    bgUrl = url || null;
+    if (overlay) bgOverlayName = overlay;
+    // 注意 none 的值是空字符串（falsy）：必须按键名存在性取值，
+    // 用 || 兜底会让「无遮罩」静默回落成默认纱罩
+    var veil = bgOverlayName in BG_OVERLAYS ? BG_OVERLAYS[bgOverlayName] : BG_OVERLAYS.default;
+    if (bgOverlayName === "default" && !bgUrl) {
+      // 默认壁纸 + 默认遮罩：清掉内联样式，完全回落 CSS
+      document.body.style.backgroundImage = "";
+    } else {
+      var parts = [];
+      if (veil) parts.push(veil);
+      parts.push('url("' + (bgUrl || "/static/bg.jpg") + '")');
+      document.body.style.backgroundImage = parts.join(", ");
+    }
+    show(el.bgReset, Boolean(bgUrl));
+  }
+
+  function loadBackground() {
+    fetch("/api/ui/background")
+      .then(function (response) { return response.json(); })
+      .then(function (data) {
+        if (data.overlay && el.bgOverlay) el.bgOverlay.value = data.overlay;
+        applyBackground(data.url, data.overlay);
+      })
+      .catch(function () {});
+  }
+
+  el.bgBtn.addEventListener("click", function () { el.bgFile.click(); });
+
+  el.bgFile.addEventListener("change", function () {
+    var file = el.bgFile.files && el.bgFile.files[0];
+    el.bgFile.value = "";
+    if (!file) return;
+    if (file.size > BG_MAX_BYTES) {
+      window.alert("图片不能超过 15MB。");
+      return;
+    }
+    fetch("/api/ui/background", {
+      method: "POST",
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      body: file
+    })
+      .then(function (response) {
+        return response.json().catch(function () { return {}; })
+          .then(function (data) { return { ok: response.ok, data: data }; });
+      })
+      .then(function (result) {
+        if (!result.ok) {
+          window.alert(result.data.detail || "背景上传失败（HTTP 错误）。");
+          return;
+        }
+        applyBackground(result.data.url, result.data.overlay);
+      })
+      .catch(function () { window.alert("无法连接本地服务，背景未更改。"); });
+  });
+
+  el.bgReset.addEventListener("click", function () {
+    fetch("/api/ui/background", { method: "DELETE" })
+      .then(function () { applyBackground(null, bgOverlayName); })
+      .catch(function () { window.alert("无法连接本地服务，恢复未执行。"); });
+  });
+
+  el.bgOverlay.addEventListener("change", function () {
+    var name = el.bgOverlay.value;
+    fetch("/api/ui/background/overlay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name })
+    })
+      .then(function (response) {
+        return response.json().catch(function () { return {}; })
+          .then(function (data) { return { ok: response.ok, data: data }; });
+      })
+      .then(function (result) {
+        if (!result.ok) {
+          window.alert(result.data.detail || "遮罩设置失败。");
+          el.bgOverlay.value = bgOverlayName;  // 回落到已生效的选择
+          return;
+        }
+        applyBackground(bgUrl, result.data.overlay);
+      })
+      .catch(function () {
+        window.alert("无法连接本地服务，遮罩未更改。");
+        el.bgOverlay.value = bgOverlayName;
+      });
+  });
+
   /* ───────────────────────────── 启动 ───────────────────────────── */
 
   buildStepper();
   syncFieldHints();
   loadRuns();
+  loadBackground();
   var saved = sessionStorage.getItem(STORE_KEY);
   if (saved) resumeJob(saved);
 })();

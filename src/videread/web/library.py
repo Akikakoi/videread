@@ -252,3 +252,88 @@ def run_detail(out_root: Path, run_id: str) -> dict | None:
         }
     )
     return entry
+
+# ---------------------------------------------------------- 全文检索 / 统计
+
+#: 检索结果里每个匹配项展示的摘要半径（字符）
+_SNIPPET_RADIUS = 60
+#: 全文检索的返回上限
+_SEARCH_LIMIT = 20
+
+
+def _snippet(text: str, query: str) -> str:
+    """取第一处命中（忽略大小写）前后的文本作为摘要，命中词以原文大小写保留。"""
+    lowered = text.lower()
+    pos = lowered.find(query.lower())
+    if pos < 0:
+        return text[: _SNIPPET_RADIUS * 2] + ("…" if len(text) > _SNIPPET_RADIUS * 2 else "")
+    start = max(0, pos - _SNIPPET_RADIUS)
+    end = min(len(text), pos + len(query) + _SNIPPET_RADIUS)
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(text) else ""
+    return prefix + text[start:end].replace("\n", " ") + suffix
+
+
+def search_runs(out_root: Path, query: str) -> list[dict]:
+    """全文检索：在转写稿（transcript.md）与标题里找关键词，带摘要与命中次数。
+
+    个人工具不做索引——runs/ 是几十份文本，逐文件扫一遍足够快；
+    转写稿是报告的来源事实，比扫 report.html 更小也更"干净"。
+    """
+    query = (query or "").strip()
+    if len(query) < 2:
+        return []
+    root = Path(out_root)
+    results: list[dict] = []
+    for entry in list_runs(root):
+        run_dir = root / entry["run_id"]
+        text = ""
+        transcript = run_dir / "transcript.md"
+        if transcript.is_file():
+            try:
+                text = transcript.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = ""
+        haystack = f"{entry['title']}\n{text}".lower()
+        count = haystack.count(query.lower())
+        if count == 0:
+            continue
+        results.append(
+            {
+                "run_id": entry["run_id"],
+                "title": entry["title"],
+                "uploader": entry["uploader"],
+                "bvid": entry["bvid"],
+                "url": entry["url"],
+                "duration_text": entry["duration_text"],
+                "report_url": entry["report_url"],
+                "generated_at": entry["generated_at"],
+                "count": count,
+                "snippet": _snippet(text or entry["title"], query),
+            }
+        )
+        if len(results) >= _SEARCH_LIMIT:
+            break
+    return results
+
+
+def usage_stats(out_root: Path) -> list[dict]:
+    """按自然日汇总所有 run 的总耗时与 token 用量（读各自的 run.trace.jsonl）。
+
+    「成本面板」的现实版本：ASR/LLM 的钱没有统一价目，trace 里的耗时与
+    token 是每次运行都真实落盘的可信读数，按日聚合够回答"最近用得凶不凶"。
+    """
+    per_day: dict[str, dict] = {}
+    for entry in list_runs(out_root):
+        trace_path = Path(out_root) / entry["run_id"] / "run.trace.jsonl"
+        if not trace_path.is_file():
+            continue
+        day = (entry["generated_at"] or "")[:10]
+        if not day:
+            continue
+        summary = trace_summary(trace_path)
+        agg = per_day.setdefault(day, {"date": day, "runs": 0, "total_ms": 0, "tokens": 0})
+        agg["runs"] += 1
+        agg["total_ms"] += summary["total_ms"]
+        agg["tokens"] += summary["tokens"]
+    return sorted(per_day.values(), key=lambda item: item["date"], reverse=True)
