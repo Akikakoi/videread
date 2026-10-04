@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>视频阅读报告</title>
+<style>
+/* ── Outline 模式：每节一句话核心要点，无成段正文 ── */
+*, *::before, *::after { box-sizing: border-box; }
+
+:root {
+  --ink: #23292e;
+  --ink-soft: #4b555d;
+  --ink-mute: #7a848c;
+  --line: #e3e7ea;
+  --line-strong: #d3d9dd;
+  --paper: #ffffff;
+  --page: #f2f4f6;
+  --accent: #0f6f8c;
+  --accent-soft: #eef6f8;
+  --accent-line: #cfe4ea;
+}
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  font-size: 18px;
+  line-height: 1.75;
+  line-break: strict;
+  overflow-wrap: break-word;
+}
+
+.report-canvas {
+  width: 820px;
+  max-width: calc(100% - 32px);
+  margin: 40px auto;
+  padding: 48px 52px 56px;
+  background: var(--paper);
+  border-radius: 26px;
+  box-shadow: 0 10px 34px rgba(24, 38, 50, .09);
+}
+
+/* ── 页首 ── */
+.report-head {
+  margin: 0 0 30px;
+  padding: 0 0 24px;
+  border-bottom: 1px solid var(--line);
+}
+.report-head h1 {
+  margin: 0 0 10px;
+  font-size: 31px;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: .01em;
+}
+.subtitle {
+  margin: 0 0 16px;
+  font-size: 18px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+}
+.lead {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.85;
+  text-align: justify;
+}
+.attribution {
+  margin: 16px 0 0;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--ink-mute);
+}
+.attribution a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent-line);
+  word-break: break-all;
+}
+.attribution a:hover { border-bottom-color: var(--accent); }
+
+/* ── 折叠块（视频简介 / 来源说明）── */
+.meta-fold,
+.sources {
+  margin: 18px 0 0;
+  background: #fafbfc;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+.sources { margin: 0; }
+.meta-fold > summary,
+.sources > summary {
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;
+}
+.meta-fold > summary::-webkit-details-marker,
+.sources > summary::-webkit-details-marker { display: none; }
+.meta-fold > summary::before,
+.sources > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 8px;
+  color: var(--ink-mute);
+  transition: transform .16s ease;
+}
+.meta-fold[open] > summary::before,
+.sources[open] > summary::before { transform: rotate(90deg); }
+.meta-fold-body {
+  padding: 2px 16px 16px;
+  font-size: 15px;
+  line-height: 1.8;
+  color: var(--ink-soft);
+}
+.meta-fold-body > :first-child { margin-top: 0; }
+.meta-fold-body > :last-child { margin-bottom: 0; }
+
+/* ── 正文：节标题编号由 CSS 计数器生成 ── */
+.report-body { font-size: 18px; }
+.report-body > :first-child { margin-top: 0; }
+.report-body { counter-reset: outline-sec; }
+.report-body h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 34px 0 12px;
+  padding-bottom: 8px;
+  font-size: 22px;
+  line-height: 1.45;
+  font-weight: 700;
+  border-bottom: 1px solid var(--line);
+  counter-increment: outline-sec;
+}
+.report-body h2::before {
+  content: counter(outline-sec, decimal-leading-zero);
+  flex: 0 0 auto;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── .keyline 一句话核心要点（本模式唯一组件）── */
+.keyline {
+  margin: 12px 0;
+  padding: 14px 18px;
+  font-size: 17px;
+  line-height: 1.8;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px 14px 14px 6px;
+}
+.keyline > :first-child { margin-top: 0; }
+.keyline > :last-child { margin-bottom: 0; }
+
+/* ── 来源追溯标记：只用于人工核对，不产生任何视觉变化 ── */
+[data-source-units] { /* 追溯标记，不改变任何视觉样式 */ }
+
+/* ── 页尾 ── */
+.report-foot {
+  margin: 44px 0 0;
+  padding: 22px 0 0;
+  border-top: 1px solid var(--line);
+}
+.sources-body {
+  padding: 2px 16px 16px;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--ink-soft);
+}
+.sources-body > :first-child { margin-top: 0; }
+.sources-body > :last-child { margin-bottom: 0; }
+
+/* ── 响应式 ── */
+@media (max-width: 768px) {
+  body { font-size: 17px; }
+  .report-canvas {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 28px 20px 36px;
+    border-radius: 0;
+  }
+  .report-head h1 { font-size: 26px; }
+  .report-body h2 { font-size: 20px; }
+}
+
+/* ── 打印 ── */
+@media print {
+  body { background: #fff; }
+  .report-canvas {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .report-body h2 { break-after: avoid; }
+  .keyline { break-inside: avoid; }
+}
+
+/* ── 视频截图（--frames 开启时由程序注入，非 LLM 输出）── */
+.report-figure { margin: 18px 0; }
+.report-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, .08);
+}
+.report-figure figcaption {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #666666;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 段落时间戳跳转胶囊（程序注入，非 LLM 输出）── */
+.ts-jump {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  text-decoration: none;
+  vertical-align: middle;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ts-jump:hover { background: #ffffff; border-color: var(--accent); }
+</style>
+</head>
+<body>
+<main class="report-canvas">
+  <header class="report-head">
+    <h1>{{TITLE}}</h1>
+    <p class="subtitle">{{SUBTITLE}}</p>
+    <p class="lead">{{LEAD}}</p>
+    <p class="attribution">{{ATTRIBUTION}}</p>
+    <details class="meta-fold">
+      <summary>视频简介</summary>
+      <div class="meta-fold-body">{{VIDEO_DESCRIPTION}}</div>
+    </details>
+  </header>
+
+  <!--
+    组件用法参考（由正文片段使用，模板本身不渲染示例）
+      keyline    一句话核心要点：div.keyline，内部放一句话；每节恰好一个
+    节标题不写编号与时间戳，编号由 CSS 计数器自动生成
+    追溯：keyline 外层包 div 并加 data-source-units 属性，属性值引用本节来源单元 id
+  -->
+
+  <article class="report-body">
+{{BODY}}
+  </article>
+
+  <footer class="report-foot">
+    <details class="sources">
+      <summary>来源与处理说明</summary>
+      <div class="sources-body">{{SOURCES}}</div>
+    </details>
+  </footer>
+</main>
+<script>
+/* 外部链接新窗口打开 */
+(function () {
+  var links = document.querySelectorAll('a[href^="http"]');
+  for (var i = 0; i < links.length; i++) {
+    links[i].target = '_blank';
+    links[i].rel = 'noopener noreferrer';
+  }
+})();
+</script>
+{{TIMEMAP}}
+<script>
+/* 段落级时间戳跳转：核心判断段落旁的胶囊 → 新标签打开原视频对应时刻。
+   时间映射由程序注入（window.__VTS）；本地文件或映射缺失时不装饰。 */
+(function () {
+  var map = window.__VTS;
+  if (!map || !map.length) { return; }
+  var origin = document.querySelector('.attribution a[href^="http"]');
+  if (!origin) { return; }
+  var base = origin.getAttribute('href');
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function stamp(seconds) {
+    var total = Math.max(0, Math.round(seconds));
+    var h = Math.floor(total / 3600);
+    var m = Math.floor((total % 3600) / 60);
+    var s = total % 60;
+    return (h ? h + ':' + pad(m) : pad(m)) + ':' + pad(s);
+  }
+  function resolve(ids) {
+    var best = -1;
+    for (var i = 0; i < ids.length; i++) {
+      var m = /^u(\d+)$/.exec(ids[i]);
+      if (!m) { continue; }
+      var seconds = map[parseInt(m[1], 10) - 1];
+      if (typeof seconds === 'number' && seconds >= 0 && (best < 0 || seconds < best)) {
+        best = seconds;
+      }
+    }
+    return best;
+  }
+  var blocks = document.querySelectorAll('[data-source-units]');
+  for (var j = 0; j < blocks.length; j++) {
+    var seconds = resolve((blocks[j].getAttribute('data-source-units') || '').split(','));
+    if (seconds < 0) { continue; }
+    var link = document.createElement('a');
+    link.className = 'ts-jump';
+    link.href = base + (base.indexOf('?') >= 0 ? '&' : '?') + 't=' + Math.round(seconds);
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = '▷ ' + stamp(seconds);
+    blocks[j].appendChild(link);
+  }
+})();
+</script>
+</body>
+</html>

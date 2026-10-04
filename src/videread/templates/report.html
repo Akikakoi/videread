@@ -558,6 +558,24 @@ body {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+
+/* ── 段落时间戳跳转胶囊（程序注入，非 LLM 输出）── */
+.ts-jump {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  text-decoration: none;
+  vertical-align: middle;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ts-jump:hover { background: #ffffff; border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -658,6 +676,50 @@ body {
       });
       activate(cur.id);
     });
+  }
+})();
+</script>
+{{TIMEMAP}}
+<script>
+/* 段落级时间戳跳转：核心判断段落旁的胶囊 → 新标签打开原视频对应时刻。
+   时间映射由程序注入（window.__VTS）；本地文件或映射缺失时不装饰。 */
+(function () {
+  var map = window.__VTS;
+  if (!map || !map.length) { return; }
+  var origin = document.querySelector('.attribution a[href^="http"]');
+  if (!origin) { return; }
+  var base = origin.getAttribute('href');
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function stamp(seconds) {
+    var total = Math.max(0, Math.round(seconds));
+    var h = Math.floor(total / 3600);
+    var m = Math.floor((total % 3600) / 60);
+    var s = total % 60;
+    return (h ? h + ':' + pad(m) : pad(m)) + ':' + pad(s);
+  }
+  function resolve(ids) {
+    var best = -1;
+    for (var i = 0; i < ids.length; i++) {
+      var m = /^u(\d+)$/.exec(ids[i]);
+      if (!m) { continue; }
+      var seconds = map[parseInt(m[1], 10) - 1];
+      if (typeof seconds === 'number' && seconds >= 0 && (best < 0 || seconds < best)) {
+        best = seconds;
+      }
+    }
+    return best;
+  }
+  var blocks = document.querySelectorAll('[data-source-units]');
+  for (var j = 0; j < blocks.length; j++) {
+    var seconds = resolve((blocks[j].getAttribute('data-source-units') || '').split(','));
+    if (seconds < 0) { continue; }
+    var link = document.createElement('a');
+    link.className = 'ts-jump';
+    link.href = base + (base.indexOf('?') >= 0 ? '&' : '?') + 't=' + Math.round(seconds);
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = '▷ ' + stamp(seconds);
+    blocks[j].appendChild(link);
   }
 })();
 </script>

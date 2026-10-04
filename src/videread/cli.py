@@ -11,7 +11,7 @@ from .config import DEFAULT_OUT_ROOT, configure_console
 from .errors import EXIT_OK, EXIT_USAGE, VidereadError
 from .pipeline import run
 
-_MODES = ("standard", "brief")
+_MODES = ("standard", "deep", "brief", "outline")
 
 
 class _Parser(argparse.ArgumentParser):

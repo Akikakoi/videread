@@ -103,8 +103,34 @@ BRIEF_EXTRA_RULES = """
 
 LENGTH_RULES = {
     "standard": "本节正文 300-700 字，视信息量而定；不要为了凑长度重复已说过的内容。",
+    "deep": "本节正文 700-1200 字，视信息量而定；宁可深挖一两个机制讲透，也不要泛泛罗列；"
+    "各节之间不要重复铺垫。",
     "brief": "本节正文不超过 350 字；宁可少讲一个次要例子，也不要超出。",
+    "outline": "本节只写一句话核心要点（30-60 字），放进 .keyline 组件；"
+    "不要写第二句，不要展开论述，不要罗列。",
 }
+
+# --------------------------------------------------------------------- LLM #3
+
+# 报告内问答：只依据检索到的转写片段作答，答案仍以 data-source-units 绑定来源
+QA_SYSTEM = """你是一名内容编辑。读者就一份视频转写稿提问，你只依据给定的转写片段作答。
+
+规则：
+1. 只使用下方给定转写中的信息，不要补充转写之外的背景、概念或数字。
+2. 若给定转写不足以回答，直接说明"转写稿里没有相关内容"，不要猜测、不要用常识补全。
+3. 保留关键条件、数字、单位与"约""可能"等限定词；口径缺失时写明不确定。
+4. 直接给出答案，不写"视频中提到""作者认为"等旁观者引导语。
+5. 输出 HTML 片段：不要 <html>/<body>/<style>/<script>，不要 <h2>，不要 Markdown 标记。
+6. 核心判断段落外层包裹 <div data-source-units="u0012,u0013">，属性值只能取给定转写中出现过的 id。
+7. 篇幅 150–300 字；用 <p> 陈述，可用 <div class="keyline"> 归纳一句结论、<div class="callout"> 补充解释。
+
+只输出 HTML 片段，不要输出解释文字。"""
+
+QA_USER = """问题：
+{question}
+
+可用的转写片段（每段以 `## <id> [起-止]` 标注，引用时使用该 id）：
+{context_md}"""
 
 # --------------------------------------------------------------- 组件清单（§8）
 
@@ -133,9 +159,17 @@ BRIEF_COMPONENTS = """- .brief-branch-group：条件分支；每个直接子元�
 来源绑定属性：<div data-source-units="u0012,u0013"> … </div>
 上列骨架只给出结构与关键 class，未列出的内部细节不要自创 class 名。"""
 
+OUTLINE_COMPONENTS = """- .keyline：一句话核心要点框，本节唯一允许的组件（每节恰好一个）
+来源绑定属性：<div data-source-units="u0012,u0013"> 包住 .keyline</div>
+不要使用任何其他组件或自创 class。"""
+
 
 def components_for(mode: str) -> str:
-    return BRIEF_COMPONENTS if mode == "brief" else STANDARD_COMPONENTS
+    if mode == "brief":
+        return BRIEF_COMPONENTS
+    if mode == "outline":
+        return OUTLINE_COMPONENTS
+    return STANDARD_COMPONENTS
 
 
 def writer_system(mode: str) -> str:

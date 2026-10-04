@@ -25,7 +25,7 @@ from ..errors import (
 )
 from ..pipeline import run as pipeline_run
 
-_MODES = ("standard", "brief")
+_MODES = ("standard", "deep", "brief", "outline")
 _STAGE_RE = re.compile(r"^\[(\d)/8\]")
 _TERMINAL = ("done", "error", "cancelled")
 
@@ -232,7 +232,7 @@ class JobManager:
         if not url:
             raise VidereadError("请输入 B 站链接或本地音视频路径")
         if mode not in _MODES:
-            raise VidereadError(f"未知模式：{mode!r}（可选 standard / brief）")
+            raise VidereadError(f"未知模式：{mode!r}（可选 standard / deep / brief / outline）")
 
         with self._lock:
             busy = self._active is not None and not self._active.terminal

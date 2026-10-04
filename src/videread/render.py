@@ -19,7 +19,7 @@ from .transcript import TranscriptUnit
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
 REQUIRED_PLACEHOLDERS = ("TITLE", "LEAD", "ATTRIBUTION", "BODY", "SOURCES")
-OPTIONAL_PLACEHOLDERS = ("SUBTITLE", "VIDEO_DESCRIPTION")
+OPTIONAL_PLACEHOLDERS = ("SUBTITLE", "VIDEO_DESCRIPTION", "TIMEMAP")
 
 _PLACEHOLDER = re.compile(r"\{\{([A-Z0-9_]+)\}\}")
 
@@ -29,9 +29,21 @@ _OPTIONAL_BLOCKS = {
     "VIDEO_DESCRIPTION": re.compile(
         r"[ \t]*<details class=\"meta-fold\">.*?</details>[ \t]*\n?", re.DOTALL
     ),
+    "TIMEMAP": re.compile(r"[ \t]*\{\{TIMEMAP\}\}[ \t]*\n?"),
 }
 
-_TEMPLATES = {"standard": "report.html", "brief": "brief-report.html"}
+#: 转写单元 id 形如 `u0001`（`transcript.build_units` 顺序生成，`merge_subtitles` 保持）
+_UNIT_ID = re.compile(r"^u(\d+)$")
+
+_TEMPLATES = {
+    "standard": "report.html",
+    "deep": "report.html",  # 深度精读：复用 standard 模板，差异只在写作篇幅
+    "brief": "brief-report.html",
+    "outline": "outline-report.html",
+}
+
+#: 报告来源区块里的模式标签
+_MODE_LABELS = {"standard": "Standard", "deep": "Deep", "brief": "Brief", "outline": "Outline"}
 
 # --- 模板已定义 class 的清单：用于剔除 LLM 自创的 class -----------------------
 _STYLE_BLOCK = re.compile(r"<style[^>]*>(.*?)</style>", re.IGNORECASE | re.DOTALL)
@@ -54,7 +66,9 @@ def template_for(mode: str) -> Path:
     """按阅读模式定位模板文件。"""
     name = _TEMPLATES.get((mode or "").strip().lower())
     if name is None:
-        raise RenderError(f"未知模式：{mode!r}（可选 standard / brief）")
+        raise RenderError(
+            f"未知模式：{mode!r}（可选 standard / deep / brief / outline）"
+        )
     path = TEMPLATE_DIR / name
     if not path.is_file():
         raise RenderError(f"模板文件不存在：{path}")
@@ -177,7 +191,7 @@ def sources(
     url_text = escape(meta.url)
     rows = [
         f"原视频：<a href=\"{url_text}\">{url_text}</a>",
-        f"阅读模式：{'Brief' if mode == 'brief' else 'Standard'}；信息结构：{outline.profile}",
+        f"阅读模式：{_MODE_LABELS.get(mode, 'Standard')}；信息结构：{outline.profile}",
         f"转写：{asr_label}；转写单元 {len(units)} 个（{breakdown or '无'}）",
         f"LLM：结构规划 {settings.llm_model_plan}，逐节写作 {settings.llm_model_write}",
         f"生成时间：{generated_at}",
@@ -185,6 +199,36 @@ def sources(
         "本报告由转写稿重组生成，可能存在转写或理解误差；关键信息请以原视频为准。",
     ]
     return "\n".join(f"<p>{row}</p>" for row in rows)
+
+
+def timemap_script(units: list[TranscriptUnit]) -> str:
+    """产出段落级时间戳跳转所需的紧凑时间映射（报告内联脚本，纯离线）。
+
+    转写单元 id 由 `transcript.build_units` 顺序生成（`u0001` 起），
+    `merge_subtitles` 也保持 id 不变，因此按数值序号即可还原每个 id 的起始秒：
+    `window.__VTS[i-1]` 即 `u{i:04d}` 的 start 秒，`-1` 表示该序号缺号。
+
+    本地文件（无平台字幕 / 无在线视频）不注入——`context()` 里按 bvid 判定。
+    任何 id 不符预期时返回空串：宁可不跳转，也不产出会错位的时间。
+    """
+    if not units:
+        return ""
+    starts: dict[int, float] = {}
+    max_index = 0
+    for unit in units:
+        match = _UNIT_ID.match(unit.id)
+        if match is None:
+            return ""
+        index = int(match.group(1))
+        starts[index] = unit.start
+        max_index = max(max_index, index)
+    if max_index == 0:
+        return ""
+    values = [
+        f"{starts[index]:.1f}" if index in starts else "-1"
+        for index in range(1, max_index + 1)
+    ]
+    return f"<script>window.__VTS=[{','.join(values)}];</script>"
 
 
 def context(
@@ -205,6 +249,7 @@ def context(
         "ATTRIBUTION": attribution(meta),
         "VIDEO_DESCRIPTION": escape(meta.description) if meta.description else "",
         "BODY": "\n".join(parts),
+        "TIMEMAP": "" if meta.bvid == "local" else timemap_script(units),
         "SOURCES": sources(
             meta,
             outline,

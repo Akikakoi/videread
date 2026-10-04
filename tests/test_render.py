@@ -14,7 +14,9 @@ from videread.render import (
     render_report,
     template_classes,
     template_for,
+    timemap_script,
 )
+from videread.transcript import TranscriptUnit
 
 
 def _ctx(**overrides: str) -> dict[str, str]:
@@ -31,7 +33,7 @@ def _ctx(**overrides: str) -> dict[str, str]:
     return ctx
 
 
-@pytest.mark.parametrize("mode", ["standard", "brief"])
+@pytest.mark.parametrize("mode", ["standard", "deep", "brief", "outline"])
 def test_render_replaces_all_seven_placeholders(tmp_path: Path, mode: str):
     out = tmp_path / f"{mode}.html"
     render_report(template=template_for(mode), ctx=_ctx(), out=out)
@@ -97,7 +99,7 @@ def test_check_self_contained_allows_visible_video_link():
     assert check_self_contained(html) == []
 
 
-@pytest.mark.parametrize("mode", ["standard", "brief"])
+@pytest.mark.parametrize("mode", ["standard", "deep", "brief", "outline"])
 def test_shipped_templates_are_self_contained(mode: str):
     html = template_for(mode).read_text(encoding="utf-8")
     assert check_self_contained(html) == []
@@ -117,3 +119,59 @@ def test_template_classes_for_brief_template():
     classes = template_classes(template_for("brief"))
     assert {"brief-timeline", "brief-pair", "brief-table"} <= classes
     assert "comparison-item" not in classes
+
+def test_template_classes_for_outline_template():
+    classes = template_classes(template_for("outline"))
+    # outline 模式唯一组件 .keyline 必须在模板里定义，否则会被当作自创 class 剔除
+    assert "keyline" in classes
+    assert "brief-timeline" not in classes
+    assert "comparison-item" not in classes
+
+
+def test_template_for_maps_new_modes():
+    from videread.render import TEMPLATE_DIR
+
+    assert template_for("deep") == TEMPLATE_DIR / "report.html"
+    assert template_for("outline") == TEMPLATE_DIR / "outline-report.html"
+    with pytest.raises(RenderError, match="deep / brief / outline"):
+        template_for("epic")
+
+
+# ----------------------------------------------------------------- 时间戳跳转
+
+
+def _unit(index: int, start: float) -> TranscriptUnit:
+    return TranscriptUnit(id=f"u{index:04d}", start=start, end=start + 5.0, text="正文")
+
+
+def test_timemap_script_maps_unit_index_to_start():
+    script = timemap_script([_unit(1, 0.0), _unit(2, 12.5)])
+
+    assert script == "<script>window.__VTS=[0.0,12.5];</script>"
+
+
+def test_timemap_script_empty_without_units():
+    assert timemap_script([]) == ""
+
+
+def test_timemap_script_leaves_gap_as_negative_one():
+    script = timemap_script([_unit(1, 0.0), _unit(3, 20.0)])
+
+    assert script == "<script>window.__VTS=[0.0,-1,20.0];</script>"
+
+
+@pytest.mark.parametrize("bad_id", ["x0001", "u0000", "unit-1"])
+def test_timemap_script_bails_out_on_unexpected_id(bad_id: str):
+    units = [TranscriptUnit(id=bad_id, start=0.0, end=5.0, text="正文")]
+
+    assert timemap_script(units) == "", "id 不符预期时宁可不注入，避免时间错位"
+
+
+@pytest.mark.parametrize("mode", ["standard", "deep", "brief", "outline"])
+def test_templates_expose_timemap_hook(mode: str):
+    template = template_for(mode)
+    text = template.read_text(encoding="utf-8")
+
+    assert "{{TIMEMAP}}" in text
+    assert "ts-jump" in template_classes(template), "跳转胶囊的 class 必须是模板已定义的"
+    assert "TIMEMAP" in OPTIONAL_PLACEHOLDERS

@@ -56,7 +56,7 @@ from .transcript import (
     write_markdown,
 )
 
-_MODES = ("standard", "brief")
+_MODES = ("standard", "deep", "brief", "outline")
 _STAGE_LABELS = ("下载", "音频处理", "转写", "规范化", "结构规划", "截图", "逐节写作", "渲染")
 
 # 字幕至少覆盖视频时长的这个比例，才允许用它替代 ASR（§6.3）
@@ -170,7 +170,7 @@ def run(
     """
     mode = (mode or "").strip().lower()
     if mode not in _MODES:
-        raise UsageError(f"未知模式：{mode!r}（可选 standard / brief）")
+        raise UsageError(f"未知模式：{mode!r}（可选 standard / deep / brief / outline）")
     url = download.normalize_source(url)
     out_root = Path(out_root)
     settings = get_settings(asr_backend=asr_backend, frames_enabled=frames)

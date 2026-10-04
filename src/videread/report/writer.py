@@ -145,11 +145,11 @@ def assemble_section(
     """把 LLM 片段与本节 `<h2>` 节标题拼装为完整一节（§8.4）。
 
     节标题由程序确定性生成：模板样式与 `.report-nav` 脚本都依赖 `<h2>`，
-    不能交给模型自由发挥。Standard 带手写编号与右侧时间戳；Brief 只给纯标题
-    （编号交给模板 CSS 计数器，正文不显示时间戳）。
+    不能交给模型自由发挥。Standard/Deep 带手写编号与右侧时间戳；
+    Brief/Outline 只给纯标题（编号交给模板 CSS 计数器，正文不显示时间戳）。
     """
     heading = section.heading.strip()
-    if mode == "brief":
+    if mode in ("brief", "outline"):
         title = f"<h2>{heading}</h2>"
     else:
         time_html = (
