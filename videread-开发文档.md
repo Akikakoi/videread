@@ -98,7 +98,7 @@ Bilibili URL / BV 号
 | 接口层 | `cli.py`                                              | 参数解析、进度输出、退出码  |
 | 编排层 | `pipeline.py`                                         | 阶段调度、断点续跑、异常归类 |
 | 领域层 | `download` / `audio` / `asr` / `transcript`           | 确定性数据处理，无 LLM  |
-| 生成层 | `report/outline` / `report/writer` / `report/prompts` | 两段式 LLM 调用     |
+| 生成层 | `report/outline` / `report/writer` / `report/prompts` / `report/qa` | 两段式 LLM 调用 + 报告内问答 |
 | 呈现层 | `render.py` + `templates/`                            | 模板填充与落盘        |
 
 ---
@@ -134,7 +134,8 @@ videread/
 │  │  ├─ __init__.py
 │  │  ├─ outline.py
 │  │  ├─ writer.py
-│  │  └─ prompts.py
+│  │  ├─ prompts.py
+│  │  └─ qa.py                # 报告内问答（检索 + 引用），仅控制台调用
 │  ├─ render.py
 │  ├─ trace.py
 │  └─ templates/
@@ -250,6 +251,16 @@ videread/
 ```json
 {"ts": "2026-09-27T10:12:03+08:00", "stage": "asr", "event": "end", "dur_ms": 48210, "cost_cny": 0.62, "detail": {"segments": 412}}
 ```
+
+### 5.6 `qa.jsonl`
+
+仅控制台问答产生（不问答的 run 没有该文件），每行一次问答，追加写：
+
+```json
+{"ts": "2026-10-04 20:15:02", "question": "…", "answer_html": "…", "citations": [{"unit_id": "u0013", "seconds": 135.0, "time_text": "02:15", "snippet": "…", "section_id": "s1", "section_index": 1}], "usage_total": 1234}
+```
+
+读取时损坏行跳过，不影响其余记录。
 
 ---
 
@@ -473,6 +484,34 @@ def template_classes(template: Path) -> set[str]   # 模板已定义的 class �
 - `check_self_contained` 扫描并拒绝：`<link rel=stylesheet>`、`<script src=`、`http(s)://` 图片、外链字体
 - `template_classes` 从模板自身提取 `<style>` 选择器与静态 `class` 属性，供 `report.writer` 剔除自创 class（§6.8），避免清单与模板两边手工维护而漂移
 - 包含 `--open` 时用 `webbrowser.open(out.resolve().as_uri())` 打开
+
+### 6.11 `report/qa.py`
+
+报告内问答，只在本地控制台侧栏使用（报告 HTML 本身保持自包含），数据全部取自 run 目录的 `transcript.jsonl` / `outline.json`：
+
+```python
+def retrieve(units, question, *, budget_chars=FULL_CONTEXT_BUDGET, top_k=TOP_K) -> list[TranscriptUnit]
+def answer_question(run_dir, question, *, settings=None, client=None) -> Answer
+def append_history(run_dir, question, answer) -> Path   # 追加 qa.jsonl
+def load_history(run_dir) -> list[dict]
+```
+
+要点：
+
+- 检索取务实混合策略：转写总字符 ≤ `FULL_CONTEXT_BUDGET`（24000）时整份送模型（省去检索误差）；超预算按问题 2-gram 与单元文本的重合度筛 `TOP_K`（60）个单元，无任何词面命中时均匀采样兜底
+- 答案复用 `writer.sanitize_section_html` 清洗，只允许 `keyline` / `callout` 两个 class；来源绑定沿用 `data-source-units`
+- 引用由答案 HTML 反解：`data-source-units` → 时刻 + 所属章节（查 `outline.json`）
+- 问题非空且 ≤ 500 字；run 无转写稿时拒绝；每次问答追加一行 `qa.jsonl`（§5.6）供回放
+
+### 6.12 控制台接口（`web/`）
+
+本地控制台（FastAPI）与报告库相关的接口：
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/runs?page=&page_size=&q=` | 报告库分页查询：`page` 从 1 起；`q` 过滤标题 / UP主 / BV 号；`page_size` 只接受 5 / 10 / 20 / 50，其余回落默认 20；越界页码夹到有效范围；返回 `total` / `page` / `pages` / `page_size` |
+| `POST /api/runs/{run_id}/qa` | 就指定报告提问，返回答案 HTML 与引用，并追加 `qa.jsonl` |
+| `GET /api/runs/{run_id}/qa` | 读取该报告的问答历史 |
 
 ---
 
@@ -705,6 +744,7 @@ ASR_BACKEND=dashscope
 DASHSCOPE_API_KEY=
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/api/v1
 DASHSCOPE_MODEL=paraformer-v2
+ASR_MAX_CONCURRENCY=3
 
 # --- 备用 ASR（可选）：把 ASR_BACKEND 改为 openai 时生效 ---
 OPENAI_API_KEY=
