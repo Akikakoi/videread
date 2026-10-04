@@ -47,6 +47,9 @@
     runs: document.getElementById("runs"),
     runsCount: document.getElementById("runs-count"),
     runsEmpty: document.getElementById("runs-empty"),
+    pager: document.getElementById("runs-pager"),
+    pageList: document.getElementById("runs-page-list"),
+    pageSize: document.getElementById("runs-page-size"),
     filter: document.getElementById("filter"),
     fulltextToggle: document.getElementById("fulltext-toggle"),
     toggleStats: document.getElementById("toggle-stats"),
@@ -57,10 +60,20 @@
     previewTitle: document.getElementById("preview-title"),
     previewOpen: document.getElementById("preview-open"),
     previewClose: document.getElementById("preview-close"),
+    qaPanel: document.getElementById("qa-panel"),
+    qaLog: document.getElementById("qa-log"),
+    qaForm: document.getElementById("qa-form"),
+    qaInput: document.getElementById("qa-input"),
+    qaSend: document.getElementById("qa-send"),
     bgBtn: document.getElementById("bg-btn"),
     bgReset: document.getElementById("bg-reset"),
     bgFile: document.getElementById("bg-file"),
-    bgOverlay: document.getElementById("bg-overlay")
+    bgOverlay: document.getElementById("bg-overlay"),
+    modal: document.getElementById("modal"),
+    modalBox: document.querySelector(".modal-box"),
+    modalText: document.getElementById("modal-text"),
+    modalOk: document.getElementById("modal-ok"),
+    modalCancel: document.getElementById("modal-cancel")
   };
 
   var stream = null;
@@ -73,6 +86,14 @@
   var startedAt = 0;
   var timerId = null;
   var runsCache = [];
+  var runsPage = 1;          // 报告库当前页（服务端分页，从 1 起）
+  var runsPages = 1;         // 报告库总页数（服务端下发）
+  var runsTotal = 0;         // 当前过滤条件下的记录总数（服务端下发）
+  var RUNS_PAGE_SIZE_KEY = "videread.runsPageSize";
+  var RUNS_PAGE_SIZES = [5, 10, 20, 50];
+  var runsPageSize = parseInt(window.localStorage.getItem(RUNS_PAGE_SIZE_KEY), 10);
+  if (RUNS_PAGE_SIZES.indexOf(runsPageSize) < 0) runsPageSize = 20;
+  var listFilterTimer = null;  // 列表过滤：输入防抖（过滤走服务端分页查询）
   var fulltextMode = false;   // 「全文」开关：开着时过滤框改为搜转写稿正文
   var searchResults = null;   // 最近一次全文检索的结果（null 表示还没搜过）
   var searchQuery = "";       // 最近一次检索的关键词（丢弃过期响应用）
@@ -345,14 +366,16 @@
   var FIELD_HINTS = {
     mode: {
       standard: "内容完整，篇幅随视频信息量伸缩，适合想深入理解时选。",
-      brief: "只留主干结论，严格限制字数，几分钟就能读完。"
+      deep: "篇幅加倍的精读版，逐个机制深挖，适合想彻底吃透主题时选。",
+      brief: "只留主干结论，严格限制字数，几分钟就能读完。",
+      outline: "每节只有一句话核心要点，生成最快最省，适合先扫一眼决定值不值得细读。"
     },
     asr: {
-      "": "用项目默认设置。视频自带字幕时会直接用字幕，不走转写。",
-      dashscope: "阿里云标准通道，稳定；需账号开通云存储权限，未开通会失败。",
-      "dashscope-realtime": "阿里云实时通道，不需要云存储权限；上一项报错时改用这个。",
-      openai: "调用 OpenAI 转写，需要另外配置 OpenAI 密钥。",
-      local: "faster-whisper 在本机跑，离线、免费；首次使用会下载模型，速度取决于机器性能。"
+      "": "推荐日常使用。视频自带字幕时直接用字幕、不走转写，选哪个都没差；没字幕的中文视频，各引擎效果也接近。",
+      dashscope: "阿里云标准通道：中文准确率最稳，长视频可并行切段、更快；需账号开通对象存储权限，未开通会失败。",
+      "dashscope-realtime": "阿里云实时通道：不需要对象存储权限，标准通道报错时改用这个；顺序推流，长视频会慢一些。",
+      openai: "英文 / 中英混说的内容更强；走 OpenAI 计费且网络需能直连。纯中文内容与阿里云差别不大。",
+      local: "本机离线转写：完全免费、不依赖任何账号；速度取决于机器性能，专有名词错字会略多，适合不想付费时用。"
     }
   };
 
@@ -711,20 +734,22 @@
 
   el.cancelJob.addEventListener("click", function () {
     if (!currentJobId || el.cancelJob.hidden) return;
-    var confirmed = window.confirm(
-      "确定取消当前任务吗？\n\n已生成阶段的产物会保留，重新提交可从断点续跑。"
-    );
-    if (!confirmed) return;
-    el.cancelJob.disabled = true;
-    fetch("/api/jobs/" + encodeURIComponent(currentJobId) + "/cancel", { method: "POST" })
-      .then(function (response) {
-        if (!response.ok) {
-          // 409 = 任务已经结束：状态事件随后自己收敛，无需提示
-          if (response.status !== 409) window.alert("取消失败（HTTP " + response.status + "）。");
-        }
-      })
-      .catch(function () { window.alert("无法连接本地服务，取消未执行。"); })
-      .finally(function () { el.cancelJob.disabled = false; });
+    uiConfirm(
+      "确定取消当前任务吗？\n\n已生成阶段的产物会保留，重新提交可从断点续跑。",
+      "取消任务"
+    ).then(function (confirmed) {
+      if (!confirmed) return;
+      el.cancelJob.disabled = true;
+      fetch("/api/jobs/" + encodeURIComponent(currentJobId) + "/cancel", { method: "POST" })
+        .then(function (response) {
+          if (!response.ok) {
+            // 409 = 任务已经结束：状态事件随后自己收敛，无需提示
+            if (response.status !== 409) window.alert("取消失败（HTTP " + response.status + "）。");
+          }
+        })
+        .catch(function () { window.alert("无法连接本地服务，取消未执行。"); })
+        .finally(function () { el.cancelJob.disabled = false; });
+    });
   });
 
   function finishJob(data) {
@@ -736,8 +761,10 @@
     if (data.report_url) {
       el.openReport.setAttribute("href", data.report_url);
       show(el.result, true);
-      openPreview(data.report_url, "刚刚生成的报告");
+      qaOpen(data.report_url, "刚刚生成的报告");
     }
+    // 新报告排在最新一页，回到第 1 页才能立刻看到
+    runsPage = 1;
     loadRuns();
   }
 
@@ -791,13 +818,54 @@
       .catch(function () { sessionStorage.removeItem(STORE_KEY); });
   }
 
+  /* ─────────────────────── 确认弹窗 ─────────────────────── */
+
+  /* 替代浏览器原生 confirm：返回 Promise<boolean>，支持 Esc / 点遮罩关闭 */
+  var modalResolve = null;
+
+  function uiConfirm(text, okLabel) {
+    return new Promise(function (resolve) {
+      if (modalResolve) { resolve(false); }  // 上一个确认未决时先按拒绝收场
+      modalResolve = resolve;
+      el.modalText.textContent = text;
+      el.modalOk.textContent = okLabel || "确定";
+      show(el.modal, true);
+      el.modalOk.focus();
+    });
+  }
+
+  function closeModal(result) {
+    if (modalResolve === null) return;
+    show(el.modal, false);
+    var resolve = modalResolve;
+    modalResolve = null;
+    resolve(result);
+  }
+
+  el.modalOk.addEventListener("click", function () { closeModal(true); });
+  el.modalCancel.addEventListener("click", function () { closeModal(false); });
+  el.modal.addEventListener("click", function (event) {
+    if (event.target === el.modal) closeModal(false);
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && !el.modal.hidden) closeModal(false);
+  });
+
   /* ───────────────────────────── 报告库 ───────────────────────────── */
 
   function loadRuns() {
-    fetch("/api/runs")
+    var params = ["page=" + runsPage, "page_size=" + runsPageSize];
+    var keyword = el.filter.value.trim();
+    if (!fulltextMode && keyword) params.push("q=" + encodeURIComponent(keyword));
+    fetch("/api/runs?" + params.join("&"))
       .then(function (response) { return response.json(); })
       .then(function (data) {
         runsCache = data.runs || [];
+        runsPage = data.page || 1;
+        runsPages = data.pages || 1;
+        runsTotal = data.total || 0;
+        // 服务端可能回落非法的每页条数，以它下发的为准，避免下拉与实际列表不符
+        if (RUNS_PAGE_SIZES.indexOf(data.page_size) >= 0) runsPageSize = data.page_size;
         if (fulltextMode) runSearch(el.filter.value.trim());
         else renderRuns();
       })
@@ -828,27 +896,22 @@
       renderSearchResults(searchResults || [], el.filter.value.trim());
       return;
     }
-    var keyword = el.filter.value.trim().toLowerCase();
-    var visible = runsCache.filter(function (run) {
-      if (!keyword) return true;
-      return [run.title, run.uploader, run.bvid, run.run_id]
-        .join(" ")
-        .toLowerCase()
-        .indexOf(keyword) >= 0;
-    });
+    // 过滤与分页都交给服务端：这里只渲染当前页，避免「只过滤当前页」的错位
+    var keyword = el.filter.value.trim();
 
     el.runs.textContent = "";
-    el.runsCount.textContent = runsCache.length ? "共 " + runsCache.length + " 份" : "";
-    show(el.runsEmpty, runsCache.length === 0);
-    if (!visible.length) {
-      if (runsCache.length) el.runs.appendChild(node("p", "muted empty", "没有匹配的报告。"));
+    el.runsCount.textContent = runsTotal ? "共 " + runsTotal + " 份" : "";
+    show(el.runsEmpty, runsTotal === 0 && !keyword);
+    renderPager();
+    if (!runsCache.length) {
+      if (keyword) el.runs.appendChild(node("p", "muted empty", "没有匹配的报告。"));
       return;
     }
 
-    // 列表本身已按生成时间倒序，顺序切段即可得到「最新在前」的日期分组
+    // 当前页已按生成时间倒序，顺序切段即可得到「最新在前」的日期分组
     var groups = [];
     var seen = {};
-    visible.forEach(function (run) {
+    runsCache.forEach(function (run) {
       var key = run.mtime ? dayKey(run.mtime * 1000) : "unknown";
       if (!seen[key]) {
         seen[key] = { label: run.mtime ? dayLabel(run.mtime * 1000) : "时间未知", runs: [] };
@@ -863,6 +926,51 @@
       group.runs.forEach(function (run) { box.appendChild(runCard(run)); });
       el.runs.appendChild(box);
     });
+  }
+
+  /* 分页控件：页码窗口 + 每页条数下拉。没有记录时整体隐藏 */
+  function renderPager() {
+    if (fulltextMode || runsTotal === 0) {
+      show(el.pager, false);
+      return;
+    }
+    show(el.pager, true);
+    el.pageSize.value = String(runsPageSize);
+    el.pageList.textContent = "";
+    el.pageList.appendChild(pagerButton("上一页", runsPage - 1, runsPage <= 1));
+    pageItems(runsPage, runsPages).forEach(function (item) {
+      if (item === "gap") el.pageList.appendChild(node("span", "page-gap", "…"));
+      else el.pageList.appendChild(pagerButton(String(item), item, false, item === runsPage));
+    });
+    el.pageList.appendChild(pagerButton("下一页", runsPage + 1, runsPage >= runsPages));
+  }
+
+  function pagerButton(label, target, disabled, current) {
+    var btn = node("button", "btn btn-small page-btn", label);
+    btn.type = "button";
+    btn.disabled = Boolean(disabled);
+    if (current) btn.setAttribute("aria-current", "page");
+    if (!disabled && !current) {
+      btn.addEventListener("click", function () { goToPage(target); });
+    }
+    return btn;
+  }
+
+  /* 页码窗口：首尾常驻、当前页附近展开，其余折叠成省略号 */
+  function pageItems(current, pages) {
+    var items = [];
+    for (var i = 1; i <= pages; i++) {
+      if (i === 1 || i === pages || Math.abs(i - current) <= 1) items.push(i);
+      else if (items[items.length - 1] !== "gap") items.push("gap");
+    }
+    return items;
+  }
+
+  function goToPage(page) {
+    if (page < 1 || page > runsPages || page === runsPage) return;
+    runsPage = page;
+    loadRuns();
+    el.filter.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   /* 收起所有展开的导出菜单：点其他位置、滚动或改窗口时调用
@@ -905,7 +1013,9 @@
     if (run.has_report) {
       var view = node("button", "btn btn-small", "预览");
       view.type = "button";
-      view.addEventListener("click", function () { openPreview(run.report_url, run.title); });
+      view.addEventListener("click", function () {
+        qaOpen(run.report_url, run.title, run.run_id, run.url);
+      });
       actions.appendChild(view);
 
       var fresh = node("a", "btn btn-small", "新窗口打开");
@@ -977,25 +1087,29 @@
     return card;
   }
 
-  /* 删除记录：二次确认里说明后果（转写缓存一并删除，重新生成要重新付费）。
+  /* 删除记录：自定义确认弹窗里说明后果（转写缓存一并删除，重新生成要重新付费）。
      确认后调删除接口，无论成败都刷新列表——删掉了列表变短，没删掉保持原状。 */
   function confirmDelete(run) {
     var label = run.title || run.run_id;
     var message = "确定删除「" + label + "」吗？\n\n" +
       "该记录的全部产物会被删除且无法恢复；\n" +
       "重新生成需要重新下载与转写（产生 ASR 费用）。";
-    if (!window.confirm(message)) return;
-    fetch("/api/runs/" + encodeURIComponent(run.run_id), { method: "DELETE" })
-      .then(function (response) {
-        if (!response.ok) {
-          window.alert("删除失败（HTTP " + response.status + "），请重试。");
-        }
-        loadRuns();
-      })
-      .catch(function () {
-        window.alert("无法连接本地服务，删除未执行。");
-        loadRuns();
-      });
+    uiConfirm(message, "删除").then(function (ok) {
+      if (!ok) return;
+      fetch("/api/runs/" + encodeURIComponent(run.run_id), { method: "DELETE" })
+        .then(function (response) {
+          if (!response.ok) {
+            window.alert("删除失败（HTTP " + response.status + "），请重试。");
+          }
+          // 删掉的是本页最后一条时回退一页，避免停在空页
+          if (runsCache.length === 1 && runsPage > 1) runsPage -= 1;
+          loadRuns();
+        })
+        .catch(function () {
+          window.alert("无法连接本地服务，删除未执行。");
+          loadRuns();
+        });
+    });
   }
 
   function renderDetail(container, runId) {
@@ -1079,6 +1193,7 @@
   }
 
   function renderSearchResults(results, query) {
+    show(el.pager, false);
     el.runs.textContent = "";
     el.runsCount.textContent = query ? "全文命中 " + results.length + " 份" : "";
     show(el.runsEmpty, results.length === 0);
@@ -1127,7 +1242,13 @@
 
   el.filter.addEventListener("input", function () {
     if (!fulltextMode) {
-      renderRuns();
+      // 过滤走服务端分页查询：防抖后从第 1 页重新拉取
+      if (listFilterTimer !== null) window.clearTimeout(listFilterTimer);
+      listFilterTimer = window.setTimeout(function () {
+        listFilterTimer = null;
+        runsPage = 1;
+        loadRuns();
+      }, SEARCH_DEBOUNCE_MS);
       return;
     }
     if (searchTimer !== null) window.clearTimeout(searchTimer);
@@ -1136,6 +1257,14 @@
       searchTimer = null;
       runSearch(value);
     }, SEARCH_DEBOUNCE_MS);
+  });
+
+  el.pageSize.addEventListener("change", function () {
+    var size = parseInt(el.pageSize.value, 10);
+    runsPageSize = RUNS_PAGE_SIZES.indexOf(size) >= 0 ? size : 20;
+    try { window.localStorage.setItem(RUNS_PAGE_SIZE_KEY, String(runsPageSize)); } catch (err) {}
+    runsPage = 1;
+    loadRuns();
   });
 
   el.fulltextToggle.addEventListener("click", function () {
@@ -1147,7 +1276,8 @@
     if (fulltextMode) runSearch(el.filter.value.trim());
     else {
       searchResults = null;
-      renderRuns();
+      runsPage = 1;
+      loadRuns();
     }
   });
 
@@ -1198,17 +1328,168 @@
 
   /* ───────────────────────────── 预览浮层 ───────────────────────────── */
 
-  function openPreview(url, title) {
+  /* 报告内问答：面板只在控制台预览里出现，报告 HTML 本身保持自包含、可离线分发。
+     问答必须调 LLM，因此不适合写进产物；放这里天然同源，无需 CORS。 */
+  var qaRunId = null;  // 当前预览的报告 run
+  var qaVideoUrl = ""; // 原视频地址：引用胶囊的"跳到该时刻"用它拼 t= 参数
+  var qaBusy = false;  // 一次只跑一问：同 run 的服务端也会串行，但前端先拦住重复点击
+
+  function runIdFromUrl(url) {
+    var match = /\/(?:report|api\/runs)\/([^/?#]+)/.exec(url || "");
+    return match ? decodeURIComponent(match[1]) : null;
+  }
+
+  function qaOpen(url, title, runId, videoUrl) {
+    qaRunId = runId || runIdFromUrl(url);
+    qaVideoUrl = videoUrl || "";
     el.previewBoxFrame.setAttribute("src", url);
     el.previewOpen.setAttribute("href", url);
     el.previewTitle.textContent = title || "报告预览";
+    el.qaPanel.hidden = !qaRunId;
+    loadQaHistory();
+    // 从「刚刚生成」入口进来时手里只有 report_url，没有原视频地址，
+    // 补一次详情查询；拿不到就算了（只是少几个「▶ 时刻」胶囊）
+    if (qaRunId && !qaVideoUrl) {
+      fetch("/api/runs/" + encodeURIComponent(qaRunId))
+        .then(function (response) { return response.ok ? response.json() : null; })
+        .then(function (detail) { if (!qaVideoUrl && detail && detail.url) qaVideoUrl = detail.url; })
+        .catch(function () { /* 详情失败不影响问答本身 */ });
+    }
     show(el.preview, true);
   }
 
   function closePreview() {
     show(el.preview, false);
     el.previewBoxFrame.removeAttribute("src");
+    qaRunId = null;
+    qaVideoUrl = "";
+    el.qaLog.textContent = "";
   }
+
+  function qaMsg(role, text) {
+    var box = node("div", "qa-msg qa-" + role);
+    if (text !== undefined) box.textContent = text;
+    el.qaLog.appendChild(box);
+    el.qaLog.scrollTop = el.qaLog.scrollHeight;
+    return box;
+  }
+
+  function qaTimeUrl(seconds) {
+    if (!/^https?:\/\//i.test(qaVideoUrl) || typeof seconds !== "number" || seconds < 0) return null;
+    return qaVideoUrl + (qaVideoUrl.indexOf("?") >= 0 ? "&" : "?") + "t=" + Math.round(seconds);
+  }
+
+  function qaLocate(cite) {
+    // 预览 iframe 同源，可直接滚到对应章节；Brief/Outline 没有导航锚点则不动
+    var doc = null;
+    try { doc = el.previewBoxFrame.contentDocument; } catch (err) { doc = null; }
+    var target = doc && cite.section_index ? doc.getElementById("sec-" + cite.section_index) : null;
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function qaCitations(list) {
+    if (!list || !list.length) return null;
+    var row = node("div", "qa-cites");
+    list.forEach(function (cite) {
+      var snippet = cite.snippet || "";
+      if (cite.section_index) {
+        var locate = node("button", "qa-cite", "§" + cite.section_index + " 定位原文");
+        locate.type = "button";
+        locate.title = snippet;
+        locate.addEventListener("click", function () { qaLocate(cite); });
+        row.appendChild(locate);
+      }
+      var href = qaTimeUrl(cite.seconds);
+      if (href) {
+        var jump = node("a", "qa-cite qa-cite-time", "▶ " + (cite.time_text || ""));
+        jump.href = href;
+        jump.target = "_blank";
+        jump.rel = "noopener";
+        jump.title = snippet;
+        row.appendChild(jump);
+      }
+    });
+    return row.childNodes.length ? row : null;
+  }
+
+  function qaFill(box, answerHtml, citations) {
+    // 服务端已用 sanitize_section_html 清洗过答案，这里只负责挂引用胶囊
+    box.innerHTML = answerHtml || "";
+    var cites = qaCitations(citations);
+    if (cites) box.appendChild(cites);
+  }
+
+  function loadQaHistory() {
+    el.qaLog.textContent = "";
+    if (!qaRunId) return;
+    fetch("/api/runs/" + encodeURIComponent(qaRunId) + "/qa")
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (data) {
+        var history = (data && data.history) || [];
+        if (!history.length) {
+          qaMsg("hint", "就报告内容提问，回答只引用转写稿。" );
+          return;
+        }
+        history.forEach(function (item) {
+          qaMsg("me", item.question || "");
+          qaFill(qaMsg("bot"), item.answer_html, item.citations);
+        });
+        el.qaLog.scrollTop = el.qaLog.scrollHeight;
+      })
+      .catch(function () { /* 历史读取失败不阻塞提问 */ });
+  }
+
+  function askQuestion(question) {
+    if (!qaRunId || qaBusy) return;
+    qaBusy = true;
+    el.qaSend.disabled = true;
+    qaMsg("me", question);
+    var pending = qaMsg("bot qa-pending", "正在阅读转写稿…");
+
+    fetch("/api/runs/" + encodeURIComponent(qaRunId) + "/qa", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: question })
+    })
+      .then(function (response) {
+        return response.json()
+          .catch(function () { return {}; })
+          .then(function (data) {
+            if (!response.ok) throw new Error(data.detail || ("提问失败（HTTP " + response.status + "）"));
+            return data;
+          });
+      })
+      .then(function (data) {
+        if (data.url) qaVideoUrl = data.url;
+        pending.className = "qa-msg qa-bot";
+        qaFill(pending, data.answer_html, data.citations);
+        el.qaLog.scrollTop = el.qaLog.scrollHeight;
+      })
+      .catch(function (err) {
+        pending.className = "qa-msg qa-bot qa-error";
+        pending.textContent = (err && err.message) ? err.message : "提问失败，请稍后重试";
+        el.qaLog.scrollTop = el.qaLog.scrollHeight;
+      })
+      .finally(function () {
+        qaBusy = false;
+        el.qaSend.disabled = false;
+      });
+  }
+
+  el.qaForm.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var question = (el.qaInput.value || "").trim();
+    if (!question) return;
+    el.qaInput.value = "";
+    askQuestion(question);
+  });
+  el.qaInput.addEventListener("keydown", function (event) {
+    // Enter 发送，Shift+Enter 换行（问句常有换行需求）
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      if (el.qaForm.requestSubmit) el.qaForm.requestSubmit();
+    }
+  });
 
   el.previewClose.addEventListener("click", closePreview);
   el.preview.addEventListener("click", function (event) {
@@ -1219,7 +1500,7 @@
   });
   el.previewReport.addEventListener("click", function () {
     var href = el.openReport.getAttribute("href");
-    if (href && href !== "#") openPreview(href, "刚刚生成的报告");
+    if (href && href !== "#") qaOpen(href, "刚刚生成的报告");
   });
 
   /* ─────────────────────── 自定义背景 ─────────────────────── */

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
+import threading
 from pathlib import Path
 from urllib.parse import quote
 
@@ -22,6 +23,7 @@ from .. import png as png_mod
 from .. import frames as frames_mod
 from ..config import get_settings
 from ..errors import VidereadError
+from ..report import qa
 from . import background as bg_mod
 from . import library, probe
 from .jobs import Job, JobBusy, JobManager
@@ -47,6 +49,10 @@ class JobRequest(BaseModel):
 
 class ProbeRequest(BaseModel):
     url: str
+
+
+class QaRequest(BaseModel):
+    question: str
 
 
 def _frame(item: dict) -> str:
@@ -86,6 +92,15 @@ def create_app(out_root: Path) -> FastAPI:
     out_root = Path(out_root)
     app = FastAPI(title="videread", docs_url=None, redoc_url=None)
     manager = JobManager(out_root)
+
+    # 每个 run 一把问答锁：串行化同一报告的问答，避免历史交叉写入；
+    # 锁表本身也用一把 guard 保护 setdefault，否则并发首问会各建一把锁。
+    qa_locks: dict[str, threading.Lock] = {}
+    qa_locks_guard = threading.Lock()
+
+    def qa_lock(run_id: str) -> threading.Lock:
+        with qa_locks_guard:
+            return qa_locks.setdefault(run_id, threading.Lock())
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -212,8 +227,17 @@ def create_app(out_root: Path) -> FastAPI:
         )
 
     @app.get("/api/runs")
-    def api_runs() -> dict:
-        return {"out_root": str(out_root), "runs": library.list_runs(out_root)}
+    def api_runs(
+        page: int = 1,
+        page_size: int = library.DEFAULT_PAGE_SIZE,
+        q: str = "",
+    ) -> dict:
+        """报告库分页查询：page 从 1 起，q 过滤标题 / UP主 / BV 号。
+
+        page_size 只接受 5/10/20/50，其余回落到默认值；越界页码会被夹到有效范围。
+        """
+        result = library.query_runs(out_root, page=page, page_size=page_size, keyword=q)
+        return {"out_root": str(out_root), **result}
 
     @app.get("/api/search")
     def api_search(q: str = "") -> dict:
@@ -238,6 +262,40 @@ def create_app(out_root: Path) -> FastAPI:
         if not library.delete_run(out_root, run_id):
             raise HTTPException(status_code=404, detail="未找到该 run")
         return {"deleted": run_id}
+
+    # ------------------------------------------------------------- 报告内问答
+
+    @app.post("/api/runs/{run_id}/qa")
+    def ask_question(run_id: str, payload: QaRequest) -> dict:
+        """就一份报告提问：检索转写稿 → 模型作答 → 追加 qa.jsonl。
+
+        同步 def 路由由 FastAPI 丢线程池执行，不会阻塞 SSE 事件循环；
+        同一 run 加锁串行，避免并发问答交叉写历史。
+        """
+        run_dir = library.safe_run_dir(out_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="未找到该 run")
+        if not (run_dir / "transcript.jsonl").is_file():
+            raise HTTPException(status_code=409, detail="该 run 没有可用的转写稿，无法问答")
+
+        question = (payload.question or "").strip()
+        try:
+            with qa_lock(run_id):
+                answer = qa.answer_question(run_dir, question)
+                qa.append_history(run_dir, question, answer)
+        except VidereadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        detail = library.run_detail(out_root, run_id) or {}
+        return {"run_id": run_id, "url": detail.get("url"), **answer.to_dict()}
+
+    @app.get("/api/runs/{run_id}/qa")
+    def qa_history(run_id: str) -> dict:
+        """回放该 run 的历史问答；qa.jsonl 不存在时返回空列表。"""
+        run_dir = library.safe_run_dir(out_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="未找到该 run")
+        return {"run_id": run_id, "history": qa.load_history(run_dir)}
 
     # ------------------------------------------------------------------ 背景
 

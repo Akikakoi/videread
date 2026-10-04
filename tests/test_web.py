@@ -15,7 +15,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from videread import download, failures
-from videread.errors import DownloadError
+from videread import transcript
+from videread.errors import DownloadError, UsageError
+from videread.report import qa
+from videread.transcript import TranscriptUnit
 from videread.web import jobs, library, probe
 from videread.web.app import create_app
 
@@ -237,6 +240,63 @@ def test_api_runs_lists_existing_runs(tmp_path: Path):
     assert [item["run_id"] for item in body["runs"]] == [RUN_ID]
     # 控制台「查看原视频」依赖列表里带出原视频链接
     assert body["runs"][0]["url"] == URL
+
+
+def test_api_runs_paginates(tmp_path: Path):
+    for index in range(12):
+        make_run(tmp_path, f"BV1xx411c7mD-{index:08d}")
+
+    with TestClient(create_app(tmp_path)) as client:
+        first = client.get("/api/runs?page=1&page_size=10").json()
+        second = client.get("/api/runs?page=2&page_size=10").json()
+
+    assert first["total"] == 12
+    assert first["pages"] == 2
+    assert first["page"] == 1
+    assert len(first["runs"]) == 10
+    assert second["page"] == 2
+    assert len(second["runs"]) == 2
+    # 两页合起来不重不漏
+    ids = {item["run_id"] for item in first["runs"]} | {item["run_id"] for item in second["runs"]}
+    assert len(ids) == 12
+
+
+def test_api_runs_clamps_page_and_falls_back_page_size(tmp_path: Path):
+    make_run(tmp_path, RUN_ID)
+    with TestClient(create_app(tmp_path)) as client:
+        body = client.get("/api/runs?page=99&page_size=7").json()
+
+    # 页码越界夹到最后一页，非法每页条数回落到默认值
+    assert body["page"] == 1
+    assert body["pages"] == 1
+    assert body["page_size"] == library.DEFAULT_PAGE_SIZE
+    assert [item["run_id"] for item in body["runs"]] == [RUN_ID]
+
+
+def test_api_runs_accepts_five_per_page(tmp_path: Path):
+    for index in range(7):
+        make_run(tmp_path, f"BV1xx411c7mD-{index:08d}")
+
+    with TestClient(create_app(tmp_path)) as client:
+        body = client.get("/api/runs?page_size=5").json()
+
+    assert body["page_size"] == 5
+    assert body["pages"] == 2
+    assert len(body["runs"]) == 5
+
+
+def test_api_runs_filters_by_keyword(tmp_path: Path):
+    make_run(tmp_path, RUN_ID, title="量子力学导论")
+    make_run(tmp_path, "BV1xx411c7mD-cccccccc", title="线性代数复习")
+
+    with TestClient(create_app(tmp_path)) as client:
+        hit = client.get("/api/runs?q=量子").json()
+        miss = client.get("/api/runs?q=不存在的关键词").json()
+
+    assert hit["total"] == 1
+    assert hit["runs"][0]["title"] == "量子力学导论"
+    assert miss["total"] == 0
+    assert miss["runs"] == []
 
 
 def test_report_route_serves_html_and_404s_unknown(tmp_path: Path):
@@ -1036,3 +1096,105 @@ def test_background_overlay_roundtrip(tmp_path: Path, monkeypatch: pytest.Monkey
         # 恢复默认背景不影响遮罩选择
         client.delete("/api/ui/background")
         assert client.get("/api/ui/background").json()["overlay"] == "dark"
+
+
+# ----------------------------------------------------------------- 报告内问答
+
+
+def add_transcript(run_dir: Path) -> None:
+    """问答路由要求 run 目录里有转写稿，最小两段即可。"""
+    transcript.write_jsonl(
+        [
+            TranscriptUnit(id="u0001", start=0.0, end=10.0, text="第一个前提。"),
+            TranscriptUnit(id="u0002", start=12.0, end=20.0, text="第二个前提。"),
+        ],
+        run_dir / "transcript.jsonl",
+    )
+
+
+def fake_answer(question: str = "前提是什么") -> qa.Answer:
+    return qa.Answer(
+        answer_html='<div data-source-units="u0001"><p>结论</p></div>',
+        citations=[
+            qa.Citation(
+                unit_id="u0001",
+                seconds=0.0,
+                time_text="00:00",
+                snippet="第一个前提。",
+                section_id="s1",
+                section_index=1,
+            )
+        ],
+        usage_total=12,
+    )
+
+
+def test_qa_route_answers_and_persists_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    make_run(tmp_path, RUN_ID)
+    add_transcript(tmp_path / RUN_ID)
+    seen: dict[str, str] = {}
+
+    def stub(run_dir: Path, question: str, **kwargs) -> qa.Answer:
+        seen["run_dir"] = str(run_dir)
+        seen["question"] = question
+        return fake_answer()
+
+    monkeypatch.setattr("videread.report.qa.answer_question", stub)
+
+    with TestClient(create_app(tmp_path)) as client:
+        resp = client.post(f"/api/runs/{RUN_ID}/qa", json={"question": "  前提是什么  "})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["answer_html"] == fake_answer().answer_html
+        assert body["citations"][0]["unit_id"] == "u0001"
+        assert body["citations"][0]["time_text"] == "00:00"
+        assert body["url"] == URL, "跳转原视频需要 run 的原链接"
+
+        history = client.get(f"/api/runs/{RUN_ID}/qa").json()["history"]
+
+    assert seen["question"] == "前提是什么", "问题两端空白应被裁掉"
+    assert len(history) == 1
+    assert history[0]["question"] == "前提是什么"
+    assert history[0]["usage_total"] == 12
+    assert (tmp_path / RUN_ID / "qa.jsonl").is_file()
+
+
+def test_qa_route_404_on_unknown_run(tmp_path: Path):
+    with TestClient(create_app(tmp_path)) as client:
+        assert client.post("/api/runs/nope-00000000/qa", json={"question": "在吗"}).status_code == 404
+        assert client.get("/api/runs/nope-00000000/qa").status_code == 404
+
+
+def test_qa_route_409_without_transcript(tmp_path: Path):
+    make_run(tmp_path, RUN_ID)  # 没有 transcript.jsonl
+
+    with TestClient(create_app(tmp_path)) as client:
+        resp = client.post(f"/api/runs/{RUN_ID}/qa", json={"question": "在吗"})
+
+    assert resp.status_code == 409
+    assert "转写稿" in resp.json()["detail"]
+
+
+def test_qa_route_400_on_usage_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    make_run(tmp_path, RUN_ID)
+    add_transcript(tmp_path / RUN_ID)
+
+    def boom(run_dir: Path, question: str, **kwargs):
+        raise UsageError("请输入问题")
+
+    monkeypatch.setattr("videread.report.qa.answer_question", boom)
+
+    with TestClient(create_app(tmp_path)) as client:
+        resp = client.post(f"/api/runs/{RUN_ID}/qa", json={"question": ""})
+
+    assert resp.status_code == 400
+    assert "请输入问题" in resp.json()["detail"]
+
+
+def test_qa_history_empty_without_file(tmp_path: Path):
+    make_run(tmp_path, RUN_ID)
+
+    with TestClient(create_app(tmp_path)) as client:
+        body = client.get(f"/api/runs/{RUN_ID}/qa").json()
+
+    assert body == {"run_id": RUN_ID, "history": []}

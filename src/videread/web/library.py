@@ -192,6 +192,48 @@ def list_runs(out_root: Path) -> list[dict]:
     return items
 
 
+#: 报告库每页条数可选项；接口收到其它值时回落到默认值
+RUN_PAGE_SIZES = (5, 10, 20, 50)
+DEFAULT_PAGE_SIZE = 20
+
+
+def query_runs(
+    out_root: Path,
+    page: int = 1,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    keyword: str = "",
+) -> dict:
+    """报告库分页查询：先按关键词过滤，再按页切片。
+
+    关键词命中标题 / UP主 / BV 号 / run_id（忽略大小写），为空则不过滤；
+    page 越界会被夹进有效范围，前端拿到的 page / pages 始终自洽。
+    """
+    items = list_runs(out_root)
+    query = (keyword or "").strip().lower()
+    if query:
+        items = [
+            item
+            for item in items
+            if query
+            in " ".join(
+                (item["title"], item["uploader"], item["bvid"], item["run_id"])
+            ).lower()
+        ]
+
+    size = page_size if page_size in RUN_PAGE_SIZES else DEFAULT_PAGE_SIZE
+    pages = max(1, (len(items) + size - 1) // size)
+    current = min(max(1, page), pages)
+    start = (current - 1) * size
+    return {
+        "runs": items[start : start + size],
+        "total": len(items),
+        "page": current,
+        "page_size": size,
+        "pages": pages,
+        "query": keyword or "",
+    }
+
+
 def delete_run(out_root: Path, run_id: str) -> bool:
     """删除整个 run 目录（meta / 音频 / 转写缓存 / 报告全部产物）。
 
