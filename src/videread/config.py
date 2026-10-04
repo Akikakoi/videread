@@ -30,6 +30,7 @@ MAX_VIDEO_DURATION_SEC = 2 * 3600
 
 # 单次提交云 ASR 的音频时长上限；超过则按静音点切段并行提交（§6.5）
 ASR_SEGMENT_SECONDS = 1800.0
+# 云 ASR 并发提交的默认路数（ASR_MAX_CONCURRENCY 环境变量可覆盖）
 ASR_MAX_CONCURRENCY = 3
 
 # 逐节写作的并发路数。各节互相独立，串行调用是整个流水线最长的一段（§6.8）
@@ -68,6 +69,8 @@ class Settings:
     dashscope_model: str
     # 提交给 Paraformer 的 language_hints；设为 auto 时不传该参数（服务端自动识别）
     dashscope_language: str
+    # 云 ASR 并发提交路数（dashscope / openai 后端切段后并行；realtime 与 local 不用）
+    asr_max_concurrency: int
     llm_base_url: str
     llm_api_key: str
     llm_model_plan: str
@@ -179,6 +182,7 @@ def get_settings(**overrides: object) -> Settings:
         dashscope_language=(
             os.environ.get("DASHSCOPE_LANGUAGE", "").strip() or "zh"
         ),
+        asr_max_concurrency=_env_int("ASR_MAX_CONCURRENCY", ASR_MAX_CONCURRENCY),
         llm_base_url=(
             os.environ.get("LLM_BASE_URL", "").strip() or "https://api.deepseek.com/v1"
         ),

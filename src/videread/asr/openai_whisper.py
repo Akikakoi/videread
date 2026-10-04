@@ -13,7 +13,6 @@ from typing import Callable
 
 from ..audio import cut_segment, detect_silence, plan_chunks, probe_duration
 from ..config import (
-    ASR_MAX_CONCURRENCY,
     ASR_SEGMENT_SECONDS,
     ASR_SEGMENT_TIMEOUT_SEC,
     Settings,
@@ -74,7 +73,9 @@ class OpenAiWhisperAsr:
 
         silences = detect_silence(audio, settings=self.settings)
         chunks = plan_chunks(total, silences, limit=ASR_SEGMENT_SECONDS)
-        self.progress(f"长音频切段：{len(chunks)} 段（并发 {ASR_MAX_CONCURRENCY}）")
+        self.progress(
+            f"长音频切段：{len(chunks)} 段（并发 {self.settings.asr_max_concurrency}）"
+        )
 
         chunk_dir = (self.cache_dir or audio.parent) / "asr_chunks"
         chunk_dir.mkdir(parents=True, exist_ok=True)
@@ -85,7 +86,7 @@ class OpenAiWhisperAsr:
 
         _checkpoint()
         results: dict[int, list[AsrSegment]] = {}
-        with ThreadPoolExecutor(max_workers=ASR_MAX_CONCURRENCY) as pool:
+        with ThreadPoolExecutor(max_workers=self.settings.asr_max_concurrency) as pool:
             futures = {}
             for index, (start, end) in enumerate(chunks):
                 dest = chunk_dir / f"chunk.{index:03d}.wav"

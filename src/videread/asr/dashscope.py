@@ -16,7 +16,6 @@ import httpx
 
 from ..audio import cut_segment, detect_silence, plan_chunks, probe_duration
 from ..config import (
-    ASR_MAX_CONCURRENCY,
     ASR_SEGMENT_SECONDS,
     ASR_SEGMENT_TIMEOUT_SEC,
     DASHSCOPE_BASE_URL,
@@ -81,7 +80,9 @@ class DashScopeAsr:
             self._checkpoint()
             silences = detect_silence(audio, settings=self.settings)
             chunks = plan_chunks(total, silences, limit=ASR_SEGMENT_SECONDS)
-            self.progress(f"长音频切段：{len(chunks)} 段（并发 {ASR_MAX_CONCURRENCY}）")
+            self.progress(
+                f"长音频切段：{len(chunks)} 段（并发 {self.settings.asr_max_concurrency}）"
+            )
 
         if len(chunks) == 1:
             return self._transcribe_chunk(audio, 0, 0.0, total)
@@ -94,7 +95,7 @@ class DashScopeAsr:
             chunk_files.append((index, start, end, dest))
 
         results: dict[int, list[AsrSegment]] = {}
-        with ThreadPoolExecutor(max_workers=ASR_MAX_CONCURRENCY) as pool:
+        with ThreadPoolExecutor(max_workers=self.settings.asr_max_concurrency) as pool:
             futures = {
                 pool.submit(self._transcribe_chunk, path, index, start, end): index
                 for index, start, end, path in chunk_files
