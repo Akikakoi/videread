@@ -84,7 +84,7 @@ python -m videread.cli BV1xx411c7mD
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `url` | — | Bilibili 视频链接或 BV 号（如 `BV1xx411c7mD`）、本地音视频文件路径；也可以是一个 `.txt` 批量列表（每行一个来源，`#` 为注释，逐个顺序解析，失败不中断） |
-| `--mode` | `standard` | `standard` / `brief`，对应两套模板 |
+| `--mode` | `standard` | `standard` 详细讲解 / `deep` 深度精读 / `brief` 快速概览 / `outline` 极简大纲（每节一句话要点，最快最省） |
 | `--out` | 项目根 `runs/` | 产物根目录 |
 | `--no-cache` | 关 | 忽略已有产物，全部重跑 |
 | `--keep-audio` | 关 | 跑完保留音频中间文件（默认自动清理） |
@@ -193,7 +193,7 @@ videread/
 │  ├─ report/                 # outline / writer / prompts
 │  ├─ render.py trace.py      # 模板填充与埋点
 │  ├─ web/                    # 本地控制台（FastAPI + 原生前端）
-│  └─ templates/              # standard / brief 两套模板
+│  └─ templates/              # standard/deep 共用 + brief + outline 三套模板
 ├─ runs/                      # 运行产物（不入库）
 └─ tests/                     # 离线用例
 ```

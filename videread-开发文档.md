@@ -139,7 +139,8 @@ videread/
 │  ├─ trace.py
 │  └─ templates/
 │     ├─ report.html          # Standard 模板
-│     └─ brief-report.html    # Brief 模板
+│     ├─ brief-report.html    # Brief 模板
+│     └─ outline-report.html  # Outline 模板（每节一句话要点）
 ├─ runs/                      # 运行产物（gitignore）
 │  └─ <run-id>/
 └─ tests/
@@ -263,7 +264,9 @@ videread/
 #   <url>                     链接 / BV 号 / 本地文件；指向存在的 .txt 时进入批量模式
 #                             （每行一个来源，# 为注释，逐个顺序解析，失败不中断，
 #                             退出码取第一个失败的任务）
-#   --mode {standard,brief}   阅读模式，默认 standard
+#   --mode {standard,deep,brief,outline}
+#                             阅读模式，默认 standard；deep 复用 standard 模板只加篇幅，
+#                             outline 每节一句话要点（独立轻模板）
 #   --out DIR                 产物根目录，默认 ./runs
 #   --no-cache                忽略已有产物，全部重跑
 #   --keep-audio              跑完保留音频中间文件（默认自动清理）
