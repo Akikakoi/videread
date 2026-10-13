@@ -33,6 +33,19 @@ ASR_SEGMENT_SECONDS = 1800.0
 # 云 ASR 并发提交的默认路数（ASR_MAX_CONCURRENCY 环境变量可覆盖）
 ASR_MAX_CONCURRENCY = 3
 
+# 实时（WebSocket）通道的单段时长上限，比异步通道短得多（ASR_REALTIME_SEGMENT_SECONDS 覆盖）。
+# 实时通道是「一条连接推完一整段」的长连接：段越长，单次失败要重推的音频越多、
+# 连接被服务端回收的风险越高。取 5 分钟让单次失败的重推代价可控，
+# 且每段结束即落盘，中断后重跑只补未完成的段；多段之间按 ASR_MAX_CONCURRENCY 并行推流。
+ASR_REALTIME_SEGMENT_SECONDS = 300.0
+
+# 实时通道的推流倍速（ASR_REALTIME_SPEEDUP 覆盖）。1.0 = 按音频真实时长匀速推，
+# 与官方示例一致；服务端按实时速率解码，推快了就来不及消费、缓冲堆压，
+# 最终表现为 keepalive ping 超时（连接被判定假死而断开）。
+# 实测 4.0 稳定（90s 音频 32s、完整 300s 段 90s 出结果），8.0 收益见顶（瓶颈
+# 变为服务端收尾处理），不建议超过 4.0。
+ASR_REALTIME_SPEEDUP = 1.0
+
 # 逐节写作的并发路数。各节互相独立，串行调用是整个流水线最长的一段（§6.8）
 LLM_WRITE_CONCURRENCY = 3
 
@@ -69,8 +82,11 @@ class Settings:
     dashscope_model: str
     # 提交给 Paraformer 的 language_hints；设为 auto 时不传该参数（服务端自动识别）
     dashscope_language: str
-    # 云 ASR 并发提交路数（dashscope / openai 后端切段后并行；realtime 与 local 不用）
+    # 云 ASR 并发提交路数（dashscope / openai / dashscope-realtime 切段后并行；local 不用）
     asr_max_concurrency: int
+    # 实时通道单段时长上限与推流倍速（asr_realtime_segment_seconds / asr_realtime_speedup）
+    asr_realtime_segment_seconds: float
+    asr_realtime_speedup: float
     llm_base_url: str
     llm_api_key: str
     llm_model_plan: str
@@ -183,6 +199,14 @@ def get_settings(**overrides: object) -> Settings:
             os.environ.get("DASHSCOPE_LANGUAGE", "").strip() or "zh"
         ),
         asr_max_concurrency=_env_int("ASR_MAX_CONCURRENCY", ASR_MAX_CONCURRENCY),
+        asr_realtime_segment_seconds=_env_float(
+            "ASR_REALTIME_SEGMENT_SECONDS", ASR_REALTIME_SEGMENT_SECONDS
+        ),
+        # 倍速必须 >= 1.0：小于 1 会把音频放慢推，等于让服务端按更长的真实时间
+        # 去解码同一段音频，白白拉长连接时长，反而更容易踩超时
+        asr_realtime_speedup=max(
+            1.0, _env_float("ASR_REALTIME_SPEEDUP", ASR_REALTIME_SPEEDUP)
+        ),
         llm_base_url=(
             os.environ.get("LLM_BASE_URL", "").strip() or "https://api.deepseek.com/v1"
         ),
