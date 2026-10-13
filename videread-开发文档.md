@@ -262,6 +262,26 @@ videread/
 
 读取时损坏行跳过，不影响其余记录。
 
+### 5.7 `.favorites.json`
+
+收藏表，位于产物根目录下（与 run 同级，不在 run 内部），首次收藏时创建：
+
+```json
+{"BV1xx411c7mD-3f9a2c11": "2026-10-04 20:15:02"}
+```
+
+`run_id → 收藏时间`（`YYYY-MM-DD HH:MM:SS`，可直接字典序比较收藏先后）；文件缺失或损坏一律视为「无收藏」，删除 run 时同步摘除对应键。
+
+### 5.8 `.titles.json`
+
+报告库自定义标题覆盖表，位于产物根目录下（与收藏表同位置）：
+
+```json
+{"BV1xx411c7mD-3f9a2c11": "我自己的总结标题"}
+```
+
+`run_id → 标题`（上限 200 字）；`POST /api/runs/{run_id}/title` 写入，标题空白视为恢复原标题（摘除该键）。覆盖在 `list_runs` / `run_detail` 出口统一套用并落在副本上：列表、关键词检索、全文检索、详情与导出文件名全部跟随新标题，`_ENTRY_CACHE` 与 meta.json / report.html 原样不动；未改名条目不携带 `title_original` 冗余字段。文件缺失或损坏视为「全部未改名」，删除 run 时同步摘除对应键（重新生成同名 run 不继承旧名字）。
+
 ---
 
 ## 6. 模块设计
@@ -408,7 +428,15 @@ class LocalWhisperAsr:
   **这条路径不读写 OSS 上传桶**，适用于只发放工作空间 `sk-ws-` 凭据、异步上传路径报
   `Resource.AccessDenied (ownership check failed)` 的账号。收发必须并发，故用 asyncio 版 WebSocket 客户端
   （同步 API 跨线程收发会卡住）。模型取 `DASHSCOPE_MODEL`（含 `realtime` 时）否则 `paraformer-realtime-v2`
-- **长音频切段**：云 ASR 通常有单次时长上限。用 `detect_silence` 找到接近上限的静音点切分；异步后端切段后**并行提交**（建议并发 2–3），实时后端因单连接顺序流式，**顺序提交**，最后按 `start` 排序拼接。切段之间有取消检查点（Web 控制台取消任务用）：抛 `CancelledError` 时撤销未开始的段，已完成的段缓存已落盘不白花
+- **实时通道必须限速推流**（`ASR_REALTIME_SPEEDUP`，默认 1.0）：服务端按真实时间消费音频，
+  把整段以本地磁盘读取速度灌进去会让它的接收缓冲堆压、迟迟不回 pong，客户端心跳判定连接
+  假死并断开，报 `ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout`。
+  节拍按「已推音频时长 / 倍速」换算成墙钟目标时刻，每帧对着同一基准算差值，误差不累积；
+  每帧之后必须 `await` 让出事件循环，否则接收协程读不到 pong，心跳同样会饿死。
+  配套两条：单段上限 `ASR_REALTIME_SEGMENT_SECONDS`（默认 300s，比异步通道的 1800s 短，
+  失败重推代价可控）、超时预算按 `段长/倍速 + 连接余量 + 收尾余量` 计算而**不是**固定的
+  `ASR_SEGMENT_TIMEOUT_SEC`——固定 600s 在 5 分钟以上的段上必然不够，那正是此故障的另一直接成因
+- **长音频切段**：云 ASR 通常有单次时长上限。用 `detect_silence` 找到接近上限的静音点切分；异步与实时后端切段后都**并行提交**（路数共用 `ASR_MAX_CONCURRENCY`，实时通道每段是独立连接、独立任务），最后按 `start` 排序拼接。实时通道叠加 `ASR_REALTIME_SPEEDUP` 倍速推流（实测 4x 稳定、8x 收益见顶），700s 音频 3 路并行 × 4x 约 78s 出结果。切段之间有取消检查点（Web 控制台取消任务用）：抛 `CancelledError` 时撤销未开始的段，已完成的段缓存已落盘不白花
 - 时间戳修正：每段 ASR 返回的时间戳是**段内相对时间**，需要加上该段的全局偏移
 - 失败重试：指数退避，最多 3 次；单段失败不影响其他段，失败段写进 `run.trace.jsonl`
 - 结果**立即落盘** `asr.raw.jsonl`，避免重试导致重复付费
@@ -509,7 +537,10 @@ def load_history(run_dir) -> list[dict]
 
 | 接口 | 说明 |
 |---|---|
-| `GET /api/runs?page=&page_size=&q=` | 报告库分页查询：`page` 从 1 起；`q` 过滤标题 / UP主 / BV 号；`page_size` 只接受 5 / 10 / 20 / 50，其余回落默认 20；越界页码夹到有效范围；返回 `total` / `page` / `pages` / `page_size` |
+| `GET /api/runs?page=&page_size=&q=&fav=` | 报告库分页查询：`page` 从 1 起；`q` 过滤标题 / UP主 / BV 号；`fav=1` 只看收藏；`page_size` 只接受 5 / 10 / 20 / 50，其余回落默认 20；越界页码夹到有效范围；返回 `total` / `page` / `pages` / `page_size`，每条带 `favorite` / `favorited_at`，只看收藏时按收藏先后排列 |
+| `POST /api/runs/{run_id}/favorite` | 收藏该 run（写 `<out>/.favorites.json`，§5.7）；run 不存在返回 404 |
+| `DELETE /api/runs/{run_id}/favorite` | 取消收藏；重复取消同样成功，前端不必先查状态 |
+| `POST /api/runs/{run_id}/title` | 改报告库展示标题（写 `<out>/.titles.json`，§5.8）：标题非空白即覆盖（上限 200 字，超长 400），空白恢复原标题；返回 `{run_id, title, title_original, custom}`，run 不存在返回 404 |
 | `POST /api/runs/{run_id}/qa` | 就指定报告提问，返回答案 HTML 与引用，并追加 `qa.jsonl` |
 | `GET /api/runs/{run_id}/qa` | 读取该报告的问答历史 |
 
