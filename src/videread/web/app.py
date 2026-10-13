@@ -55,6 +55,10 @@ class QaRequest(BaseModel):
     question: str
 
 
+class TitleRequest(BaseModel):
+    title: str = ""
+
+
 def _frame(item: dict) -> str:
     """SSE 帧：event + data + 空行（缺空行浏览器不派发）。"""
     data = json.dumps(item, ensure_ascii=False)
@@ -231,12 +235,20 @@ def create_app(out_root: Path) -> FastAPI:
         page: int = 1,
         page_size: int = library.DEFAULT_PAGE_SIZE,
         q: str = "",
+        fav: int = 0,
     ) -> dict:
-        """报告库分页查询：page 从 1 起，q 过滤标题 / UP主 / BV 号。
+        """报告库分页查询：page 从 1 起，q 过滤标题 / UP主 / BV 号，fav=1 只看收藏。
 
         page_size 只接受 5/10/20/50，其余回落到默认值；越界页码会被夹到有效范围。
+        每条结果都带 favorite 标记；只看收藏时按收藏先后排列。
         """
-        result = library.query_runs(out_root, page=page, page_size=page_size, keyword=q)
+        result = library.query_runs(
+            out_root,
+            page=page,
+            page_size=page_size,
+            keyword=q,
+            favorites_only=bool(fav),
+        )
         return {"out_root": str(out_root), **result}
 
     @app.get("/api/search")
@@ -262,6 +274,45 @@ def create_app(out_root: Path) -> FastAPI:
         if not library.delete_run(out_root, run_id):
             raise HTTPException(status_code=404, detail="未找到该 run")
         return {"deleted": run_id}
+
+    # ------------------------------------------------------------------ 收藏
+
+    @app.post("/api/runs/{run_id}/favorite")
+    def api_add_favorite(run_id: str) -> dict:
+        """收藏一个 run（写入 out_root 下的 .favorites.json）。"""
+        if library.safe_run_dir(out_root, run_id) is None:
+            raise HTTPException(status_code=404, detail="未找到该 run")
+        library.set_favorite(out_root, run_id, True)
+        return {"run_id": run_id, "favorite": True}
+
+    @app.delete("/api/runs/{run_id}/favorite")
+    def api_remove_favorite(run_id: str) -> dict:
+        """取消收藏；重复取消同样返回成功，前端不必先查状态。"""
+        if library.safe_run_dir(out_root, run_id) is None:
+            raise HTTPException(status_code=404, detail="未找到该 run")
+        library.set_favorite(out_root, run_id, False)
+        return {"run_id": run_id, "favorite": False}
+
+    # ------------------------------------------------------------- 标题改名
+
+    @app.post("/api/runs/{run_id}/title")
+    def api_rename_run(run_id: str, payload: TitleRequest) -> dict:
+        """改报告库的展示标题（写入 out_root 下的 .titles.json 覆盖表）。
+
+        标题非空白即覆盖，空白视为恢复原标题（meta.json 与 report.html
+        始终原样保留）。列表、检索与导出文件名都从同一条路径取标题，
+        改一处全部生效。
+        """
+        title = (payload.title or "").strip()
+        if len(title) > library.TITLE_MAX_CHARS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"标题最长 {library.TITLE_MAX_CHARS} 字（当前 {len(title)} 字）",
+            )
+        result = library.set_title(out_root, run_id, title)
+        if result is None:
+            raise HTTPException(status_code=404, detail="未找到该 run")
+        return result
 
     # ------------------------------------------------------------- 报告内问答
 

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import threading
@@ -177,17 +178,28 @@ def _entry(run_dir: Path) -> dict | None:
 
 
 def list_runs(out_root: Path) -> list[dict]:
-    """列出 out_root 下所有可识别的 run，按生成时间倒序。"""
+    """列出 out_root 下所有可识别的 run，按生成时间倒序。
+
+    自定义标题在此统一套用：列表、检索、详情与导出文件名都从这条路径取
+    标题，改一处全部生效。覆盖只落在副本上，不污染 _ENTRY_CACHE。
+    """
     root = Path(out_root)
     if not root.is_dir():
         return []
+    titles = load_titles(root)
     items: list[dict] = []
     for child in root.iterdir():
         if not child.is_dir() or not _RUN_ID_RE.match(child.name):
             continue
         entry = _entry(child)
-        if entry is not None:
-            items.append(entry)
+        if entry is None:
+            continue
+        custom = titles.get(entry["run_id"], "")
+        if custom and custom != entry["title"]:
+            entry = dict(entry)
+            entry["title_original"] = entry["title"]
+            entry["title"] = custom
+        items.append(entry)
     items.sort(key=lambda item: item["mtime"], reverse=True)
     return items
 
@@ -196,19 +208,155 @@ def list_runs(out_root: Path) -> list[dict]:
 RUN_PAGE_SIZES = (5, 10, 20, 50)
 DEFAULT_PAGE_SIZE = 20
 
+# ---------------------------------------------------------------- 收藏
+
+#: 收藏表文件名，存于 out_root 下；扫描 run 时按「非目录」跳过，不会混入列表
+FAVORITES_FILE = ".favorites.json"
+_FAVORITES_LOCK = threading.Lock()
+
+
+def _now_text() -> str:
+    return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def load_favorites(out_root: Path) -> dict[str, str]:
+    """读取收藏表：`run_id → 收藏时间`（时间形如 `YYYY-MM-DD HH:MM:SS`，可直接字典序比较）。
+
+    文件缺失或损坏时一律视为「没有任何收藏」，坏数据不拖垮整份列表。
+    """
+    path = Path(out_root) / FAVORITES_FILE
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        key: value
+        for key, value in data.items()
+        if isinstance(key, str)
+        and isinstance(value, str)
+        and _RUN_ID_RE.match(key)
+    }
+
+
+def set_favorite(out_root: Path, run_id: str, favorite: bool) -> bool:
+    """收藏 / 取消收藏一个 run，返回变更后的状态；run 是否存在由调用方校验。"""
+    with _FAVORITES_LOCK:
+        favorites = load_favorites(out_root)
+        if favorite:
+            favorites.setdefault(run_id, _now_text())  # 重复收藏保留最初的先后次序
+        else:
+            favorites.pop(run_id, None)
+        path = Path(out_root) / FAVORITES_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(favorites, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    return favorite
+
+
+# ---------------------------------------------------------------- 标题改名
+
+#: 自定义标题表文件名，存于 out_root 下；与收藏表一样不会混进 run 列表
+TITLES_FILE = ".titles.json"
+#: 自定义标题长度上限：够写一句有信息量的概括，又不至于把卡片撑成两行以上
+TITLE_MAX_CHARS = 200
+_TITLES_LOCK = threading.Lock()
+
+
+def load_titles(out_root: Path) -> dict[str, str]:
+    """读取自定义标题表：`run_id → 标题`。
+
+    文件缺失 / 损坏 / 条目非法一律按「没有改名」处理——改名只是展示层
+    的偏好，坏数据不值得拖垮整份报告库。
+    """
+    path = Path(out_root) / TITLES_FILE
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        key: value.strip()
+        for key, value in data.items()
+        if isinstance(key, str)
+        and _RUN_ID_RE.match(key)
+        and isinstance(value, str)
+        and value.strip()
+    }
+
+
+def set_title(out_root: Path, run_id: str, title: str) -> dict | None:
+    """改报告库展示标题；run 不存在或 meta 损坏返回 None。
+
+    - 标题非空白：写入覆盖表，列表 / 检索 / 详情 / 导出文件名从此用新标题
+    - 标题空白：从覆盖表摘掉该条，回落到 meta.json 的原标题
+      （存空串会让每处展示都得再判一层空值，摘掉更干净）
+
+    meta.json 与 report.html 原样保留：改的是「陈列名」，不是报告本身。
+    返回 {run_id, title, title_original, custom} 供前端就地更新。
+    """
+    run_dir = safe_run_dir(out_root, run_id)
+    if run_dir is None:
+        return None
+    base = _entry(run_dir)
+    if base is None:
+        return None
+    original = str(base["title"])
+    cleaned = (title or "").strip()
+    with _TITLES_LOCK:
+        titles = load_titles(out_root)
+        if cleaned:
+            titles[run_id] = cleaned[:TITLE_MAX_CHARS]
+        else:
+            titles.pop(run_id, None)
+        path = Path(out_root) / TITLES_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(titles, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    return {
+        "run_id": run_id,
+        "title": titles.get(run_id, original),
+        "title_original": original,
+        "custom": run_id in titles,
+    }
+
 
 def query_runs(
     out_root: Path,
     page: int = 1,
     page_size: int = DEFAULT_PAGE_SIZE,
     keyword: str = "",
+    favorites_only: bool = False,
 ) -> dict:
     """报告库分页查询：先按关键词过滤，再按页切片。
 
     关键词命中标题 / UP主 / BV 号 / run_id（忽略大小写），为空则不过滤；
     page 越界会被夹进有效范围，前端拿到的 page / pages 始终自洽。
+    每条都带 `favorite` 标记；`favorites_only` 时只留收藏，并按收藏先后排列。
     """
-    items = list_runs(out_root)
+    favorites = load_favorites(out_root)
+    # 缓存条目只读：写收藏标记一律落在副本上，避免污染 _ENTRY_CACHE
+    items: list[dict] = []
+    for entry in list_runs(out_root):
+        item = dict(entry)
+        item["favorite"] = entry["run_id"] in favorites
+        item["favorited_at"] = favorites.get(entry["run_id"], "")
+        items.append(item)
+
+    if favorites_only:
+        items = [item for item in items if item["favorite"]]
+        items.sort(key=lambda item: item["favorited_at"])  # 先收藏的在前
+
     query = (keyword or "").strip().lower()
     if query:
         items = [
@@ -239,12 +387,33 @@ def delete_run(out_root: Path, run_id: str) -> bool:
 
     报告库的「删除记录」走这里：safe_run_dir 先挡住路径穿越，
     只允许删 out_root 的直接子目录；删除失败或目录不存在返回 False。
+    删除成功后顺手摘掉收藏，避免留下指向空目录的悬空标记。
     """
     run_dir = safe_run_dir(out_root, run_id)
     if run_dir is None:
         return False
     shutil.rmtree(run_dir, ignore_errors=True)
-    return not run_dir.exists()
+    if run_dir.exists():
+        return False
+    with _FAVORITES_LOCK:
+        favorites = load_favorites(out_root)
+        if favorites.pop(run_id, None) is not None:
+            path = Path(out_root) / FAVORITES_FILE
+            path.write_text(
+                json.dumps(favorites, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+    # 改名记录一并清掉：删除的语义是「这条记录从报告库彻底消失」，
+    # 留着悬空标题会让重新生成的同名 run 意外继承旧名字
+    with _TITLES_LOCK:
+        titles = load_titles(out_root)
+        if titles.pop(run_id, None) is not None:
+            path = Path(out_root) / TITLES_FILE
+            path.write_text(
+                json.dumps(titles, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+    return True
 
 
 def run_detail(out_root: Path, run_id: str) -> dict | None:
@@ -257,6 +426,12 @@ def run_detail(out_root: Path, run_id: str) -> dict | None:
         return None
     # 缓存条目只读；后续 update 一律落在副本上，避免污染缓存
     entry = dict(base)
+
+    # 与列表同源：详情里也展示自定义标题（title_original 留着给前端做提示）
+    custom = load_titles(out_root).get(run_id, "")
+    if custom and custom != entry["title"]:
+        entry["title_original"] = entry["title"]
+        entry["title"] = custom
 
     outline = _read_outline(run_dir / "outline.json")
     sections = (

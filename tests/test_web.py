@@ -299,6 +299,170 @@ def test_api_runs_filters_by_keyword(tmp_path: Path):
     assert miss["runs"] == []
 
 
+def test_api_favorite_toggle_marks_run(tmp_path: Path):
+    make_run(tmp_path, RUN_ID)
+    with TestClient(create_app(tmp_path)) as client:
+        before = client.get("/api/runs").json()["runs"][0]["favorite"]
+        added = client.post(f"/api/runs/{RUN_ID}/favorite").json()
+        marked = client.get("/api/runs").json()["runs"][0]
+        removed = client.delete(f"/api/runs/{RUN_ID}/favorite").json()
+        after = client.get("/api/runs").json()["runs"][0]["favorite"]
+
+    assert before is False
+    assert added["favorite"] is True
+    assert marked["favorite"] is True
+    assert removed["favorite"] is False
+    assert after is False
+
+
+def test_api_runs_favorites_only_orders_by_favorite_time(tmp_path: Path):
+    make_run(tmp_path, RUN_ID, title="先收藏")
+    make_run(tmp_path, "BV1xx411c7mD-cccccccc", title="后收藏")
+    # 直接写收藏表：秒级时间戳在同一次测试里区分不开，这里给两个确定的时间
+    (tmp_path / library.FAVORITES_FILE).write_text(
+        json.dumps(
+            {RUN_ID: "2026-10-01 09:00:00", "BV1xx411c7mD-cccccccc": "2026-10-02 09:00:00"},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with TestClient(create_app(tmp_path)) as client:
+        body = client.get("/api/runs?fav=1").json()
+        all_runs = client.get("/api/runs").json()
+
+    assert body["total"] == 2
+    # 只看收藏时按收藏先后排列，而非生成时间倒序
+    assert [item["title"] for item in body["runs"]] == ["先收藏", "后收藏"]
+    # 未收藏的记录在普通列表里仍带 favorite=False
+    assert all_runs["total"] == 2
+    assert all(item["favorite"] is True for item in all_runs["runs"])
+
+
+def test_favorite_dropped_when_run_deleted(tmp_path: Path):
+    make_run(tmp_path, RUN_ID)
+    with TestClient(create_app(tmp_path)) as client:
+        client.post(f"/api/runs/{RUN_ID}/favorite")
+        client.delete(f"/api/runs/{RUN_ID}")
+        empty = client.get("/api/runs?fav=1").json()
+        missing = client.post("/api/runs/BVnope-00000000/favorite")
+
+    assert empty["total"] == 0
+    assert library.load_favorites(tmp_path) == {}
+    assert missing.status_code == 404
+
+
+# ------------------------------------------------------------- 标题改名
+
+
+def test_rename_title_updates_list_detail_and_search(tmp_path: Path):
+    """改名后列表 / 详情 / 检索三处同源生效，原标题保留在 title_original。"""
+    make_run(tmp_path, RUN_ID, title="原标题")
+    with TestClient(create_app(tmp_path)) as client:
+        renamed = client.post(
+            f"/api/runs/{RUN_ID}/title", json={"title": "  我自己的总结标题  "}
+        ).json()
+        listed = client.get("/api/runs").json()["runs"][0]
+        detail = client.get(f"/api/runs/{RUN_ID}").json()
+        found = client.get("/api/runs?q=总结标题").json()
+
+    assert renamed == {
+        "run_id": RUN_ID,
+        "title": "我自己的总结标题",
+        "title_original": "原标题",
+        "custom": True,
+    }
+    assert listed["title"] == "我自己的总结标题"
+    assert listed["title_original"] == "原标题"
+    assert detail["title"] == "我自己的总结标题"
+    # 关键词检索按新标题命中（检索范围取自同一份列表数据）
+    assert found["total"] == 1
+    # meta.json 原样保留：改名只动展示层
+    assert json.loads((tmp_path / RUN_ID / "meta.json").read_text(encoding="utf-8"))["title"] == "原标题"
+
+
+def test_rename_blank_title_restores_original(tmp_path: Path):
+    """空白标题 = 恢复原标题：覆盖条目被摘掉而不是存空串。"""
+    make_run(tmp_path, RUN_ID, title="原标题")
+    with TestClient(create_app(tmp_path)) as client:
+        client.post(f"/api/runs/{RUN_ID}/title", json={"title": "改名了"})
+        restored = client.post(f"/api/runs/{RUN_ID}/title", json={"title": "   "}).json()
+        listed = client.get("/api/runs").json()["runs"][0]
+
+    assert restored["title"] == "原标题"
+    assert restored["custom"] is False
+    assert listed["title"] == "原标题"
+    assert "title_original" not in listed  # 未改名条目不带冗余字段
+    assert library.load_titles(tmp_path) == {}
+
+
+def test_rename_persists_across_reload(tmp_path: Path):
+    """覆盖表落盘：重开一个 app 实例（模拟重启服务）后标题仍是改名后的。"""
+    make_run(tmp_path, RUN_ID, title="原标题")
+    with TestClient(create_app(tmp_path)) as client:
+        client.post(f"/api/runs/{RUN_ID}/title", json={"title": "重启后仍在"})
+    with TestClient(create_app(tmp_path)) as client:
+        assert client.get("/api/runs").json()["runs"][0]["title"] == "重启后仍在"
+
+
+def test_rename_rejects_overlong_title(tmp_path: Path):
+    make_run(tmp_path, RUN_ID)
+    with TestClient(create_app(tmp_path)) as client:
+        long_title = "长" * (library.TITLE_MAX_CHARS + 1)
+        response = client.post(f"/api/runs/{RUN_ID}/title", json={"title": long_title})
+        ok = client.post(
+            f"/api/runs/{RUN_ID}/title", json={"title": "长" * library.TITLE_MAX_CHARS}
+        )
+
+    assert response.status_code == 400
+    assert "200" in response.json()["detail"]
+    assert ok.status_code == 200
+
+
+def test_rename_404s_unknown_run(tmp_path: Path):
+    with TestClient(create_app(tmp_path)) as client:
+        assert client.post("/api/runs/BV1xx411c7mD-ffffffff/title", json={"title": "x"}).status_code == 404
+
+
+def test_rename_survives_traversal_attempt(tmp_path: Path):
+    (tmp_path / ".titles.json").write_text("{}", encoding="utf-8")
+    with TestClient(create_app(tmp_path)) as client:
+        response = client.post("/api/runs/..%2f..%2fsecret/title", json={"title": "x"})
+
+    assert response.status_code == 404
+
+
+def test_title_dropped_when_run_deleted(tmp_path: Path):
+    """删除记录连改名记录一起清：重新生成同名 run 不继承旧名字。"""
+    make_run(tmp_path, RUN_ID, title="原标题")
+    with TestClient(create_app(tmp_path)) as client:
+        client.post(f"/api/runs/{RUN_ID}/title", json={"title": "改名了"})
+        client.delete(f"/api/runs/{RUN_ID}")
+
+    assert library.load_titles(tmp_path) == {}
+
+
+def test_load_titles_ignores_corrupt_file(tmp_path: Path):
+    make_run(tmp_path, RUN_ID, title="原标题")
+    (tmp_path / library.TITLES_FILE).write_text("{ 损坏的 JSON", encoding="utf-8")
+
+    with TestClient(create_app(tmp_path)) as client:
+        runs = client.get("/api/runs").json()["runs"]
+
+    assert library.load_titles(tmp_path) == {}
+    assert runs[0]["title"] == "原标题"
+
+
+def test_rename_updates_export_filename(tmp_path: Path):
+    """导出文件名跟随展示标题：改名后导出的 md 用新名字（ASCII 可直接比对）。"""
+    make_run(tmp_path, RUN_ID, title="original")
+    with TestClient(create_app(tmp_path)) as client:
+        client.post(f"/api/runs/{RUN_ID}/title", json={"title": "my summary"})
+        disposition = client.get(f"/api/runs/{RUN_ID}/markdown").headers["content-disposition"]
+
+    assert "my%20summary.md" in disposition
+
+
 def test_report_route_serves_html_and_404s_unknown(tmp_path: Path):
     make_run(tmp_path, RUN_ID)
     with TestClient(create_app(tmp_path)) as client:

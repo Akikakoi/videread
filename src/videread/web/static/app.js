@@ -51,10 +51,7 @@
     pageList: document.getElementById("runs-page-list"),
     pageSize: document.getElementById("runs-page-size"),
     filter: document.getElementById("filter"),
-    fulltextToggle: document.getElementById("fulltext-toggle"),
-    toggleStats: document.getElementById("toggle-stats"),
-    statsPanel: document.getElementById("stats"),
-    refresh: document.getElementById("refresh-runs"),
+    favToggle: document.getElementById("fav-toggle"),
     preview: document.getElementById("preview"),
     previewBoxFrame: document.getElementById("preview-frame"),
     previewTitle: document.getElementById("preview-title"),
@@ -94,10 +91,7 @@
   var runsPageSize = parseInt(window.localStorage.getItem(RUNS_PAGE_SIZE_KEY), 10);
   if (RUNS_PAGE_SIZES.indexOf(runsPageSize) < 0) runsPageSize = 20;
   var listFilterTimer = null;  // 列表过滤：输入防抖（过滤走服务端分页查询）
-  var fulltextMode = false;   // 「全文」开关：开着时过滤框改为搜转写稿正文
-  var searchResults = null;   // 最近一次全文检索的结果（null 表示还没搜过）
-  var searchQuery = "";       // 最近一次检索的关键词（丢弃过期响应用）
-  var searchTimer = null;     // 全文检索的输入防抖
+  var favOnly = false;        // 「收藏」开关：只看收藏的报告（按收藏先后排序）
   var SEARCH_DEBOUNCE_MS = 300;
   var probeCache = { key: null, promise: null };  // 同一输入值只预检一次
   var probeTooLong = false;                        // 当前输入是否已被判超长
@@ -373,7 +367,7 @@
     asr: {
       "": "推荐日常使用。视频自带字幕时直接用字幕、不走转写，选哪个都没差；没字幕的中文视频，各引擎效果也接近。",
       dashscope: "阿里云标准通道：中文准确率最稳，长视频可并行切段、更快；需账号开通对象存储权限，未开通会失败。",
-      "dashscope-realtime": "阿里云实时通道：不需要对象存储权限，标准通道报错时改用这个；顺序推流，长视频会慢一些。",
+      "dashscope-realtime": "阿里云实时通道：不需要对象存储权限，标准通道报错时改用这个；切段并行推流 + 倍速加速，长视频耗时约为音频时长的十分之一。",
       openai: "英文 / 中英混说的内容更强；走 OpenAI 计费且网络需能直连。纯中文内容与阿里云差别不大。",
       local: "本机离线转写：完全免费、不依赖任何账号；速度取决于机器性能，专有名词错字会略多，适合不想付费时用。"
     }
@@ -855,8 +849,9 @@
 
   function loadRuns() {
     var params = ["page=" + runsPage, "page_size=" + runsPageSize];
+    if (favOnly) params.push("fav=1");
     var keyword = el.filter.value.trim();
-    if (!fulltextMode && keyword) params.push("q=" + encodeURIComponent(keyword));
+    if (keyword) params.push("q=" + encodeURIComponent(keyword));
     fetch("/api/runs?" + params.join("&"))
       .then(function (response) { return response.json(); })
       .then(function (data) {
@@ -866,8 +861,7 @@
         runsTotal = data.total || 0;
         // 服务端可能回落非法的每页条数，以它下发的为准，避免下拉与实际列表不符
         if (RUNS_PAGE_SIZES.indexOf(data.page_size) >= 0) runsPageSize = data.page_size;
-        if (fulltextMode) runSearch(el.filter.value.trim());
-        else renderRuns();
+        renderRuns();
       })
       .catch(function () {});
   }
@@ -892,19 +886,23 @@
   }
 
   function renderRuns() {
-    if (fulltextMode) {
-      renderSearchResults(searchResults || [], el.filter.value.trim());
-      return;
-    }
     // 过滤与分页都交给服务端：这里只渲染当前页，避免「只过滤当前页」的错位
     var keyword = el.filter.value.trim();
 
     el.runs.textContent = "";
     el.runsCount.textContent = runsTotal ? "共 " + runsTotal + " 份" : "";
-    show(el.runsEmpty, runsTotal === 0 && !keyword);
+    show(el.runsEmpty, runsTotal === 0 && !keyword && !favOnly);
     renderPager();
     if (!runsCache.length) {
+      // 收藏视图的「空」与「还没有报告」不是一回事，分开提示（以免误导成没有收藏过）
       if (keyword) el.runs.appendChild(node("p", "muted empty", "没有匹配的报告。"));
+      else if (favOnly) el.runs.appendChild(node("p", "muted empty", "还没有收藏的报告。"));
+      return;
+    }
+
+    // 收藏视图按收藏先后排序，跨天会交错，不再按日分组（否则日期标题会重复出现）
+    if (favOnly) {
+      runsCache.forEach(function (run) { el.runs.appendChild(runCard(run)); });
       return;
     }
 
@@ -930,7 +928,7 @@
 
   /* 分页控件：页码窗口 + 每页条数下拉。没有记录时整体隐藏 */
   function renderPager() {
-    if (fulltextMode || runsTotal === 0) {
+    if (runsTotal === 0) {
       show(el.pager, false);
       return;
     }
@@ -986,7 +984,8 @@
   function runCard(run) {
     var card = node("div", "run-card");
 
-    card.appendChild(node("h3", "run-title", run.title || run.run_id));
+    var titleEl = node("h3", "run-title", run.title || run.run_id);
+    card.appendChild(titleEl);
 
     var meta = node("p", "run-meta");
     // 只留给人看的信息：profile / 节数是机器字段与内部统计，不在此处暴露
@@ -1000,6 +999,13 @@
     card.appendChild(meta);
 
     var actions = node("div", "run-actions");
+
+    var favButton = node("button", "btn btn-small btn-fav", run.favorite ? "★ 已收藏" : "☆ 收藏");
+    favButton.type = "button";
+    favButton.dataset.fav = run.favorite ? "1" : "0";
+    favButton.title = run.favorite ? "取消收藏" : "收藏这条报告";
+    favButton.addEventListener("click", function () { toggleFavorite(run, favButton); });
+    actions.appendChild(favButton);
 
     // 原视频只对远程链接可跳转；本地文件的 file:// 会被浏览器拦截
     if (/^https?:\/\//i.test(run.url || "")) {
@@ -1068,6 +1074,12 @@
     detailButton.type = "button";
     actions.appendChild(detailButton);
 
+    var renameButton = node("button", "btn btn-small", "改标题");
+    renameButton.type = "button";
+    renameButton.title = "修改报告库中展示的标题（不影响原视频与报告内容）";
+    renameButton.addEventListener("click", function () { startRename(run, titleEl); });
+    actions.appendChild(renameButton);
+
     var deleteButton = node("button", "btn btn-small btn-danger", "删除");
     deleteButton.type = "button";
     deleteButton.addEventListener("click", function () { confirmDelete(run); });
@@ -1085,6 +1097,99 @@
     });
 
     return card;
+  }
+
+  /* 收藏 / 取消收藏：成功后就地更新星标，不必整页重拉；
+     但在「只看收藏」视图里取消收藏会让条目消失，此时重新拉取列表 */
+  function toggleFavorite(run, button) {
+    var next = !run.favorite;
+    fetch("/api/runs/" + encodeURIComponent(run.run_id) + "/favorite", {
+      method: next ? "POST" : "DELETE"
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        return response.json();
+      })
+      .then(function (data) {
+        run.favorite = Boolean(data.favorite);
+        if (favOnly) { loadRuns(); return; }
+        button.textContent = run.favorite ? "★ 已收藏" : "☆ 收藏";
+        button.dataset.fav = run.favorite ? "1" : "0";
+        button.title = run.favorite ? "取消收藏" : "收藏这条报告";
+      })
+      .catch(function () { window.alert("收藏失败，请检查本地服务后重试。"); });
+  }
+
+  /* 改标题：在卡片标题的位置就地展开输入框，成功后就地更新文字，不必整页重拉。
+     空标题提交 = 恢复原标题（服务端从覆盖表摘掉该条）；与原标题相同则不发请求。 */
+  function startRename(run, titleEl) {
+    if (titleEl.dataset.editing === "1") return;
+    titleEl.dataset.editing = "1";
+    var current = run.title || "";
+
+    var input = document.createElement("input");
+    input.className = "rename-input";
+    input.type = "text";
+    input.value = current;
+    input.maxLength = 200;
+    input.placeholder = "新标题（留空恢复原标题）";
+    input.setAttribute("aria-label", "修改报告标题");
+
+    var ok = node("button", "btn btn-small", "保存");
+    ok.type = "button";
+    var no = node("button", "btn btn-small", "取消");
+    no.type = "button";
+    var editor = node("span", "rename-editor");
+    editor.appendChild(input);
+    editor.appendChild(ok);
+    editor.appendChild(no);
+    titleEl.textContent = "";
+    titleEl.appendChild(editor);
+    input.focus();
+    input.select();
+
+    function finish() {
+      delete titleEl.dataset.editing;
+      titleEl.textContent = run.title || run.run_id;
+    }
+
+    function commit() {
+      var value = input.value.trim();
+      if (value === current) { finish(); return; }
+      ok.disabled = true;
+      no.disabled = true;
+      fetch("/api/runs/" + encodeURIComponent(run.run_id) + "/title", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: value })
+      })
+        .then(function (response) {
+          if (!response.ok) {
+            return response.json().catch(function () { return null; }).then(function (body) {
+              throw new Error((body && body.detail) || "HTTP " + response.status);
+            });
+          }
+          return response.json();
+        })
+        .then(function (data) {
+          run.title = data.title;
+          run.title_original = data.title_original;
+          finish();
+        })
+        .catch(function (err) {
+          window.alert("改名失败：" + err.message);
+          ok.disabled = false;
+          no.disabled = false;
+          input.focus();
+        });
+    }
+
+    ok.addEventListener("click", commit);
+    no.addEventListener("click", finish);
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") { event.preventDefault(); commit(); }
+      else if (event.key === "Escape") { finish(); }
+    });
   }
 
   /* 删除记录：自定义确认弹窗里说明后果（转写缓存一并删除，重新生成要重新付费）。
@@ -1172,90 +1277,13 @@
       });
   }
 
-  /* ─────────────────────── 全文检索与用量统计 ─────────────────────── */
-
-  /* 命中词高亮：大小写不敏感拆分，命中片段包进 <mark> */
-  function appendHighlighted(container, text, query) {
-    if (!query) {
-      container.textContent = text;
-      return;
-    }
-    var lower = text.toLowerCase();
-    var q = query.toLowerCase();
-    var pos = 0;
-    var idx;
-    while ((idx = lower.indexOf(q, pos)) >= 0) {
-      if (idx > pos) container.appendChild(document.createTextNode(text.slice(pos, idx)));
-      container.appendChild(node("mark", null, text.slice(idx, idx + q.length)));
-      pos = idx + q.length;
-    }
-    if (pos < text.length) container.appendChild(document.createTextNode(text.slice(pos)));
-  }
-
-  function renderSearchResults(results, query) {
-    show(el.pager, false);
-    el.runs.textContent = "";
-    el.runsCount.textContent = query ? "全文命中 " + results.length + " 份" : "";
-    show(el.runsEmpty, results.length === 0);
-    if (!results.length) {
-      if (query) {
-        el.runs.appendChild(node("p", "muted empty", "转写稿里没有找到「" + query + "」。"));
-      }
-      return;
-    }
-    el.runs.appendChild(node("p", "search-count", "在全部报告的转写稿正文里命中（最多显示 20 份）："));
-    results.forEach(function (item) {
-      var card = runCard({
-        run_id: item.run_id,
-        title: item.title,
-        uploader: item.uploader,
-        bvid: item.bvid,
-        url: item.url,
-        duration_text: item.duration_text,
-        has_report: Boolean(item.report_url),
-        report_url: item.report_url,
-        generated_at: item.generated_at
-      });
-      var snippet = node("p", "run-snippet");
-      appendHighlighted(snippet, item.snippet, query);
-      card.appendChild(snippet);
-      el.runs.appendChild(card);
-    });
-  }
-
-  function runSearch(query) {
-    searchQuery = query;
-    if (!query || query.length < 2) {
-      searchResults = null;
-      renderRuns();
-      return;
-    }
-    fetch("/api/search?q=" + encodeURIComponent(query))
-      .then(function (response) { return response.json(); })
-      .then(function (data) {
-        if (searchQuery !== query) return;  // 输入已变，丢弃过期响应
-        searchResults = data.results || [];
-        renderRuns();
-      })
-      .catch(function () {});
-  }
-
   el.filter.addEventListener("input", function () {
-    if (!fulltextMode) {
-      // 过滤走服务端分页查询：防抖后从第 1 页重新拉取
-      if (listFilterTimer !== null) window.clearTimeout(listFilterTimer);
-      listFilterTimer = window.setTimeout(function () {
-        listFilterTimer = null;
-        runsPage = 1;
-        loadRuns();
-      }, SEARCH_DEBOUNCE_MS);
-      return;
-    }
-    if (searchTimer !== null) window.clearTimeout(searchTimer);
-    var value = el.filter.value.trim();
-    searchTimer = window.setTimeout(function () {
-      searchTimer = null;
-      runSearch(value);
+    // 过滤走服务端分页查询：防抖后从第 1 页重新拉取
+    if (listFilterTimer !== null) window.clearTimeout(listFilterTimer);
+    listFilterTimer = window.setTimeout(function () {
+      listFilterTimer = null;
+      runsPage = 1;
+      loadRuns();
     }, SEARCH_DEBOUNCE_MS);
   });
 
@@ -1267,64 +1295,12 @@
     loadRuns();
   });
 
-  el.fulltextToggle.addEventListener("click", function () {
-    fulltextMode = !fulltextMode;
-    el.fulltextToggle.dataset.active = fulltextMode ? "1" : "0";
-    el.filter.placeholder = fulltextMode
-      ? "在全部报告的转写稿正文里搜索（≥2 个字）"
-      : "按标题 / UP主 / BV 号过滤";
-    if (fulltextMode) runSearch(el.filter.value.trim());
-    else {
-      searchResults = null;
-      runsPage = 1;
-      loadRuns();
-    }
+  el.favToggle.addEventListener("click", function () {
+    favOnly = !favOnly;
+    el.favToggle.dataset.active = favOnly ? "1" : "0";
+    runsPage = 1;
+    loadRuns();
   });
-
-  /* 统计面板：按日聚合所有 run 的耗时与 token（数据来自 run.trace.jsonl） */
-  function renderStats(days) {
-    el.statsPanel.textContent = "";
-    if (!days.length) {
-      el.statsPanel.appendChild(node("p", "stats-note", "还没有可统计的运行记录。"));
-      return;
-    }
-    var table = node("table");
-    var head = node("tr");
-    ["日期", "任务数", "总耗时", "token"].forEach(function (label, index) {
-      head.appendChild(node("th", index > 0 ? "num" : null, label));
-    });
-    table.appendChild(head);
-    var totals = { runs: 0, ms: 0, tokens: 0 };
-    days.forEach(function (day) {
-      var row = node("tr");
-      row.appendChild(node("td", null, day.date));
-      row.appendChild(node("td", "num", String(day.runs)));
-      row.appendChild(node("td", "num", fmtMs(day.total_ms)));
-      row.appendChild(node("td", "num", day.tokens ? String(day.tokens) : "—"));
-      table.appendChild(row);
-      totals.runs += day.runs;
-      totals.ms += day.total_ms;
-      totals.tokens += day.tokens || 0;
-    });
-    el.statsPanel.appendChild(table);
-    el.statsPanel.appendChild(node("p", "stats-note",
-      "合计 " + totals.runs + " 个任务 · " + fmtMs(totals.ms) + " · token " + totals.tokens));
-  }
-
-  el.toggleStats.addEventListener("click", function () {
-    if (!el.statsPanel.hidden) {
-      show(el.statsPanel, false);
-      return;
-    }
-    el.statsPanel.textContent = "读取中…";
-    show(el.statsPanel, true);
-    fetch("/api/stats")
-      .then(function (response) { return response.json(); })
-      .then(function (data) { renderStats(data.days || []); })
-      .catch(function () { el.statsPanel.textContent = "读取失败。"; });
-  });
-
-  el.refresh.addEventListener("click", loadRuns);
 
   /* ───────────────────────────── 预览浮层 ───────────────────────────── */
 

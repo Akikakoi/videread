@@ -140,11 +140,14 @@ body {
 /* ── 过滤行：输入框 + 全文检索开关 ── */
 .filter-row { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
 .filter-row .filter { flex: 1; margin-bottom: 0; }
-#fulltext-toggle[data-active="1"] {
+#fulltext-toggle[data-active="1"],
+#fav-toggle[data-active="1"] {
   border-color: var(--accent);
   background: var(--accent-soft);
   font-weight: 700;
 }
+/* 收藏星标：已收藏时走强调色，未收藏保持朴素 */
+.btn-fav[data-fav="1"] { color: var(--accent); font-weight: 700; }
 /* 全文命中的关键词高亮 */
 .run-snippet mark { background: var(--accent-soft); color: var(--accent); padding: 0 2px; border-radius: 3px; }
 
@@ -653,6 +656,26 @@ select option { color: var(--ink); background: var(--paper); }
   transform: translateY(-1px);
 }
 .run-title { margin: 0 0 6px; font-size: 14px; font-weight: 600; line-height: 1.5; }
+/* 就地改标题：输入框替换掉标题文字。同一套玻璃输入框配方，
+   高度对齐卡片里 btn-small 的按钮，编辑态不把卡片撑变形 */
+.rename-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rename-input {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--glass-2);
+  border: 1px solid var(--hairline);
+  border-radius: 9px;
+}
+.rename-input:focus {
+  outline: none;
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.rename-input::placeholder { color: var(--ink-mute); }
 /* 一行元信息：UP主 · 时长 · BV号 · 解析时间。用 gap 而非「·」伪元素分隔，
    窄屏折行时不会在行首多出一个分隔点 */
 .run-meta {
