@@ -236,11 +236,15 @@ def create_app(out_root: Path) -> FastAPI:
         page_size: int = library.DEFAULT_PAGE_SIZE,
         q: str = "",
         fav: int = 0,
+        after: str = "",
+        before: str = "",
     ) -> dict:
         """报告库分页查询：page 从 1 起，q 过滤标题 / UP主 / BV 号，fav=1 只看收藏。
 
         page_size 只接受 5/10/20/50，其余回落到默认值；越界页码会被夹到有效范围。
-        每条结果都带 favorite 标记；只看收藏时按收藏先后排列。
+        每条结果都带 favorite 标记与 cursor 游标；只看收藏时按收藏先后排列。
+        after / before 为上/下页游标（上一页末条 / 当前页首条的 cursor 字段），
+        优先于 page：新报告插入列表头部时按游标翻页，窗口不平移、不重复展示。
         """
         result = library.query_runs(
             out_root,
@@ -248,6 +252,8 @@ def create_app(out_root: Path) -> FastAPI:
             page_size=page_size,
             keyword=q,
             favorites_only=bool(fav),
+            after=after,
+            before=before,
         )
         return {"out_root": str(out_root), **result}
 

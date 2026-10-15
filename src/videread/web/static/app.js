@@ -84,6 +84,7 @@
   var timerId = null;
   var runsCache = [];
   var runsPage = 1;          // 报告库当前页（服务端分页，从 1 起）
+  var runsRequestId = 0;     // 报告库请求序号：只认最新响应，丢弃在途过期页
   var runsPages = 1;         // 报告库总页数（服务端下发）
   var runsTotal = 0;         // 当前过滤条件下的记录总数（服务端下发）
   var RUNS_PAGE_SIZE_KEY = "videread.runsPageSize";
@@ -217,7 +218,7 @@
       el.progressBar.dataset.running = "0";
       el.progressPct.textContent = "—";
     } else {
-      el.progressFill.style.transform = "scaleX(" + (percent / 100) + ")";
+      el.progressFill.style.width = percent + "%";
       el.progressBar.setAttribute("aria-valuenow", String(percent));
       el.progressBar.dataset.running =
         (currentState === "running" || currentState === "queued") ? "1" : "0";
@@ -847,14 +848,23 @@
 
   /* ───────────────────────────── 报告库 ───────────────────────────── */
 
-  function loadRuns() {
+  function loadRuns(options) {
+    // options.after / options.before：翻页游标，锚定边界条目本身。偏移分页在
+    // 列表头部插入新报告时窗口整体下移，上一页末尾的条目会在下一页开头重复
+    // 出现；游标翻页不受影响。数字跳页不传游标，仍按页码偏移。
+    var requestId = ++runsRequestId;
+    var opts = options || {};
     var params = ["page=" + runsPage, "page_size=" + runsPageSize];
     if (favOnly) params.push("fav=1");
     var keyword = el.filter.value.trim();
     if (keyword) params.push("q=" + encodeURIComponent(keyword));
+    if (opts.after) params.push("after=" + encodeURIComponent(opts.after));
+    if (opts.before) params.push("before=" + encodeURIComponent(opts.before));
     fetch("/api/runs?" + params.join("&"))
       .then(function (response) { return response.json(); })
       .then(function (data) {
+        // 连续翻页 / 过滤会有多个请求在途：过期响应直接丢弃，避免旧页覆盖新页
+        if (requestId !== runsRequestId) { return; }
         runsCache = data.runs || [];
         runsPage = data.page || 1;
         runsPages = data.pages || 1;
@@ -966,8 +976,16 @@
 
   function goToPage(page) {
     if (page < 1 || page > runsPages || page === runsPage) return;
+    // 上/下页走游标：以当前页末条/首条为锚，翻页期间新报告落入列表头部
+    // 也不会让窗口平移，避免上一页末尾的条目在下一页开头重复出现
+    var options = null;
+    if (page === runsPage + 1 && runsCache.length) {
+      options = { after: runsCache[runsCache.length - 1].cursor };
+    } else if (page === runsPage - 1 && runsCache.length) {
+      options = { before: runsCache[0].cursor };
+    }
     runsPage = page;
-    loadRuns();
+    loadRuns(options);
     el.filter.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 

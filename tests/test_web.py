@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import time
@@ -259,6 +260,101 @@ def test_api_runs_paginates(tmp_path: Path):
     # 两页合起来不重不漏
     ids = {item["run_id"] for item in first["runs"]} | {item["run_id"] for item in second["runs"]}
     assert len(ids) == 12
+
+
+def test_api_runs_pagination_stable_when_mtime_tied(tmp_path: Path):
+    """mtime 并列时顺序由 run_id 兜底：翻页不重不漏，重复请求结果一致。"""
+    stamp = 1_700_000_000
+    for index in range(12):
+        run_dir = make_run(tmp_path, f"BV1xx411c7mD-{index:08d}")
+        for name in ("report.html", "meta.json", "outline.json"):
+            os.utime(run_dir / name, (stamp, stamp))
+
+    with TestClient(create_app(tmp_path)) as client:
+        pages = [
+            client.get("/api/runs", params={"page": page, "page_size": 5}).json()
+            for page in (1, 2, 3)
+        ]
+        again = client.get("/api/runs", params={"page": 2, "page_size": 5}).json()
+
+    seen = [item["run_id"] for page in pages for item in page["runs"]]
+    assert len(seen) == len(set(seen)) == 12  # 三页合起来不重不漏
+    assert [item["run_id"] for item in again["runs"]] == [
+        item["run_id"] for item in pages[1]["runs"]
+    ]  # 重复请求顺序稳定
+
+
+def test_api_runs_cursor_next_ignores_head_insertion(tmp_path: Path):
+    """翻页游标：取过第 1 页后新报告插入列表头部，下一页不重复展示第 1 页末尾条目。"""
+    base = 1_700_000_000
+    for index in range(10):
+        run_dir = make_run(tmp_path, f"BV1xx411c7mD-{index:08d}")
+        stamp = base + index  # 序号越大越新，倒序时排在越前
+        os.utime(run_dir / "report.html", (stamp, stamp))
+
+    with TestClient(create_app(tmp_path)) as client:
+        first = client.get("/api/runs", params={"page": 1, "page_size": 5}).json()
+        boundary = first["runs"][-1]["run_id"]
+        cursor = first["runs"][-1]["cursor"]
+        # 新报告落入列表头部：模拟任务在用户翻页期间完成
+        fresh = make_run(tmp_path, "BV1xx411c7mD-ffffffff")
+        os.utime(fresh / "report.html", (base + 100, base + 100))
+        second = client.get(
+            "/api/runs", params={"after": cursor, "page_size": 5}
+        ).json()
+
+    second_ids = [item["run_id"] for item in second["runs"]]
+    assert second_ids == [f"BV1xx411c7mD-{index:08d}" for index in range(4, -1, -1)]
+    assert boundary not in second_ids  # 第 1 页末尾条目不在第 2 页开头重复
+    assert second["page"] == 2
+
+
+def test_api_runs_cursor_falls_back_when_anchor_missing(tmp_path: Path):
+    """游标条目被删除后回落按页码偏移：不报错，返回所请求页的内容且不与当前页重复。"""
+    for index in range(11):
+        make_run(tmp_path, f"BV1xx411c7mD-{index:08d}")
+
+    with TestClient(create_app(tmp_path)) as client:
+        first = client.get("/api/runs", params={"page": 1, "page_size": 5}).json()
+        anchor = first["runs"][-1]
+        library.delete_run(tmp_path, anchor["run_id"])
+        body = client.get(
+            "/api/runs",
+            params={"after": anchor["cursor"], "page": 2, "page_size": 5},
+        ).json()
+
+    assert [item["run_id"] for item in body["runs"]] == [
+        f"BV1xx411c7mD-{index:08d}" for index in range(4, -1, -1)
+    ]
+    assert body["page"] == 2
+
+
+def test_api_runs_favorites_pagination_stable_when_favorited_together(tmp_path: Path):
+    """同一秒收藏多条：收藏视图翻页顺序稳定（favorited_at 并列按 run_id 兜底）。"""
+    ids = [f"BV1xx411c7mD-{index:08d}" for index in range(11)]
+    for run_id in ids:
+        make_run(tmp_path, run_id)
+    same_second = "2026-10-15 12:00:00"
+    (tmp_path / library.FAVORITES_FILE).write_text(
+        json.dumps({run_id: same_second for run_id in ids}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    with TestClient(create_app(tmp_path)) as client:
+        pages = [
+            client.get(
+                "/api/runs", params={"fav": 1, "page": page, "page_size": 5}
+            ).json()
+            for page in (1, 2, 3)
+        ]
+        nxt = client.get(
+            "/api/runs",
+            params={"fav": 1, "after": pages[0]["runs"][-1]["cursor"], "page_size": 5},
+        ).json()
+
+    seen = [item["run_id"] for page in pages for item in page["runs"]]
+    assert len(seen) == len(set(seen)) == 11  # 三页合起来不重不漏
+    assert [item["run_id"] for item in nxt["runs"]] == ids[5:10]  # 游标翻页与跳页一致
 
 
 def test_api_runs_clamps_page_and_falls_back_page_size(tmp_path: Path):

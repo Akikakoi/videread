@@ -200,7 +200,10 @@ def list_runs(out_root: Path) -> list[dict]:
             entry["title_original"] = entry["title"]
             entry["title"] = custom
         items.append(entry)
-    items.sort(key=lambda item: item["mtime"], reverse=True)
+    # mtime 相同时按 run_id 兜底：run_id 唯一，整份顺序完全确定，翻页窗口
+    # 不会因目录枚举顺序的波动而错位。仅按 mtime 排序时，并列项的先后随
+    # 文件系统与目录变动而变，同一条会同时出现在上一页末尾与下一页开头。
+    items.sort(key=lambda item: (item["mtime"], item["run_id"]), reverse=True)
     return items
 
 
@@ -331,18 +334,46 @@ def set_title(out_root: Path, run_id: str, title: str) -> dict | None:
     }
 
 
+def _run_cursor(item: dict, favorites_only: bool) -> str:
+    """分页游标：当前排序键 + run_id。run_id 唯一，游标精确指向单条记录，
+    不随头部插入 / 其它条目删除而漂移。run_id 不含「|」，可直接拼接。"""
+    key = item["favorited_at"] if favorites_only else repr(item["mtime"])
+    return key + "|" + item["run_id"]
+
+
+def _cursor_index(items: list[dict], cursor: str, favorites_only: bool) -> int | None:
+    """按游标定位条目下标；条目已被删除或被关键词过滤掉时返回 None，
+    调用方据此回落按页码偏移切窗。"""
+    key, _, run_id = cursor.partition("|")
+    if not run_id:
+        return None
+    for index, item in enumerate(items):
+        current = item["favorited_at"] if favorites_only else repr(item["mtime"])
+        if item["run_id"] == run_id and current == key:
+            return index
+    return None
+
+
 def query_runs(
     out_root: Path,
     page: int = 1,
     page_size: int = DEFAULT_PAGE_SIZE,
     keyword: str = "",
     favorites_only: bool = False,
+    after: str = "",
+    before: str = "",
 ) -> dict:
     """报告库分页查询：先按关键词过滤，再按页切片。
 
     关键词命中标题 / UP主 / BV 号 / run_id（忽略大小写），为空则不过滤；
     page 越界会被夹进有效范围，前端拿到的 page / pages 始终自洽。
-    每条都带 `favorite` 标记；`favorites_only` 时只留收藏，并按收藏先后排列。
+    每条都带 `favorite` 标记与 `cursor` 游标；`favorites_only` 时只留收藏，
+    并按收藏先后排列。
+
+    上/下页翻页走 `after` / `before` 游标（上一页末条 / 当前页首条的
+    cursor）：偏移分页在列表头部插入新报告时窗口整体下移，上一页末尾的
+    条目会在下一页开头重复出现；游标锚定条目本身，窗口不平移。游标条目
+    失踪（删除 / 过滤变化）时回落按 page 偏移，行为与原来一致。
     """
     favorites = load_favorites(out_root)
     # 缓存条目只读：写收藏标记一律落在副本上，避免污染 _ENTRY_CACHE
@@ -355,7 +386,9 @@ def query_runs(
 
     if favorites_only:
         items = [item for item in items if item["favorite"]]
-        items.sort(key=lambda item: item["favorited_at"])  # 先收藏的在前
+        # favorited_at 只精确到秒，连续收藏多条必然并列；按 run_id 兜底
+        # 保证翻页顺序稳定，同一项不会在相邻两页重复出现
+        items.sort(key=lambda item: (item["favorited_at"], item["run_id"]))  # 先收藏的在前
 
     query = (keyword or "").strip().lower()
     if query:
@@ -370,10 +403,23 @@ def query_runs(
 
     size = page_size if page_size in RUN_PAGE_SIZES else DEFAULT_PAGE_SIZE
     pages = max(1, (len(items) + size - 1) // size)
-    current = min(max(1, page), pages)
-    start = (current - 1) * size
+
+    cursor = after or before
+    index = _cursor_index(items, cursor, favorites_only) if cursor else None
+    if index is not None and after:
+        start = index + 1
+        if start >= len(items):
+            start = max(0, (pages - 1) * size)  # 锚点已是末条：停在最后一页
+    elif index is not None:  # before：取锚点之前的一整页
+        start = max(0, index - size)
+    else:
+        # 无游标，或游标条目已不存在：按页码偏移切窗
+        start = (min(max(1, page), pages) - 1) * size
+
+    current = min(max(1, start // size + 1), pages)
+    window = items[start : start + size]
     return {
-        "runs": items[start : start + size],
+        "runs": [{**item, "cursor": _run_cursor(item, favorites_only)} for item in window],
         "total": len(items),
         "page": current,
         "page_size": size,
