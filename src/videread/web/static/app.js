@@ -66,6 +66,7 @@
     bgReset: document.getElementById("bg-reset"),
     bgFile: document.getElementById("bg-file"),
     bgOverlay: document.getElementById("bg-overlay"),
+    themeSeg: document.getElementById("theme-seg"),
     modal: document.getElementById("modal"),
     modalBox: document.querySelector(".modal-box"),
     modalText: document.getElementById("modal-text"),
@@ -218,7 +219,7 @@
       el.progressBar.dataset.running = "0";
       el.progressPct.textContent = "—";
     } else {
-      el.progressFill.style.width = percent + "%";
+      el.progressFill.style.transform = "scaleX(" + (percent / 100) + ")";
       el.progressBar.setAttribute("aria-valuenow", String(percent));
       el.progressBar.dataset.running =
         (currentState === "running" || currentState === "queued") ? "1" : "0";
@@ -1507,16 +1508,33 @@
     dark: "linear-gradient(180deg, rgba(22, 28, 34, .30) 0%, rgba(22, 28, 34, .58) 100%)",
     none: ""
   };
+  /* 深色主题下的纱罩表：default 不再是白纱而是深纱——
+     亮照片会把深色玻璃面板衬灰，故整组换梯度（与 styles.css 的 --veil 同参） */
+  var BG_OVERLAYS_DARK = {
+    default: "linear-gradient(180deg, rgba(10, 14, 19, .52) 0%, rgba(10, 14, 19, .74) 100%)",
+    strong: "linear-gradient(180deg, rgba(10, 14, 19, .66) 0%, rgba(10, 14, 19, .86) 100%)",
+    dark: "linear-gradient(180deg, rgba(6, 9, 12, .62) 0%, rgba(6, 9, 12, .84) 100%)",
+    none: ""
+  };
   var BG_MAX_BYTES = 15 * 1024 * 1024;
   var bgUrl = null;          // 当前自定义背景（null = 默认壁纸）
   var bgOverlayName = "default";
+
+  function isDarkTheme() {
+    return document.documentElement.dataset.theme === "dark";
+  }
+
+  function bgVeil(name) {
+    var table = isDarkTheme() ? BG_OVERLAYS_DARK : BG_OVERLAYS;
+    return name in table ? table[name] : table.default;
+  }
 
   function applyBackground(url, overlay) {
     bgUrl = url || null;
     if (overlay) bgOverlayName = overlay;
     // 注意 none 的值是空字符串（falsy）：必须按键名存在性取值，
     // 用 || 兜底会让「无遮罩」静默回落成默认纱罩
-    var veil = bgOverlayName in BG_OVERLAYS ? BG_OVERLAYS[bgOverlayName] : BG_OVERLAYS.default;
+    var veil = bgVeil(bgOverlayName);
     if (bgOverlayName === "default" && !bgUrl) {
       // 默认壁纸 + 默认遮罩：清掉内联样式，完全回落 CSS
       document.body.style.backgroundImage = "";
@@ -1598,6 +1616,40 @@
         el.bgOverlay.value = bgOverlayName;
       });
   });
+
+  /* ─────────────────────── 主题（浅色 / 深色 / 系统） ─────────────────────── */
+
+  /* 三档分段开关：light / dark / system。system 跟随 prefers-color-scheme，
+     手动选过则不被系统变化推翻。切换只做三件事：落 dataset、同步开关态、
+     重算背景纱罩（深色下 default 遮罩是深纱，见 BG_OVERLAYS_DARK）。 */
+  var THEME_KEY = "videread.theme";
+  var themeMq = window.matchMedia("(prefers-color-scheme: dark)");
+
+  function applyTheme(mode) {
+    var dark = mode === "dark" || (mode === "system" && themeMq.matches);
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    document.documentElement.dataset.themeMode = mode;
+    var btns = el.themeSeg.querySelectorAll("button[data-mode]");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].setAttribute("aria-pressed", String(btns[i].dataset.mode === mode));
+    }
+    applyBackground(bgUrl, bgOverlayName);
+  }
+
+  el.themeSeg.addEventListener("click", function (event) {
+    var btn = event.target.closest("button[data-mode]");
+    if (!btn) return;
+    var mode = btn.dataset.mode;
+    try { window.localStorage.setItem(THEME_KEY, mode); } catch (err) {}
+    applyTheme(mode);
+  });
+  if (themeMq.addEventListener) {
+    themeMq.addEventListener("change", function () {
+      if (document.documentElement.dataset.themeMode === "system") applyTheme("system");
+    });
+  }
+  // head 内联脚本已按存储的偏好落地过，这里同步开关态并按主题重算纱罩
+  applyTheme(document.documentElement.dataset.themeMode || "system");
 
   /* ───────────────────────────── 启动 ───────────────────────────── */
 

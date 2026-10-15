@@ -3,6 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script>
+/* 主题：首屏前落地 <html data-theme>，避免深色偏好下刷新闪白。
+   mode = light / dark / system（system 跟随 prefers-color-scheme）；
+   偏好只存浏览器 localStorage，不占服务端，与每页条数选择同一套路。 */
+(function () {
+  var mode = "system";
+  try { mode = window.localStorage.getItem("videread.theme") || "system"; } catch (e) {}
+  var dark = mode === "dark" ||
+    (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.documentElement.dataset.themeMode = mode;
+})();
+</script>
 <title>videread 控制台</title>
 <link rel="stylesheet" href="/static/styles.css">
 </head>
@@ -15,6 +28,11 @@
       <span class="brand-sub">把视频转写重组成可读报告</span>
     </div>
     <div class="topbar-actions">
+      <div class="seg" id="theme-seg" role="group" aria-label="主题">
+        <button type="button" data-mode="light" aria-pressed="false">浅色</button>
+        <button type="button" data-mode="dark" aria-pressed="false">深色</button>
+        <button type="button" data-mode="system" aria-pressed="false">系统</button>
+      </div>
       <select id="bg-overlay" title="背景遮罩风格">
         <option value="default">遮罩：默认</option>
         <option value="strong">遮罩：加深白纱</option>

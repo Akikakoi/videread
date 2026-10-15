@@ -544,6 +544,8 @@ def load_history(run_dir) -> list[dict]
 | `POST /api/runs/{run_id}/qa` | 就指定报告提问，返回答案 HTML 与引用，并追加 `qa.jsonl` |
 | `GET /api/runs/{run_id}/qa` | 读取该报告的问答历史 |
 
+主题偏好（浅色 / 深色 / 跟随系统）为纯客户端能力，无对应接口：偏好存浏览器 `localStorage`（键 `videread.theme`），`index.html` 的 `<head>` 内联脚本在首屏渲染前落地 `<html data-theme>`（防闪白），深色令牌组在 `styles.css` 末尾 `[data-theme="dark"]` 整组覆盖；`app.js` 的主题段负责开关态、系统变化跟随与背景纱罩重算（深色下 default 遮罩换深纱，见 `BG_OVERLAYS_DARK`）。换浏览器 / 清缓存后偏好丢失，属预期。
+
 ---
 
 ## 7. 报告生成规范（Prompt）

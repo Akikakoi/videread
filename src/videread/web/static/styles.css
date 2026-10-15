@@ -25,6 +25,21 @@
   --bad-soft: #fbeeed;
   --radius: 14px;
 
+  /* ── 主题令牌 ──
+     亮色值即本文件原有配方；深色主题不改动上面的任何规则，
+     只在文末 [data-theme="dark"] 里整组覆盖这些令牌与少量复合属性 */
+  --on-accent: #ffffff;              /* 强调色表面上的文字 / 对勾 */
+  --veil: linear-gradient(180deg, rgba(247, 250, 252, .34) 0%, rgba(240, 246, 251, .54) 100%); /* 背景纱罩 */
+  --scrim: rgba(24, 38, 50, .32);    /* 弹窗 / 预览浮层的背板 */
+  --track: linear-gradient(180deg, rgba(255, 255, 255, .34), rgba(255, 255, 255, .62)); /* 进度条轨道 */
+  --fill: linear-gradient(90deg, #0b5a72 0%, var(--accent) 40%, #1d9cbd 75%, #3ec3d8 100%); /* 进度条填充 */
+  --menu-bg: rgba(255, 255, 255, .92); /* 导出菜单等紧凑浮层 */
+  --accent-tint: rgba(238, 246, 248, .86);   /* 运行态淡青（stepper 当前步） */
+  --accent-tint-2: rgba(238, 246, 248, .82); /* 运行态淡青（pill） */
+  --ok-tint: rgba(238, 246, 241, .8);  --ok-line: rgba(207, 229, 217, .9);   /* 完成态淡绿 */
+  --bad-tint: rgba(251, 238, 237, .8); --bad-line: rgba(240, 212, 210, .9);  /* 失败态淡红 */
+  --warn-tint: rgba(253, 246, 232, .85); --warn-line: rgba(237, 223, 194, .95); /* 缓存标记淡黄 */
+
   /* ── 玻璃层 ── */
   --glass: rgba(255, 255, 255, .58);        /* 主表面：面板 / 顶栏 */
   --glass-2: rgba(255, 255, 255, .72);      /* 更实：输入框 / 卡片 / 浮层 */
@@ -50,11 +65,10 @@ body {
   margin: 0;
   min-height: 100vh;
   /* 背景照片（紫粉花簇，16:9 裁切后 2560×1440）。照片整体偏亮，但右下花色密集、
-     局部偏深，故叠一层自上而下渐浓的白色薄纱，给玻璃面板上的文字留足对比度 */
+     局部偏深，故叠一层自上而下渐浓的白色薄纱，给玻璃面板上的文字留足对比度。
+     薄纱收进 --veil 令牌：深色主题在文末整组替换，app.js 换遮罩时也只动这一层 */
   background-color: var(--page);
-  background-image:
-    linear-gradient(180deg, rgba(247, 250, 252, .34) 0%, rgba(240, 246, 251, .54) 100%),
-    url("bg.jpg");
+  background-image: var(--veil), url("bg.jpg");
   background-position: center, center;
   background-size: cover, cover;
   background-repeat: no-repeat, no-repeat;
@@ -91,11 +105,41 @@ body {
   margin: 0 auto;
   padding: 0 24px;
 }
-.brand { display: flex; align-items: baseline; gap: 10px; }
+.brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .brand-name { font-size: 20px; font-weight: 700; letter-spacing: .01em; }
-.brand-sub { color: var(--ink-mute); font-size: 13px; }
-.topbar-actions { display: flex; align-items: baseline; gap: 8px; }
+.brand-sub { color: var(--ink-mute); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar-actions { display: flex; align-items: center; gap: 8px; flex: none; }
 .topbar-actions select { width: auto; padding: 4px 8px; font-size: 12px; }
+
+/* 主题三档分段开关：浅色 / 深色 / 系统（system 跟随 prefers-color-scheme） */
+.topbar-actions .seg { flex: none; }
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  background: var(--glass-3);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  box-shadow: var(--sheen);
+}
+.seg button {
+  padding: 3px 12px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-mute);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .16s ease, color .16s ease;
+}
+.seg button:hover { color: var(--ink); }
+.seg button[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--glass-2);
+  border-color: var(--accent-line);
+  font-weight: 500;
+}
 
 /* ── 布局 ── */
 .layout {
@@ -266,7 +310,7 @@ select option { color: var(--ink); background: var(--paper); }
   height: 17px;
   margin-top: 3px;
   border-radius: 4px;
-  background: #fff;
+  background: var(--paper);
   border: 1.5px solid var(--line-strong);
   display: flex;
   align-items: center;
@@ -278,7 +322,7 @@ select option { color: var(--ink); background: var(--paper); }
   content: "";
   width: 4.5px;
   height: 8.5px;
-  border: solid #fff;
+  border: solid var(--on-accent);
   border-width: 0 2px 2px 0;
   transform: rotate(45deg) translate(-.5px, -.5px);
   opacity: 0;
@@ -347,8 +391,8 @@ select option { color: var(--ink); background: var(--paper); }
 .btn-danger { color: var(--bad); }
 .btn-danger:hover {
   color: var(--bad);
-  background: rgba(251, 238, 237, .85);
-  border-color: rgba(240, 212, 210, .9);
+  background: var(--bad-tint);
+  border-color: var(--bad-line);
 }
 
 .probe-hint {
@@ -372,8 +416,8 @@ select option { color: var(--ink); background: var(--paper); }
   font-size: 13px;
   white-space: pre-wrap;
   color: var(--bad);
-  background: rgba(251, 238, 237, .78);
-  border: 1px solid rgba(240, 212, 210, .9);
+  background: var(--bad-tint);
+  border: 1px solid var(--bad-line);
   border-radius: 10px;
   box-shadow: var(--sheen);
   -webkit-backdrop-filter: blur(10px);
@@ -420,7 +464,7 @@ select option { color: var(--ink); background: var(--paper); }
   height: 10px;
   margin: 0 0 10px;
   overflow: hidden;
-  background: linear-gradient(180deg, rgba(255, 255, 255, .34), rgba(255, 255, 255, .62));
+  background: var(--track);
   border: 1px solid var(--glass-border);
   border-radius: 999px;
   box-shadow: var(--shadow-inset);
@@ -438,7 +482,7 @@ select option { color: var(--ink); background: var(--paper); }
   height: 100%;
   width: 100%;
   overflow: hidden;
-  background: linear-gradient(90deg, #0b5a72 0%, var(--accent) 40%, #1d9cbd 75%, #3ec3d8 100%);
+  background: var(--fill);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5);
   transform-origin: left center;
   transform: scaleX(0);
@@ -507,9 +551,9 @@ select option { color: var(--ink); background: var(--paper); }
   border: 1px solid var(--glass-border);
   box-shadow: var(--sheen);
 }
-.pill[data-state="running"] { color: var(--accent); background: rgba(238, 246, 248, .82); border-color: var(--accent-line); }
-.pill[data-state="done"] { color: var(--ok); background: rgba(238, 246, 241, .82); border-color: rgba(207, 229, 217, .9); }
-.pill[data-state="error"] { color: var(--bad); background: rgba(251, 238, 237, .82); border-color: rgba(240, 212, 210, .9); }
+.pill[data-state="running"] { color: var(--accent); background: var(--accent-tint-2); border-color: var(--accent-line); }
+.pill[data-state="done"] { color: var(--ok); background: var(--ok-tint); border-color: var(--ok-line); }
+.pill[data-state="error"] { color: var(--bad); background: var(--bad-tint); border-color: var(--bad-line); }
 
 .stepper {
   display: grid;
@@ -550,11 +594,11 @@ select option { color: var(--ink); background: var(--paper); }
   background: var(--glass-2);
   border: 1px solid var(--line-strong);
 }
-.stepper li[data-state="done"] { color: var(--ok); background: rgba(238, 246, 241, .78); border-color: rgba(207, 229, 217, .9); }
+.stepper li[data-state="done"] { color: var(--ok); background: var(--ok-tint); border-color: var(--ok-line); }
 .stepper li[data-state="done"]::before { content: "✓"; color: var(--ok); border-color: #a9cdb9; }
 .stepper li[data-state="active"] {
   color: var(--accent);
-  background: rgba(238, 246, 248, .86);
+  background: var(--accent-tint);
   border-color: var(--accent-line);
   font-weight: 600;
   box-shadow: var(--sheen), 0 4px 14px rgba(15, 111, 140, .12);
@@ -568,7 +612,7 @@ select option { color: var(--ink); background: var(--paper); }
   .stepper li[data-state="active"] { animation: none; }
 }
 .stepper li[data-state="active"]::before { color: var(--accent); border-color: var(--accent); }
-.stepper li[data-state="error"] { color: var(--bad); background: rgba(251, 238, 237, .82); border-color: rgba(240, 212, 210, .9); }
+.stepper li[data-state="error"] { color: var(--bad); background: var(--bad-tint); border-color: var(--bad-line); }
 .stepper li[data-state="error"]::before { content: "!"; color: var(--bad); border-color: var(--bad); }
 
 .log {
@@ -713,7 +757,7 @@ select option { color: var(--ink); background: var(--paper); }
   border-radius: 12px;
   /* 浮在小字上方的紧凑浮层：比大面板（.72）更实的一层，模糊后的
      残影只剩淡淡的色块，菜单文字不被底下卡片内容干扰 */
-  background: rgba(255, 255, 255, .92);
+  background: var(--menu-bg);
   border: 1px solid var(--glass-border);
   box-shadow: var(--sheen), var(--shadow-raised);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
@@ -778,7 +822,7 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
   background: var(--glass-3);
   border: 1px solid var(--glass-border);
 }
-.tag.cached { color: var(--warn); background: rgba(253, 246, 232, .85); border-color: rgba(237, 223, 194, .95); }
+.tag.cached { color: var(--warn); background: var(--warn-tint); border-color: var(--warn-line); }
 .detail-note { margin: 8px 0 0; font-size: 12px; color: var(--ink-mute); }
 .detail-note.bad { color: var(--bad); }
 
@@ -790,7 +834,7 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(24, 38, 50, .32);
+  background: var(--scrim);
   transition: opacity 200ms var(--ease-out);
 }
 .modal-box {
@@ -823,7 +867,7 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(24, 38, 50, .30);
+  background: var(--scrim);
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
   transition: opacity 200ms var(--ease-out);
@@ -909,7 +953,7 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
   align-self: flex-end;
   max-width: 88%;
   background: var(--accent);
-  color: #ffffff;
+  color: var(--on-accent);
   border-bottom-right-radius: 4px;
 }
 .qa-bot {
@@ -954,7 +998,7 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
   cursor: pointer;
   font-variant-numeric: tabular-nums;
 }
-.qa-cite:hover { background: #ffffff; border-color: var(--accent); }
+.qa-cite:hover { background: var(--paper); border-color: var(--accent); }
 .qa-form {
   display: flex;
   flex-direction: column;
@@ -982,6 +1026,69 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .qa-panel { display: none; }
 }
 
+/* ═══ 深色主题 ═══════════════════════════════════════════════
+   一套玻璃令牌整组反色：表面压深、文字提亮、强调色换亮青；
+   背景纱罩同步换深——亮照片会把深色玻璃面板衬灰。
+   切换由 app.js 写 <html data-theme="dark">，head 内联脚本负责首屏前落地。 */
+[data-theme="dark"] {
+  --ink: #e9eef2;
+  --ink-soft: #b7c2ca;
+  --ink-mute: #8b959d;
+  --line: #2c353d;
+  --line-strong: #3a454e;
+  --paper: #1b222a;
+  --page: #0f141a;
+  --accent: #46c8dc;
+  --accent-soft: rgba(70, 200, 220, .14);
+  --accent-line: rgba(70, 200, 220, .40);
+  --on-accent: #06222b;
+  --ok: #58b184;
+  --warn: #d3a44e;
+  --bad: #e0736a;
+  --bad-soft: rgba(224, 115, 106, .14);
+
+  --glass: rgba(17, 23, 30, .60);
+  --glass-2: rgba(23, 30, 38, .76);
+  --glass-3: rgba(13, 18, 24, .46);
+  --glass-border: rgba(255, 255, 255, .13);
+  --hairline: rgba(255, 255, 255, .11);
+  --sheen: inset 0 1px 0 rgba(255, 255, 255, .09);
+  --shadow-soft: 0 8px 28px rgba(0, 0, 0, .34);
+  --shadow-raised: 0 18px 48px rgba(0, 0, 0, .50);
+  --shadow-inset: inset 0 1px 2px rgba(0, 0, 0, .30);
+
+  --veil: linear-gradient(180deg, rgba(10, 14, 19, .52) 0%, rgba(10, 14, 19, .74) 100%);
+  --scrim: rgba(4, 7, 10, .55);
+  --track: linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, .12));
+  --fill: linear-gradient(90deg, #1d7f96 0%, var(--accent) 40%, #6fd4e4 75%, #aef0f8 100%);
+  --menu-bg: rgba(23, 30, 38, .94);
+  --accent-tint: rgba(70, 200, 220, .16);
+  --accent-tint-2: rgba(70, 200, 220, .13);
+  --ok-tint: rgba(88, 177, 132, .16);
+  --ok-line: rgba(88, 177, 132, .42);
+  --bad-tint: rgba(224, 115, 106, .16);
+  --bad-line: rgba(224, 115, 106, .45);
+  --warn-tint: rgba(211, 164, 78, .16);
+  --warn-line: rgba(211, 164, 78, .45);
+}
+
+/* 收不进令牌的复合属性，在这里整属性覆盖 */
+[data-theme="dark"] .progress-bar::after {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .12), rgba(255, 255, 255, 0));
+}
+[data-theme="dark"] .btn-primary {
+  color: #dff6fa;
+  background: linear-gradient(180deg, rgba(70, 200, 220, .24), rgba(70, 200, 220, .10));
+  border-color: rgba(70, 200, 220, .46);
+  text-shadow: none;
+  box-shadow: var(--sheen), inset 0 0 0 1px rgba(70, 200, 220, .22),
+    0 8px 22px rgba(0, 0, 0, .34);
+}
+[data-theme="dark"] .btn-primary:hover {
+  background: linear-gradient(180deg, rgba(70, 200, 220, .34), rgba(70, 200, 220, .16));
+  border-color: rgba(70, 200, 220, .66);
+}
+
 /* ── 降级：不支持 backdrop-filter 时退回略实的不透明表面，保证可读性 ── */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .topbar, .panel { background: rgba(255, 255, 255, .94); }
@@ -994,10 +1101,19 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .pill, .tokens, .tag, .stepper li { background: rgba(255, 255, 255, .9); }
   .progress-bar { background: linear-gradient(180deg, #e7ecef, #f4f7f8); }
   .preview { background: rgba(24, 38, 50, .42); }
+  [data-theme="dark"] .topbar, [data-theme="dark"] .panel { background: rgba(23, 30, 38, .96); }
+  [data-theme="dark"] input[type="text"], [data-theme="dark"] input[type="search"], [data-theme="dark"] select,
+  [data-theme="dark"] .btn, [data-theme="dark"] .run-card, [data-theme="dark"] .export-menu,
+  [data-theme="dark"] .preview-box, [data-theme="dark"] .seg { background: rgba(27, 34, 42, .96); }
+  [data-theme="dark"] .btn-primary, [data-theme="dark"] .btn-primary:hover { background: rgba(27, 34, 42, .96); }
+  [data-theme="dark"] .log { background: rgba(16, 21, 27, .96); }
+  [data-theme="dark"] .pill, [data-theme="dark"] .tokens, [data-theme="dark"] .tag,
+  [data-theme="dark"] .stepper li { background: rgba(23, 30, 38, .9); }
+  [data-theme="dark"] .preview { background: rgba(4, 7, 10, .62); }
 }
 
 /* ── 动效偏好 ── */
 @media (prefers-reduced-motion: reduce) {
-  .btn, .run-card, .stepper li, .check .box { transition: none; }
+  .btn, .run-card, .stepper li, .check .box, .seg button { transition: none; }
   .modal, .modal-box, .preview, .preview-box, .export-menu { transition: none; }
 }
