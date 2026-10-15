@@ -217,7 +217,7 @@
       el.progressBar.dataset.running = "0";
       el.progressPct.textContent = "—";
     } else {
-      el.progressFill.style.width = percent + "%";
+      el.progressFill.style.transform = "scaleX(" + (percent / 100) + ")";
       el.progressBar.setAttribute("aria-valuenow", String(percent));
       el.progressBar.dataset.running =
         (currentState === "running" || currentState === "queued") ? "1" : "0";

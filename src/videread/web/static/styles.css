@@ -36,6 +36,9 @@
   --shadow-soft: 0 8px 28px rgba(24, 38, 50, .10);
   --shadow-raised: 0 18px 48px rgba(24, 38, 50, .20);
   --shadow-inset: inset 0 1px 2px rgba(24, 38, 50, .08);
+
+  /* ── 动效 ── */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1); /* 强 ease-out，用于 UI 入场 */
 }
 
 html {
@@ -268,7 +271,7 @@ select option { color: var(--ink); background: var(--paper); }
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background .14s ease, border-color .14s ease, transform .1s ease;
+  transition: background .14s ease, border-color .14s ease, transform 140ms var(--ease-out);
 }
 /* 对勾由两条白色边框拼出，选中时淡入 */
 .check .box::after {
@@ -291,7 +294,7 @@ select option { color: var(--ink); background: var(--paper); }
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
-.check:active .box { transform: scale(.9); }
+.check:active .box { transform: scale(.96); }
 /* 复选框同样配一行说明：名称走「标题 + 小字注释」两行结构 */
 .check-text { display: flex; flex-direction: column; gap: 2px; }
 .check-hint { font-size: 12px; line-height: 1.4; color: var(--ink-mute); }
@@ -314,7 +317,7 @@ select option { color: var(--ink); background: var(--paper); }
   box-shadow: var(--sheen);
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
-  transition: background .18s ease, border-color .18s ease, transform .18s ease;
+  transition: background .18s ease, border-color .18s ease, transform 140ms var(--ease-out);
 }
 .btn:hover { border-color: var(--accent-line); background: var(--accent-soft); }
 .btn:active { transform: translateY(1px); }
@@ -433,12 +436,13 @@ select option { color: var(--ink); background: var(--paper); }
 .progress-fill {
   position: relative;
   height: 100%;
-  width: 0;
+  width: 100%;
   overflow: hidden;
-  border-radius: 999px;
   background: linear-gradient(90deg, #0b5a72 0%, var(--accent) 40%, #1d9cbd 75%, #3ec3d8 100%);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5);
-  transition: width .5s cubic-bezier(.22, .61, .36, 1);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform .3s var(--ease-out);
 }
 /* 玻璃质感：上半部一道高光，压在填充之上 */
 .progress-bar::after {
@@ -650,10 +654,13 @@ select option { color: var(--ink); background: var(--paper); }
   backdrop-filter: blur(var(--glass-blur)) saturate(160%);
   transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
 }
-.run-card:hover {
-  border-color: var(--accent-line);
-  box-shadow: var(--sheen), var(--shadow-raised);
-  transform: translateY(-1px);
+/* 触屏点按会误触发 hover，抬升位移只在有精细指针的设备上启用 */
+@media (hover: hover) and (pointer: fine) {
+  .run-card:hover {
+    border-color: var(--accent-line);
+    box-shadow: var(--sheen), var(--shadow-raised);
+    transform: translateY(-1px);
+  }
 }
 .run-title { margin: 0 0 6px; font-size: 14px; font-weight: 600; line-height: 1.5; }
 /* 就地改标题：输入框替换掉标题文字。同一套玻璃输入框配方，
@@ -711,6 +718,14 @@ select option { color: var(--ink); background: var(--paper); }
   box-shadow: var(--sheen), var(--shadow-raised);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
   backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  /* 从触发按钮一侧展开：原点在菜单左上角（即按钮左下角对齐点） */
+  transform-origin: top left;
+  transition: transform 150ms var(--ease-out), opacity 150ms var(--ease-out);
+}
+
+/* 展开动画只写 @starting-style：关闭态不设初值，菜单不会因动画失效而不可见 */
+@starting-style {
+  .export-menu { opacity: 0; transform: translateY(-4px) scale(0.97); }
 }
 .export-item {
   display: block;
@@ -776,6 +791,7 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
   align-items: center;
   justify-content: center;
   background: rgba(24, 38, 50, .32);
+  transition: opacity 200ms var(--ease-out);
 }
 .modal-box {
   width: min(400px, calc(100vw - 48px));
@@ -786,7 +802,15 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
   box-shadow: var(--sheen), var(--shadow-raised);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
   backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  transition: transform 200ms var(--ease-out), opacity 200ms var(--ease-out);
 }
+
+/* 入场动画只写 @starting-style：关闭态不设初值，弹窗不会因动画失效而不可见 */
+@starting-style {
+  .modal { opacity: 0; }
+  .modal-box { opacity: 0; transform: scale(0.97); }
+}
+
 .modal-text { margin: 0 0 18px; font-size: 14px; line-height: 1.7; white-space: pre-line; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
@@ -802,6 +826,7 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
   background: rgba(24, 38, 50, .30);
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
+  transition: opacity 200ms var(--ease-out);
 }
 .preview-box {
   display: flex;
@@ -815,7 +840,15 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
   box-shadow: var(--sheen), var(--shadow-raised);
   -webkit-backdrop-filter: blur(22px) saturate(150%);
   backdrop-filter: blur(22px) saturate(150%);
+  transition: transform 200ms var(--ease-out), opacity 200ms var(--ease-out);
 }
+
+/* 入场动画只写 @starting-style：关闭态不设初值，浮层不会因动画失效而不可见 */
+@starting-style {
+  .preview { opacity: 0; }
+  .preview-box { opacity: 0; transform: scale(0.97); }
+}
+
 .preview-main {
   display: flex;
   flex-direction: column;
@@ -965,5 +998,6 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ── 动效偏好 ── */
 @media (prefers-reduced-motion: reduce) {
-  .btn, .run-card, .stepper li { transition: none; }
+  .btn, .run-card, .stepper li, .check .box { transition: none; }
+  .modal, .modal-box, .preview, .preview-box, .export-menu { transition: none; }
 }
