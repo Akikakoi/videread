@@ -740,10 +740,10 @@
         .then(function (response) {
           if (!response.ok) {
             // 409 = 任务已经结束：状态事件随后自己收敛，无需提示
-            if (response.status !== 409) window.alert("取消失败（HTTP " + response.status + "）。");
+            if (response.status !== 409) toast("取消失败（HTTP " + response.status + "）。", "bad");
           }
         })
-        .catch(function () { window.alert("无法连接本地服务，取消未执行。"); })
+        .catch(function () { toast("无法连接本地服务，取消未执行。", "bad"); })
         .finally(function () { el.cancelJob.disabled = false; });
     });
   });
@@ -1136,7 +1136,7 @@
         button.dataset.fav = run.favorite ? "1" : "0";
         button.title = run.favorite ? "取消收藏" : "收藏这条报告";
       })
-      .catch(function () { window.alert("收藏失败，请检查本地服务后重试。"); });
+      .catch(function () { toast("收藏失败，请检查本地服务后重试。", "bad"); });
   }
 
   /* 改标题：在卡片标题的位置就地展开输入框，成功后就地更新文字，不必整页重拉。
@@ -1196,7 +1196,7 @@
           finish();
         })
         .catch(function (err) {
-          window.alert("改名失败：" + err.message);
+          toast("改名失败：" + err.message, "bad");
           ok.disabled = false;
           no.disabled = false;
           input.focus();
@@ -1223,14 +1223,14 @@
       fetch("/api/runs/" + encodeURIComponent(run.run_id), { method: "DELETE" })
         .then(function (response) {
           if (!response.ok) {
-            window.alert("删除失败（HTTP " + response.status + "），请重试。");
+            toast("删除失败（HTTP " + response.status + "），请重试。", "bad");
           }
           // 删掉的是本页最后一条时回退一页，避免停在空页
           if (runsCache.length === 1 && runsPage > 1) runsPage -= 1;
           loadRuns();
         })
         .catch(function () {
-          window.alert("无法连接本地服务，删除未执行。");
+          toast("无法连接本地服务，删除未执行。", "bad");
           loadRuns();
         });
     });
@@ -1564,7 +1564,7 @@
     el.bgFile.value = "";
     if (!file) return;
     if (file.size > BG_MAX_BYTES) {
-      window.alert("图片不能超过 15MB。");
+      toast("图片不能超过 15MB。", "bad");
       return;
     }
     fetch("/api/ui/background", {
@@ -1578,18 +1578,18 @@
       })
       .then(function (result) {
         if (!result.ok) {
-          window.alert(result.data.detail || "背景上传失败（HTTP 错误）。");
+          toast(result.data.detail || "背景上传失败（HTTP 错误）。", "bad");
           return;
         }
         applyBackground(result.data.url, result.data.overlay);
       })
-      .catch(function () { window.alert("无法连接本地服务，背景未更改。"); });
+      .catch(function () { toast("无法连接本地服务，背景未更改。", "bad"); });
   });
 
   el.bgReset.addEventListener("click", function () {
     fetch("/api/ui/background", { method: "DELETE" })
       .then(function () { applyBackground(null, bgOverlayName); })
-      .catch(function () { window.alert("无法连接本地服务，恢复未执行。"); });
+      .catch(function () { toast("无法连接本地服务，恢复未执行。", "bad"); });
   });
 
   el.bgOverlay.addEventListener("change", function () {
@@ -1605,14 +1605,14 @@
       })
       .then(function (result) {
         if (!result.ok) {
-          window.alert(result.data.detail || "遮罩设置失败。");
+          toast(result.data.detail || "遮罩设置失败。", "bad");
           el.bgOverlay.value = bgOverlayName;  // 回落到已生效的选择
           return;
         }
         applyBackground(bgUrl, result.data.overlay);
       })
       .catch(function () {
-        window.alert("无法连接本地服务，遮罩未更改。");
+        toast("无法连接本地服务，遮罩未更改。", "bad");
         el.bgOverlay.value = bgOverlayName;
       });
   });
@@ -1660,3 +1660,26 @@
   var saved = sessionStorage.getItem(STORE_KEY);
   if (saved) resumeJob(saved);
 })();
+/* ── toast：非阻塞反馈（替代 window.alert）── */
+var _toastEl = null, _toastHide = null, _toastOutT = null;
+function toast(msg, kind) {
+  if (!_toastEl) {
+    _toastEl = document.createElement("div");
+    _toastEl.id = "toast";
+    _toastEl.setAttribute("role", "status");
+    document.body.appendChild(_toastEl);
+  }
+  clearTimeout(_toastHide); clearTimeout(_toastOutT);
+  _toastEl.textContent = msg;
+  if (kind) { _toastEl.setAttribute("data-kind", kind); } else { _toastEl.removeAttribute("data-kind"); }
+  _toastEl.classList.remove("out");
+  _toastEl.style.display = "block";
+  void _toastEl.offsetWidth; /* 连续触发时重播入场动画 */
+  _toastHide = setTimeout(function () {
+    _toastEl.classList.add("out");
+    _toastOutT = setTimeout(function () {
+      _toastEl.style.display = "none";
+      _toastEl.classList.remove("out");
+    }, 240);
+  }, 3600);
+}

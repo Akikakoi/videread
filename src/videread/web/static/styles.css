@@ -1117,3 +1117,24 @@ table.trace td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .btn, .run-card, .stepper li, .check .box, .seg button { transition: none; }
   .modal, .modal-box, .preview, .preview-box, .export-menu { transition: none; }
 }
+/* ── toast：非阻塞反馈（替代 window.alert，风格对齐玻璃层）── */
+#toast {
+  position: fixed; right: 24px; bottom: 24px; z-index: 120;
+  max-width: 380px; padding: 12px 18px;
+  background: var(--glass-2);
+  -webkit-backdrop-filter: blur(var(--glass-blur)); backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: var(--shadow-raised), var(--sheen);
+  color: var(--ink); font-size: 13.5px; line-height: 1.6;
+  display: none;
+  animation: toastIn 200ms var(--ease-out) both;
+}
+#toast[data-kind="bad"] { border-left-color: var(--bad); }
+#toast.out { animation: toastOut 240ms var(--ease-out) both; }
+@keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes toastOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-8px); } }
+@media (prefers-reduced-motion: reduce) {
+  #toast, #toast.out { animation: none; }
+}
