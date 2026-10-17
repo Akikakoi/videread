@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue
 import threading
 from pathlib import Path
@@ -29,6 +30,8 @@ from . import library, probe
 from .jobs import Job, JobBusy, JobManager
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+#: 编辑风 demo 页面所在目录（项目根 demos/；仅源码运行时存在）
+DEMO_DIR = Path(__file__).resolve().parents[3] / "demos"
 HEARTBEAT_SEC = 15.0
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
@@ -95,6 +98,8 @@ async def _event_stream(job: Job, request: Request, since: int):
 def create_app(out_root: Path) -> FastAPI:
     out_root = Path(out_root)
     app = FastAPI(title="videread", docs_url=None, redoc_url=None)
+    # demo 页面禁缓存：开发迭代时浏览器必须每次拿到最新 HTML
+    _NO_CACHE = {"Cache-Control": "no-cache"}
     manager = JobManager(out_root)
 
     # 每个 run 一把问答锁：串行化同一报告的问答，避免历史交叉写入；
@@ -123,6 +128,26 @@ def create_app(out_root: Path) -> FastAPI:
             stamp = int(asset.stat().st_mtime) if asset.is_file() else 0
             html = html.replace(f"/static/{name}", f"/static/{name}?v={stamp}")
         return HTMLResponse(html)
+
+    @app.get("/editorial", response_class=HTMLResponse)
+    def editorial() -> HTMLResponse:
+        """杂志编辑风前端（实验性 demo，与控制台共用同一套 API 与产物目录）。
+
+        页面文件位于项目 demos/ 下；打包安装到别处时 demos 不随包分发，
+        统一按 404 提示，不影响控制台本体。
+        """
+        page = DEMO_DIR / "editorial-live.html"
+        if not page.is_file():
+            raise HTTPException(status_code=404, detail=f"缺少 demo 页面：{page}")
+        return HTMLResponse(page.read_text(encoding="utf-8"), headers=_NO_CACHE)
+
+    @app.get("/read/{run_id}", response_class=HTMLResponse)
+    def editorial_read(run_id: str) -> HTMLResponse:
+        """编辑风全文阅读页（新标签页打开）：抓取 report.html 重排为杂志版式。"""
+        page = DEMO_DIR / "editorial-reader.html"
+        if not page.is_file():
+            raise HTTPException(status_code=404, detail=f"缺少 demo 页面：{page}")
+        return HTMLResponse(page.read_text(encoding="utf-8"), headers=_NO_CACHE)
 
     @app.get("/report/{run_id}", response_class=HTMLResponse)
     def report(run_id: str) -> HTMLResponse:
@@ -229,6 +254,27 @@ def create_app(out_root: Path) -> FastAPI:
                 )
             },
         )
+
+    @app.get("/api/config")
+    def api_config() -> dict:
+        """非密钥配置摘要：ASR 后端与模型名、LLM 模型名（编辑风页脚版权页展示用）。
+
+        只吐后端类型与模型名，任何密钥与网关地址都不经过此接口。
+        """
+        s = get_settings()
+        asr_model = ""
+        if s.asr_backend.startswith("dashscope"):
+            asr_model = s.dashscope_model
+        elif s.asr_backend == "openai":
+            asr_model = os.environ.get("OPENAI_ASR_MODEL", "").strip() or "whisper-1"
+        elif s.asr_backend == "local":
+            asr_model = os.environ.get("LOCAL_ASR_MODEL", "").strip() or "faster-whisper/small"
+        return {
+            "asr_backend": s.asr_backend,
+            "asr_model": asr_model,
+            "llm_model_plan": s.llm_model_plan,
+            "llm_model_write": s.llm_model_write,
+        }
 
     @app.get("/api/runs")
     def api_runs(
