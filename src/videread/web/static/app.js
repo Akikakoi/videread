@@ -849,18 +849,12 @@
 
   /* ───────────────────────────── 报告库 ───────────────────────────── */
 
-  function loadRuns(options) {
-    // options.after / options.before：翻页游标，锚定边界条目本身。偏移分页在
-    // 列表头部插入新报告时窗口整体下移，上一页末尾的条目会在下一页开头重复
-    // 出现；游标翻页不受影响。数字跳页不传游标，仍按页码偏移。
+  function loadRuns() {
     var requestId = ++runsRequestId;
-    var opts = options || {};
     var params = ["page=" + runsPage, "page_size=" + runsPageSize];
     if (favOnly) params.push("fav=1");
     var keyword = el.filter.value.trim();
     if (keyword) params.push("q=" + encodeURIComponent(keyword));
-    if (opts.after) params.push("after=" + encodeURIComponent(opts.after));
-    if (opts.before) params.push("before=" + encodeURIComponent(opts.before));
     fetch("/api/runs?" + params.join("&"))
       .then(function (response) { return response.json(); })
       .then(function (data) {
@@ -977,16 +971,8 @@
 
   function goToPage(page) {
     if (page < 1 || page > runsPages || page === runsPage) return;
-    // 上/下页走游标：以当前页末条/首条为锚，翻页期间新报告落入列表头部
-    // 也不会让窗口平移，避免上一页末尾的条目在下一页开头重复出现
-    var options = null;
-    if (page === runsPage + 1 && runsCache.length) {
-      options = { after: runsCache[runsCache.length - 1].cursor };
-    } else if (page === runsPage - 1 && runsCache.length) {
-      options = { before: runsCache[0].cursor };
-    }
     runsPage = page;
-    loadRuns(options);
+    loadRuns();
     el.filter.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
