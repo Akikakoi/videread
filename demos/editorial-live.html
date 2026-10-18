@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>(function(){var t;try{t=localStorage.getItem("videread.theme")}catch(e){}if(!t)t="system";var d=t==="dark"||(t==="system"&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.dataset.theme=d?"dark":"light";})();</script>
 <script>document.documentElement.classList.add("js");</script>
 <title>VIDEREAD · 视读 — 编辑部</title>
 <link rel="preconnect" href="https://cdn.jsdelivr.net">
@@ -22,7 +23,17 @@
   --sans:"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
   --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Consolas,monospace;
   --ease:cubic-bezier(.22,.61,.36,1);--t-fast:.18s;--t:.28s;--t-slow:.8s;
+  --ok:#2E6B4F;
 }
+
+/* ── 深夜印刷间：深色主题令牌（浅色配方整体翻转，强调红提亮保对比）── */
+html[data-theme="dark"]{
+  --paper:#14120E; --paper-deep:#1C1914;
+  --ink:#EDE6D6; --muted:#A89F8C; --faint:#6E675A;
+  --hairline:#3A352B; --accent:#D0563C; --ok:#6FB98C;
+}
+html.theme-switching *,html.theme-switching *::before,html.theme-switching *::after{transition:none!important;}
+
 *{margin:0;padding:0;box-sizing:border-box;}
 html{scroll-behavior:smooth;font-synthesis-weight:none;}
 body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.75;-webkit-font-smoothing:antialiased;}
@@ -84,12 +95,14 @@ a{color:inherit;}
 .masthead nav{display:flex;gap:24px;flex-wrap:wrap;}
 .masthead nav a{font-size:13px;color:var(--ink);text-decoration:none;letter-spacing:1px;background-image:linear-gradient(var(--accent),var(--accent));background-repeat:no-repeat;background-size:0 1.5px;background-position:0 100%;padding-bottom:2px;transition:background-size var(--t) var(--ease);}
 .masthead nav a:hover{background-size:100% 1.5px;}
+.theme-btn{border:1px solid var(--hairline);background:transparent;cursor:pointer;font-family:var(--mono);font-size:11.5px;letter-spacing:1px;color:var(--muted);padding:5px 12px;border-radius:99px;transition:color var(--t),border-color var(--t);}
+.theme-btn:hover{color:var(--accent);border-color:var(--accent);}
 
 /* ---------- hero ---------- */
 .hero{padding:64px 0 48px;}
 .kicker{display:flex;justify-content:space-between;align-items:baseline;font-family:var(--mono);font-size:12px;letter-spacing:2.5px;color:var(--muted);padding-bottom:14px;border-bottom:1px solid var(--hairline);gap:12px;flex-wrap:wrap;}
 .kicker b{color:var(--accent);font-weight:400;}
-.kicker .live{color:#2E6B4F;}
+.kicker .live{color:var(--ok);}
 .hero h1{font-family:var(--serif);font-weight:600;font-size:clamp(40px,7vw,80px);line-height:1.14;letter-spacing:.01em;margin:32px 0 24px;}
 .hero h1 .accent{color:var(--accent);font-style:italic;font-weight:500;}
 .hero .deck{max-width:34em;font-size:18px;color:var(--muted);line-height:1.9;}
@@ -240,7 +253,7 @@ section.block{padding:56px 0 0;}
 .toc{list-style:none;}
 
 /* ---------- submit ---------- */
-.submit-grid{display:grid;grid-template-columns:7fr 5fr;gap:48px;padding:36px 0 8px;}
+.submit-grid{display:grid;grid-template-columns:1fr;gap:24px 0;padding:36px 0 8px;}
 .subline{display:flex;border-bottom:2px solid var(--ink);}
 .subline input{flex:1;border:0;background:transparent;outline:none;font-family:var(--mono);font-size:14px;color:var(--ink);padding:13px 4px;letter-spacing:.5px;min-width:0;}
 .subline input::placeholder{color:var(--faint);}
@@ -251,6 +264,9 @@ section.block{padding:56px 0 0;}
 .mode{font-family:var(--mono);font-size:11.5px;letter-spacing:1px;border:1px solid var(--hairline);color:var(--muted);background:transparent;padding:6px 14px;border-radius:99px;cursor:pointer;transition:color var(--t),background var(--t),border-color var(--t);}
 .mode.on{border-color:var(--accent);color:var(--accent);}
 .probeline{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:14px;min-height:1.6em;letter-spacing:.5px;}
+/* 工单入口独立成行：预检会整行重写 probeline，两者不能共用元素 */
+.jobline{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:12px;min-height:1.6em;letter-spacing:.5px;}
+.jobline a{color:var(--accent);}
 .probeline b{color:var(--ink);font-weight:400;}
 .probeline .warn{color:var(--accent);}
 .probeline a{color:var(--accent);}
@@ -262,11 +278,16 @@ section.block{padding:56px 0 0;}
 .stepper .mark{margin-left:auto;font-family:var(--mono);font-size:12px;display:inline-block;}
 .stepper li.pop .mark{animation:markPop .3s var(--ease) 1;}
 @keyframes markPop{from{transform:scale(.5);opacity:0}to{transform:scale(1);opacity:1}}
+.rename-input{
+  font:inherit;color:inherit;letter-spacing:inherit;
+  border:0;border-bottom:2px solid var(--accent);background:transparent;outline:none;
+  width:100%;padding:0 0 4px;
+}
 .stepper li.cur{color:var(--ink);}
 .stepper li.cur .mark{color:var(--accent);}
 .stepper li.cur .t::after{content:" …";}
 .stepper li.done{color:var(--muted);}
-.stepper li.done .mark{color:#2E6B4F;}
+.stepper li.done .mark{color:var(--ok);}
 .logbox{font-family:var(--mono);font-size:11.5px;line-height:1.8;color:var(--muted);background:var(--paper-deep);border:1px solid var(--hairline);padding:14px 16px;margin-top:20px;max-height:220px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;display:none;}
 .submeta{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:14px;letter-spacing:1px;}
 .submeta a{color:var(--accent);}
@@ -368,6 +389,7 @@ html.js .reveal.in{opacity:1;transform:none;}
     <div class="wordmark">VIDEREAD <em>视读</em></div>
     <div class="vol" id="vol">LIVE — 编辑部</div>
     <nav>
+      <button class="theme-btn" id="theme-toggle" type="button" aria-label="切换主题"></button>
       <a href="#submit">投印新篇</a>
       <a href="#feature">本期特稿</a>
       <a href="#toc">往期目录</a>
@@ -401,7 +423,7 @@ html.js .reveal.in{opacity:1;transform:none;}
     <div class="submit-grid">
       <div>
         <div class="subline">
-          <input type="text" id="url" placeholder="B 站链接或 BV 号，如 BV1xx411c7mD" aria-label="视频链接">
+          <input type="text" id="url" autocomplete="off" placeholder="B 站链接或 BV 号，如 BV1xx411c7mD" aria-label="视频链接">
           <button id="btn-submit">投印 →</button>
         </div>
         <div class="modes" id="modes">
@@ -411,6 +433,7 @@ html.js .reveal.in{opacity:1;transform:none;}
           <button class="mode" data-mode="outline">极简大纲</button>
           <label class="switch" style="margin-left:auto"><input type="checkbox" id="frames-switch"><span class="knob"></span>带截图</label>
         </div>
+        <p class="jobline" id="jobline"></p>
         <p class="probeline" id="probeline"></p>
         <p class="submeta" id="submeta"></p>
       </div>
@@ -729,6 +752,8 @@ async function openFeature(runId){
         (d.has_report ? '<a class="act" href="' + API + '/report/' + encodeURIComponent(runId) + '" target="_blank" rel="noopener">原样打开</a>' : "") +
         (d.has_report && !d.has_frames ? '<a class="act" href="' + API + '/api/runs/' + encodeURIComponent(runId) + '/markdown">导出 MD</a>' : "") +
         (d.has_report ? '<a class="act" href="' + API + '/api/runs/' + encodeURIComponent(runId) + '/pdf">导出 PDF</a>' : "") +
+        (d.has_report ? '<a class="act" href="' + API + '/api/runs/' + encodeURIComponent(runId) + '/png">导出 PNG</a>' : "") +
+        '<button class="act" id="btn-rename" data-run="' + esc(runId) + '">改名</button>' +
         '<button class="act" id="btn-fav" data-fav="' + (d.favorite ? 1 : 0) + '">收藏本文<span id="fav-mark">' + (d.favorite ? "★" : "☆") + '</span></button>' +
       '</div>' +
       '<div class="letters">' +
@@ -740,6 +765,8 @@ async function openFeature(runId){
 
   const favBtn = $("#btn-fav");
   favBtn.addEventListener("click", () => toggleFav(runId, favBtn));
+  const renameBtn = $("#btn-rename");
+  if(renameBtn) renameBtn.addEventListener("click", () => startRename(runId));
   const readBtn = $("#btn-read");
   if(readBtn) readBtn.addEventListener("click", () => openReaderPage(runId));
   document.querySelectorAll("#feature-body .chapters li[data-sec]").forEach(li => {
@@ -1026,6 +1053,9 @@ async function submitJob(){
   try{
     const frames = $("#frames-switch") && $("#frames-switch").checked ? true : null;
     const job = await post("/api/jobs", {url, mode, frames});
+    localStorage.setItem("videread.activeJob", job.job_id);
+    /* M1：提交即进工单页盯进度（离线演示模式保留页内步进器） */
+    if(!OFFLINE){ location.href = "/editorial/job/" + encodeURIComponent(job.job_id); return; }
     $("#submeta").innerHTML = "任务 <b>" + esc(job.job_id) + "</b> · 状态 " + esc(job.state) + ' · <a href="#" id="btn-cancel">取消</a>';
     $("#btn-cancel").addEventListener("click", async e => {
       e.preventDefault();
@@ -1085,6 +1115,37 @@ async function submitJob(){
 }
 $("#btn-submit").addEventListener("click", submitJob);
 $("#url").addEventListener("keydown", e => { if(e.key === "Enter") submitJob(); });
+
+/* 行内改名：标题原地变输入框，回车保存 / Esc 或失焦取消 */
+function startRename(runId){
+  const h2 = document.querySelector("#feature-body .article h2");
+  if(!h2 || h2.dataset.renaming) return;
+  const current = h2.textContent;
+  h2.dataset.renaming = "1";
+  const input = document.createElement("input");
+  input.className = "rename-input";
+  input.value = current;
+  input.maxLength = 80;
+  h2.innerHTML = "";
+  h2.appendChild(input);
+  input.focus(); input.select();
+  let settled = false;
+  const finish = save => {
+    if(settled) return;
+    settled = true;
+    const val = input.value.trim();
+    if(!save || !val || val === current){ h2.textContent = current; return; }
+    h2.textContent = val; /* 乐观更新，失败回滚 */
+    post("/api/runs/" + encodeURIComponent(runId) + "/title", {title: val})
+      .then(() => { toast("已改名"); loadRuns(state.page); })
+      .catch(err => { h2.textContent = current; toast("改名失败：" + err.message); });
+  };
+  input.addEventListener("keydown", e => {
+    if(e.key === "Enter"){ e.preventDefault(); finish(true); }
+    if(e.key === "Escape"){ e.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(false));
+}
 
 /* ================= 印务统计 ================= */
 async function loadStats(){
@@ -1269,10 +1330,56 @@ function refreshAll(){
   });
 }
 
+/* 有进行中的工单时，在投印区给一个进入工单页的入口（终态/不存在则清标记） */
+const JOB_TERMINAL = new Set(["done", "cancelled", "failed", "error"]);
+async function checkActiveJob(){
+  const id = localStorage.getItem("videread.activeJob");
+  if(!id) return;
+  try{
+    const job = await jfetch("/api/jobs/" + encodeURIComponent(id));
+    if(JOB_TERMINAL.has(job.state)){
+      localStorage.removeItem("videread.activeJob");
+      return;
+    }
+    $("#jobline").innerHTML = '有进行中的工单 <b>' + esc(id) + '</b> · <a href="/editorial/job/' + encodeURIComponent(id) + '">进入工单页盯进度 →</a>';
+  }catch(err){
+    /* 404 = 工单确实没了才清标记；服务暂时下线时保留 */
+    if(String(err.message) === "404") localStorage.removeItem("videread.activeJob");
+  }
+}
+
 refreshAll();
+checkActiveJob();
 jfetch("/api/runs?page=1&page_size=1").then(r => {
   if(r.runs && r.runs[0]) openFeature(r.runs[0].run_id);
 }).catch(() => openFeature(SAMPLE.runs[0].run_id));
+</script>
+
+<script>
+/* ── 主题三档切换：浅色 → 深色 → 跟随系统 ── */
+(function(){
+  const ORDER = ["light","dark","system"];
+  const LABEL = {light:"浅色",dark:"深色",system:"自动"};
+  let current;
+  try{ current = localStorage.getItem("videread.theme") || "system"; }catch(e){ current = "system"; }
+  const btn = document.getElementById("theme-toggle");
+  const label = () => { if(btn){ btn.textContent = LABEL[current]; btn.setAttribute("aria-label","主题：" + LABEL[current]); } };
+  label();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", e => {
+    let t; try{ t = localStorage.getItem("videread.theme"); }catch(err){}
+    if((t || "system") !== "system") return;
+    document.documentElement.dataset.theme = e.matches ? "dark" : "light";
+  });
+  if(btn) btn.addEventListener("click", () => {
+    current = ORDER[(ORDER.indexOf(current) + 1) % ORDER.length];
+    try{ localStorage.setItem("videread.theme", current); }catch(e){}
+    document.documentElement.classList.add("theme-switching");
+    const dark = current === "dark" || (current === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    label();
+    setTimeout(() => document.documentElement.classList.remove("theme-switching"), 250);
+  });
+})();
 </script>
 </body>
 </html>

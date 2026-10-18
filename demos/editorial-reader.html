@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>(function(){var t;try{t=localStorage.getItem("videread.theme")}catch(e){}if(!t)t="system";var d=t==="dark"||(t==="system"&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.dataset.theme=d?"dark":"light";})();</script>
 <title>VIDEREAD · 全文</title>
 <link rel="preconnect" href="https://cdn.jsdelivr.net">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/fraunces@5.1.0/index.css">
@@ -19,6 +20,15 @@
   --sans:"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
   --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Consolas,monospace;
 }
+
+/* ── 深夜印刷间：深色主题令牌 ── */
+html[data-theme="dark"]{
+  --paper:#14120E; --paper-deep:#1C1914;
+  --ink:#EDE6D6; --muted:#A89F8C; --faint:#6E675A;
+  --hairline:#3A352B; --accent:#D0563C;
+}
+html.theme-switching *,html.theme-switching *::before,html.theme-switching *::after{transition:none!important;}
+
 *{margin:0;padding:0;box-sizing:border-box;}
 html{scroll-behavior:smooth;}
 body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.75;-webkit-font-smoothing:antialiased;}
@@ -31,6 +41,8 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 }
 .bar .back{border:0;background:none;cursor:pointer;font-family:var(--mono);font-size:13px;letter-spacing:2px;color:var(--ink);padding:0;text-decoration:none;transition:color .25s;}
 .bar .back:hover{color:var(--accent);}
+.theme-btn{border:1px solid var(--hairline);background:transparent;cursor:pointer;font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--muted);padding:3px 12px;border-radius:99px;transition:color .25s,border-color .25s;}
+.theme-btn:hover{color:var(--accent);border-color:var(--accent);}
 .bar .rt{flex:1;font-family:var(--serif);font-weight:500;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .bar .rp{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:1px;}
 
@@ -101,6 +113,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
   <a class="back" id="back" href="/editorial">← 编辑部</a>
   <span class="rt" id="reader-title"></span>
   <span class="rp" id="reader-run"></span>
+  <button class="theme-btn" id="theme-toggle" type="button" aria-label="切换主题"></button>
 </div>
 
 <main class="page" id="reader-page">
@@ -239,6 +252,33 @@ function injectTsJumps(vts){
     block.appendChild(a);
   });
 }
+</script>
+
+<script>
+/* ── 主题三档切换：浅色 → 深色 → 跟随系统 ── */
+(function(){
+  const ORDER = ["light","dark","system"];
+  const LABEL = {light:"浅色",dark:"深色",system:"自动"};
+  let current;
+  try{ current = localStorage.getItem("videread.theme") || "system"; }catch(e){ current = "system"; }
+  const btn = document.getElementById("theme-toggle");
+  const label = () => { if(btn){ btn.textContent = LABEL[current]; btn.setAttribute("aria-label","主题：" + LABEL[current]); } };
+  label();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", e => {
+    let t; try{ t = localStorage.getItem("videread.theme"); }catch(err){}
+    if((t || "system") !== "system") return;
+    document.documentElement.dataset.theme = e.matches ? "dark" : "light";
+  });
+  if(btn) btn.addEventListener("click", () => {
+    current = ORDER[(ORDER.indexOf(current) + 1) % ORDER.length];
+    try{ localStorage.setItem("videread.theme", current); }catch(e){}
+    document.documentElement.classList.add("theme-switching");
+    const dark = current === "dark" || (current === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    label();
+    setTimeout(() => document.documentElement.classList.remove("theme-switching"), 250);
+  });
+})();
 </script>
 </body>
 </html>
