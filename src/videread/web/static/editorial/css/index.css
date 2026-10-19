@@ -1,6 +1,7 @@
 :root{
   --paper:#FAF7F1; --paper-deep:#F3EEE3;
   --ink:#17140E; --muted:#6E675A; --faint:#A39B8A;
+  --lead:#2E2A20; --soft:#3A352A;
   --hairline:#D9D2C2; --accent:#A6331E;
   --serif:"Fraunces","Noto Serif SC","Source Han Serif SC","Songti SC","STZhongsong","SimSun",serif;
   --sans:"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
@@ -13,6 +14,7 @@
 html[data-theme="dark"]{
   --paper:#14120E; --paper-deep:#1C1914;
   --ink:#EDE6D6; --muted:#A89F8C; --faint:#6E675A;
+  --lead:#E2D9C4; --soft:#B8AF9C;
   --hairline:#3A352B; --accent:#D0563C; --ok:#6FB98C;
 }
 html.theme-switching *,html.theme-switching *::before,html.theme-switching *::after{transition:none!important;}
@@ -126,7 +128,7 @@ section.block{padding:56px 0 0;}
 .article .art-byline span + span{border-left:1px solid var(--hairline);}
 .article .art-byline a{color:var(--accent);text-decoration:none;transition:border-color var(--t);}
 .article .art-byline a:hover{border-bottom:1px solid var(--accent);}
-.article .lead{margin-bottom:1.4em;color:#2E2A20;font-size:16.5px;}
+.article .lead{margin-bottom:1.4em;color:var(--lead);font-size:16.5px;}
 .article .lead.empty::before{content:"（这份报告还没有导语，点「阅读全文」直接看正文。）";color:var(--faint);font-size:14.5px;}
 .chapters{list-style:none;margin:28px 0 8px;border-top:2px solid var(--ink);}
 .chapters li{display:grid;grid-template-columns:30px 1fr;column-gap:16px;row-gap:3px;padding:16px 2px 14px;border-bottom:1px solid var(--hairline);align-items:baseline;}
@@ -157,7 +159,7 @@ section.block{padding:56px 0 0;}
 .letter{padding:16px 0;border-bottom:1px solid var(--hairline);}
 .letter .q{font-family:var(--serif);font-weight:500;font-size:16px;}
 .letter .q::before{content:"问 · ";font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:1px;}
-.letter .a{font-size:14.5px;color:#3A352A;margin-top:6px;}
+.letter .a{font-size:14.5px;color:var(--soft);margin-top:6px;}
 .letter .a::before{content:"答 · ";font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:1px;}
 .letter .cite{font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:6px;}
 .askline{display:flex;border-bottom:2px solid var(--ink);margin-top:16px;}
