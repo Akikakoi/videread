@@ -75,15 +75,17 @@ def probe_source(
 ) -> dict:
     """探测输入源的时长。
 
-    返回 `{duration, duration_text, title, too_long, limit_seconds, limit_text, source_kind}`；
-    B 站多 P 视频额外带 `pages`（分P 列表，供前端提交前选集）与 `current_page`
-    （链接里已指定的分P，缺省 1）；没有分P 信息时这两个字段不出现。
-    输入非法或抓取失败时抛 `VidereadError`。
+    返回 `{duration, duration_text, title, uploader, too_long, limit_seconds,
+    limit_text, source_kind}`；充电专属/付费稿件额外带 `charging: true`（提示
+    前端需要登录态）。B 站多 P 视频额外带 `pages`（分P 列表，供前端提交前选集）
+    与 `current_page`（链接里已指定的分P，缺省 1）；没有分P 信息时这两个字段
+    不出现。输入非法或抓取失败时抛 `VidereadError`。
     """
     settings = settings or get_settings()
     url = download.normalize_source(source)
     pages: list = []
     uploader = ""
+    charging = False
 
     local = download.local_path(url)
     if local is not None:
@@ -110,6 +112,10 @@ def probe_source(
             if info.title:
                 title = info.title
             uploader = uploader or info.uploader
+            # 充电专属/付费标志来自 view API 的 rights（对所有人公开）；
+            # 未配登录态时 fetch_meta 已直接拒绝，这里只剩「配了 cookies」
+            # 的场景需要提醒前端
+            charging = info.charging
     else:
         raise UsageError(f"参数既不是有效链接、也不是存在的本地文件：{url}")
 
@@ -123,6 +129,8 @@ def probe_source(
         "limit_text": f"{MAX_VIDEO_DURATION_SEC / 3600:.0f} 小时",
         "source_kind": source_kind,
     }
+    if source_kind == "remote" and charging:
+        result["charging"] = True
     if local is None:
         existing = _existing_run(Path(out_root), meta)
         if existing:

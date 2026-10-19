@@ -666,3 +666,147 @@ def test_fresh_dir_reparse_lands_in_new_dir(tmp_path: Path, monkeypatch: pytest.
     new_dir = tmp_path / f"{download.make_run_id(URL, BVID)}-r2"
     assert new_dir.is_dir() and (new_dir / "meta.json").is_file()
     assert (old_dir / "report.html").read_text(encoding="utf-8") == old_html
+
+
+# ------------------------------------------------- 充电专属试看预览兜底
+
+
+def test_preview_guard_aborts_on_short_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """音频远短于元信息时长 = 只拿到试看预览，守卫应拒绝。"""
+    source = tmp_path / "audio.m4a"
+    source.write_bytes(b"fake")
+    monkeypatch.setattr(pipeline.audio_mod, "probe_duration", lambda *_a, **_k: 2.0)
+
+    with pytest.raises(download.DownloadError, match="试看内容"):
+        pipeline._guard_preview_audio(source, 12.0, get_settings())
+
+
+def test_preview_guard_passes_full_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    source = tmp_path / "audio.m4a"
+    source.write_bytes(b"fake")
+    monkeypatch.setattr(pipeline.audio_mod, "probe_duration", lambda *_a, **_k: 11.8)
+
+    pipeline._guard_preview_audio(source, 12.0, get_settings())  # 不抛即通过
+
+
+def test_preview_guard_skips_when_meta_duration_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    source = tmp_path / "audio.m4a"
+    source.write_bytes(b"fake")
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("元信息时长未知时不应调用 ffprobe")
+
+    monkeypatch.setattr(pipeline.audio_mod, "probe_duration", _boom)
+    pipeline._guard_preview_audio(source, 0.0, get_settings())
+
+
+def test_pipeline_rejects_preview_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """端到端：meta 12s + 缓存里只有 2s 的「预览」音频 → 下载阶段中止（退出码 2）。"""
+    run_dir = tmp_path / download.make_run_id(URL, BVID)
+    run_dir.mkdir(parents=True)
+    _write(
+        run_dir / "meta.json",
+        json.dumps(
+            {
+                "bvid": BVID,
+                "title": "充电专属课",
+                "uploader": "某UP主",
+                "duration": 12.0,
+                "url": URL,
+                "cover": "",
+                "description": "",
+                "subtitles": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+    )
+    _write(run_dir / "audio.m4a", "fake-preview")
+    monkeypatch.setattr(pipeline.audio_mod, "probe_duration", lambda *_a, **_k: 2.0)
+    lines: list[str] = []
+
+    with pytest.raises(VidereadError) as excinfo:
+        run(URL, out_root=tmp_path, progress=lines.append)
+
+    assert excinfo.value.exit_code == 2
+    assert "试看内容" in str(excinfo.value)
+
+
+# ------------------------------------------------- 充电专属试看预览兜底
+
+
+def test_preview_guard_aborts_on_short_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """音频远短于元信息时长 = 只拿到试看预览，守卫应拒绝。"""
+    source = tmp_path / "audio.m4a"
+    source.write_bytes(b"fake")
+    monkeypatch.setattr(pipeline.audio_mod, "probe_duration", lambda *_a, **_k: 2.0)
+
+    with pytest.raises(download.DownloadError, match="试看内容"):
+        pipeline._guard_preview_audio(source, 12.0, get_settings())
+
+
+def test_preview_guard_passes_full_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    source = tmp_path / "audio.m4a"
+    source.write_bytes(b"fake")
+    monkeypatch.setattr(pipeline.audio_mod, "probe_duration", lambda *_a, **_k: 11.8)
+
+    pipeline._guard_preview_audio(source, 12.0, get_settings())  # 不抛即通过
+
+
+def test_preview_guard_skips_when_meta_duration_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    source = tmp_path / "audio.m4a"
+    source.write_bytes(b"fake")
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("元信息时长未知时不应调用 ffprobe")
+
+    monkeypatch.setattr(pipeline.audio_mod, "probe_duration", _boom)
+    pipeline._guard_preview_audio(source, 0.0, get_settings())
+
+
+def test_pipeline_rejects_preview_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """端到端：meta 12s + 缓存里只有 2s 的「预览」音频 → 下载阶段中止（退出码 2）。"""
+    run_dir = tmp_path / download.make_run_id(URL, BVID)
+    run_dir.mkdir(parents=True)
+    _write(
+        run_dir / "meta.json",
+        json.dumps(
+            {
+                "bvid": BVID,
+                "title": "充电专属课",
+                "uploader": "某UP主",
+                "duration": 12.0,
+                "url": URL,
+                "cover": "",
+                "description": "",
+                "subtitles": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+    )
+    _write(run_dir / "audio.m4a", "fake-preview")
+    monkeypatch.setattr(pipeline.audio_mod, "probe_duration", lambda *_a, **_k: 2.0)
+    lines: list[str] = []
+
+    with pytest.raises(VidereadError) as excinfo:
+        run(URL, out_root=tmp_path, progress=lines.append)
+
+    assert excinfo.value.exit_code == 2
+    assert "试看内容" in str(excinfo.value)

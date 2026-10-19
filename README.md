@@ -67,9 +67,22 @@ pip install -e .
 | `LOCAL_ASR_MODEL` / `LOCAL_ASR_DEVICE` / `LOCAL_ASR_COMPUTE_TYPE` / `LOCAL_ASR_LANGUAGE` | 用 `local` 后端时 | 模型规格（tiny/base/small/medium/large-v3，默认 small）、设备（默认 auto）、计算精度（默认 auto）、语言提示（默认 auto） |
 | `FFMPEG_BIN` / `FFPROBE_BIN` | 否 | 留空则按 `bin/` → PATH 顺序探测 |
 | `PDF_BROWSER_BIN` | 否 | PDF / PNG 长图导出用的浏览器路径；留空自动探测 Edge / Chrome（Windows 10/11 自带 Edge，无需安装） |
+| `YTDLP_COOKIES_FILE` / `YTDLP_COOKIES_FROM_BROWSER` | 否 | B 站登录信息，用于解析充电专属 / 付费内容（配置方法见下方「B 站登录」） |
 | `HTTP_PROXY` / `HTTPS_PROXY` | 否 | 同时作用于 `httpx` 与 `yt-dlp` |
 
 优先级：`.env` → 环境变量 → CLI 参数（后者覆盖前者）。
+
+### B 站登录（可选，用于充电专属 / 付费视频）
+
+充电专属视频和付费课程只有「已充电 / 已购买」的登录账号才能看到完整内容。想让本工具解析它们：
+
+1. 用**有观看权限**的 B 站账号登录浏览器（充电专属视频要充电过的号，付费课程要购买时的号）；
+2. 两种方式任选其一：
+   - 在浏览器装「Get cookies.txt LOCALLY」一类插件，把 bilibili.com 的登录信息导出为 Netscape 格式的 `cookies.txt` 文件，然后在 `.env` 里填一行 `YTDLP_COOKIES_FILE=D:\路径\cookies.txt`；
+   - 或者不导出文件，直接在 `.env` 里填 `YTDLP_COOKIES_FROM_BROWSER=edge`（也支持 `chrome` / `firefox`），工具会自己读取那个浏览器的登录信息；
+3. 重启服务生效。
+
+没有配置登录信息时，遇到充电专属 / 付费内容会直接拒绝解析并给出中文提示（普通视频不受影响）。
 
 ---
 
@@ -141,6 +154,7 @@ videread-web                     # 安装后的服务命令
 - **统计**：印务统计按日汇总所有 run 的总耗时与 token 用量（读自各 run 的 `run.trace.jsonl`）。
 - **重复解析不覆盖旧报告**：输入已解析过的视频，预检会标注「已解析过（时间）」——直接查看旧报告，或忽略缓存全量重跑落到 `-r2`、`-r3`…新目录，旧报告原样保留。
 - **投印参数策略固定**：不提供「忽略缓存 / 保留音频 / 转写引擎」的界面开关——提交即忽略缓存强制重跑、不保留音频文件、转写引擎按 `.env` 的 `ASR_BACKEND` 配置。
+- **充电专属/付费视频/付费课程拒绝解析**：未购买时 B 站只放出试看内容。预检即识别（充电 rights 标志、课程集的 playable 标志、时长比对）并给出中文拒绝文案；已充电/已购买的用户配置 `YTDLP_COOKIES_FILE`（cookies.txt）或 `YTDLP_COOKIES_FROM_BROWSER` 后可完整解析；未购买时下载阶段也会被兜底校验拦下，不会白烧转写费用。付费课程（`bilibili.com/cheese/play/ep*`）同样支持，run-id 用 `ep{集号}` 前缀。
 - **改 `.env` 后需重启服务**：`.env` 以 `override=False` 加载，已在进程里生效的键改值不会立刻刷新（新增的键可以）。
 
 ---

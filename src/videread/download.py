@@ -19,12 +19,14 @@ import httpx
 from . import execution
 from .config import MAX_VIDEO_DURATION_SEC, Settings, get_settings
 from .errors import DownloadError
+from .transcript import format_time
 
 _BVID_RE = re.compile(r"(BV[0-9A-Za-z]{10})")
 # 只影响分享来源、不影响内容的追踪参数
 _TRACKING_PARAMS = {
     "vd_source",
     "spm_id_from",
+    "csource",
     "from",
     "se_from",
     "t",
@@ -45,6 +47,55 @@ _SUBTITLE_LANGS = "zh-CN,zh-Hans,zh,zh-Hant,ai-zh,ai-en,en"
 _VIEW_API = "https://api.bilibili.com/x/web-interface/view"
 _VIEW_TIMEOUT_SEC = 8.0
 
+# 充电专属/付费内容拦截（§6.3）：view API 的 rights 对所有人公开，即使未充电也
+# 能拿到「这是充电专属稿件」的标志与完整时长——而 yt-dlp 对未充电用户只会下到
+# 几分钟的试看预览流。两个信号配合使用：
+#   rights 标志 + 未配登录态 → 直接拒绝（此时下载只会白烧 ASR/LLM 钱）；
+#   页面完整时长 vs yt-dlp 实际时长（< 80% 判为预览）→ 兜底拦截「配了 cookies
+#   但没给该 UP 充电」的场景。
+_PAYWALL_RIGHTS = ("is_charging_arc", "ugc_pay")
+PREVIEW_DURATION_RATIO = 0.8
+
+
+def _paywall_reject_text(kind: str, has_cookies: bool) -> str:
+    """付费内容拒绝的用户提示：全程大白话，具体配置方法见 README「B 站登录」。"""
+    if kind == "cheese":
+        opener = "这是 B 站上的付费课程"
+        condition = "购买这门课程后"
+        confirm = "如果你已经购买这门课程"
+    else:
+        opener = "这是「充电专属」视频"
+        condition = "给这位 UP 主充电后"
+        confirm = "如果你已经给这位 UP 主充电"
+    if has_cookies:
+        return (
+            f"{opener}：当前配置的 B 站账号没有观看权限，已停止解析。\n"
+            f"{confirm}，请确认配置里填的是观看时使用的那个账号的登录信息；"
+            "如果是别的账号，换好之后重试即可（配置方法见 README 的「B 站登录」一节）。"
+        )
+    return (
+        f"{opener}：只有{condition}才能观看完整内容，已停止解析。\n"
+        "如果你有观看权限，请按 README 的「B 站登录」一节，把 B 站账号的登录信息"
+        "填入配置文件后重试。"
+    )
+
+
+def _preview_reject_text(actual: float, full: float) -> str:
+    """时长比对命中的试看预览提示。"""
+    return (
+        f"只下载到了 {format_time(actual)} 的试看内容，远短于这个视频完整的 "
+        f"{format_time(full)}——它应该是需要付费观看的内容（充电专属或付费课程），"
+        "当前账号没有观看权限，已停止解析，没有进行转写，不会产生费用。\n"
+        "如果你有观看权限，请按 README 的「B 站登录」一节配置账号信息后重试。"
+    )
+
+# B 站付费课程（Cheese）：URL 无 BV 号，元数据走 pugv 接口（对所有人公开，
+# 含每集的 playable 标志 = 当前观看者能否看全集：免费试看集为 true，付费集
+# 未购买为 false）。yt-dlp 原生支持（BilibiliCheese），未购买时报
+# "You need to purchase the course"。
+_CHEESE_EP_RE = re.compile(r"bilibili\.com/cheese/play/ep(\d+)")
+_CHEESE_SEASON_API = "https://api.bilibili.com/pugv/view/web/season"
+
 # 多字幕并存时的取用优先级：中文优先，避免双语视频误选英文字幕；
 # 人手 CC 排在 AI 字幕之前（质量通常更好），ai-zh 排在 en 之前
 # （yt-dlp 的 --sub-langs 只做过滤，不决定我们取哪一份）
@@ -62,6 +113,7 @@ class VideoMeta:
     url: str
     cover: str = ""
     description: str = ""
+    uploader_id: str = ""
     subtitles: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -77,6 +129,7 @@ class VideoMeta:
             url=str(data.get("url", "")),
             cover=str(data.get("cover", "") or ""),
             description=str(data.get("description", "") or ""),
+            uploader_id=str(data.get("uploader_id", "") or ""),
             subtitles=list(data.get("subtitles") or []),
         )
 
@@ -97,6 +150,7 @@ class VideoInfo:
     title: str
     uploader: str
     pages: list[VideoPage]
+    charging: bool = False
 
 
 def canonical_url(url: str) -> str:
@@ -155,9 +209,13 @@ def local_path(text: str) -> Path | None:
 
 
 def make_run_id(url: str, bvid: str) -> str:
-    """`{bvid}-{hash8}`：同一视频多次运行落到同一目录（§4）。"""
+    """`{bvid}-{hash8}`：同一视频多次运行落到同一目录（§4）。
+
+    无 BV 号的付费课程链接用 `ep{集号}` 做前缀；本地文件回落 `local`。
+    """
     digest = hashlib.sha256(canonical_url(url).encode("utf-8")).hexdigest()[:8]
-    safe_id = bvid or "local"
+    ep_id = _cheese_ep_id(url)
+    safe_id = bvid or (f"ep{ep_id}" if ep_id else "local")
     return f"{safe_id}-{digest}"
 
 
@@ -264,13 +322,8 @@ def current_page(url: str) -> int:
     return 1
 
 
-def fetch_video_info(url: str, settings: Settings | None = None) -> VideoInfo | None:
-    """用 B 站 view API 拉视频概要（主标题 / UP主 / 分P列表）。
-
-    任何失败都返回 None（按单P处理，不阻断预检）：预检只是给前端一个
-    「让用户选分P、看清标题作者」的机会，探测失败不应比现状更糟——
-    真正的链接有效性仍由 fetch_meta / 流水线的下载阶段兜底。
-    """
+def _view_data(url: str, settings: Settings | None = None) -> dict | None:
+    """B 站 view API 的 data 节点；任何失败返回 None（调用方自行降级）。"""
     bvid = extract_bvid(url)
     if not bvid:
         return None
@@ -289,7 +342,146 @@ def fetch_video_info(url: str, settings: Settings | None = None) -> VideoInfo | 
     if not isinstance(payload, dict) or payload.get("code") != 0:
         return None
     data = payload.get("data")
-    if not isinstance(data, dict):
+    return data if isinstance(data, dict) else None
+
+
+def _charging_flag(data: dict) -> bool:
+    """view data 的 rights 里是否带「需要充电/付费才能看全片」的位。"""
+    rights = data.get("rights")
+    if not isinstance(rights, dict):
+        return False
+    for key in _PAYWALL_RIGHTS:
+        try:
+            if int(rights.get(key) or 0) == 1:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def charging_exclusive(url: str, settings: Settings | None = None) -> bool | None:
+    """该稿件是否为充电专属/付费内容。
+
+    True = 是（未充电用户只能拿到试看预览）；False = 确认不是；
+    None = 无法判定（非 B 站链接 / view API 失败），调用方不应阻断。
+    """
+    data = _view_data(url, settings)
+    if data is None:
+        return None
+    return _charging_flag(data)
+
+
+def _cheese_ep_id(url: str) -> str | None:
+    """B 站付费课程（Cheese）单集链接的 ep 号；非课程链接返回 None。"""
+    match = _CHEESE_EP_RE.search(url or "")
+    return match.group(1) if match else None
+
+
+def _cheese_season(url: str, settings: Settings | None = None) -> dict | None:
+    """pugv season 接口的 data 节点：课程信息 + 每集的 playable / duration。
+
+    公开接口、无需登录；`playable` 反映**当前观看者**的权限——免费试看集
+    匿名也是 true，付费集未购买为 false。失败返回 None。
+    """
+    ep_id = _cheese_ep_id(url)
+    if not ep_id:
+        return None
+    settings = settings or get_settings()
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(_VIEW_TIMEOUT_SEC),
+            proxy=settings.proxy,
+            follow_redirects=True,
+            headers={
+                "User-Agent": "Mozilla/5.0 (videread)",
+                "Referer": "https://www.bilibili.com/",
+            },
+        ) as client:
+            response = client.get(_CHEESE_SEASON_API, params={"ep_id": ep_id})
+        payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("code") != 0:
+        return None
+    data = payload.get("data")
+    return data if isinstance(data, dict) else None
+
+
+def _paywall_snapshot(url: str, settings: Settings | None = None) -> dict | None:
+    """汇总两类付费内容的信号：paywalled（当前观看者能否看全集）与完整时长。
+
+    返回 `{paywalled, full_duration, kind}`；kind = charging / cheese。
+    与两类 API 都无关（普通视频 / 本地文件 / 探测失败）时返回 None。
+    """
+    if extract_bvid(url):
+        data = _view_data(url, settings)
+        if data is None:
+            return None
+        return {
+            "paywalled": _charging_flag(data),
+            "full_duration": _view_page_duration(url, data),
+            "kind": "charging",
+        }
+    ep_id = _cheese_ep_id(url)
+    if ep_id:
+        season = _cheese_season(url, settings)
+        if season is None:
+            return None
+        episode = next(
+            (
+                item
+                for item in season.get("episodes") or []
+                if isinstance(item, dict) and str(item.get("id")) == ep_id
+            ),
+            None,
+        )
+        if episode is None:
+            return None
+        try:
+            duration = float(episode.get("duration") or 0)
+        except (TypeError, ValueError):
+            duration = 0.0
+        return {
+            # playable 反映当前观看者的权限：未购买 False，免费试看集 True
+            "paywalled": not bool(episode.get("playable")),
+            "full_duration": duration,
+            "kind": "cheese",
+        }
+    return None
+
+
+def _view_page_duration(url: str, data: dict) -> float:
+    """view data 里的完整时长；多P 时取链接所指分P 的时长。
+
+    yt-dlp -J 对带 `p` 参数的链接返回的是单P 时长，对照基准必须同口径，
+    否则多P 视频会被误判成试看预览。
+    """
+    target = current_page(url)
+    items = data.get("pages")
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                if int(item.get("page", -1)) == target:
+                    return float(item.get("duration") or 0)
+            except (TypeError, ValueError):
+                continue
+    try:
+        return float(data.get("duration") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def fetch_video_info(url: str, settings: Settings | None = None) -> VideoInfo | None:
+    """用 B 站 view API 拉视频概要（主标题 / UP主 / 分P列表 / 充电标志）。
+
+    任何失败都返回 None（按单P处理，不阻断预检）：预检只是给前端一个
+    「让用户选分P、看清标题作者」的机会，探测失败不应比现状更糟——
+    真正的链接有效性仍由 fetch_meta / 流水线的下载阶段兜底。
+    """
+    data = _view_data(url, settings)
+    if data is None:
         return None
     pages: list[VideoPage] = []
     for item in data.get("pages") or []:
@@ -312,6 +504,7 @@ def fetch_video_info(url: str, settings: Settings | None = None) -> VideoInfo | 
         if isinstance(owner, dict)
         else "",
         pages=[item for item in pages if item.page >= 1],
+        charging=_charging_flag(data),
     )
 
 
@@ -330,8 +523,27 @@ def fetch_meta(
     不带 `-J` 的调用：`-J` 隐含 simulate 模式，`--write-subs` 不落文件。
     """
     settings = settings or get_settings()
+
+    # 充电专属/付费课程拦截（第一层）：view / pugv API 的标志对所有人公开。
+    # 未配登录态时 yt-dlp 只会下到试看预览（或直接报需要购买），直接拒绝，
+    # 不白烧 ASR/LLM 费用；配了登录态则放行——已充电/已购买用户可完整解析，
+    # 未购买由第二层时长比对与 yt-dlp 的购买校验兜底。
+    has_cookies = bool(settings.cookies_file or settings.cookies_from_browser)
+    paywall = _paywall_snapshot(url, settings)
+    if paywall is not None:
+        if paywall["paywalled"] and not has_cookies:
+            raise DownloadError(_paywall_reject_text(paywall["kind"], has_cookies))
+        # 第二层对照基准：页面完整时长（多P 取所选分P，与 yt-dlp 的单P 口径一致）
+        view_duration = paywall["full_duration"]
+    else:
+        view_duration = 0.0
+
     result = _yt_dlp(["-J", "--skip-download", url], settings, timeout=180.0)
     if result.returncode != 0:
+        # 配了登录态但未购买（课程）/未充电（充电专属）时，yt-dlp 的报错是
+        # 英文购买提示——快照已判定付费内容，统一换成大白话拒绝文案。
+        if paywall is not None and paywall["paywalled"]:
+            raise DownloadError(_paywall_reject_text(paywall["kind"], has_cookies))
         raise _fail("获取视频元信息", result)
     try:
         info = json.loads(result.stdout)
@@ -343,6 +555,12 @@ def fetch_meta(
     duration = float(info.get("duration") or 0)
     if duration <= 0:
         raise DownloadError("视频时长不可用（可能是直播回放或付费视频）")
+    if (
+        view_duration > 0
+        and duration > 0
+        and duration < view_duration * PREVIEW_DURATION_RATIO
+    ):
+        raise DownloadError(_preview_reject_text(duration, view_duration))
     if enforce_limit and duration > MAX_VIDEO_DURATION_SEC:
         raise DownloadError(
             f"视频时长 {duration / 3600:.1f} 小时，超过 "
@@ -358,6 +576,7 @@ def fetch_meta(
         url=str(info.get("webpage_url") or url),
         cover=str(info.get("thumbnail") or ""),
         description=str(info.get("description") or ""),
+        uploader_id=str(info.get("uploader_id") or info.get("channel_id") or "").strip(),
         subtitles=[],
     )
     if not meta.title:

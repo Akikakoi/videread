@@ -362,6 +362,7 @@ def pick_subtitle(subtitles: list[dict], run_dir: Path) -> Path | None
 - **多 P 视频**：预检阶段用 B 站 view API（`fetch_pages`）拉分P列表，Web 控制台在提交前让用户选好分P，CLI 用 `--page N`；选定后给链接追加 `?p=N` 再走现有流程。`p` 参数参与 `canonical_url` 与 run-id 计算，各分P 落到独立 run 目录、缓存互不冲突；`page_url(url, 1)` 会移除 `p` 参数，保证裸链接与 `?p=1` 共享同一份缓存。分P探测失败一律降级为单P，不阻断预检
 - **字幕优先**（`SUBTITLE_FIRST`，默认开）：字幕覆盖视频时长 ≥ 50% 时判为完整，直接由字幕建转写稿，跳过音频下载、音频处理与 ASR；覆盖不足或字幕文件缺失时回退到「下载音频 + ASR」。CLI 可用 `--force-asr` 单次强制走 ASR
 - 校验：`duration > 0` 且 `duration <= 2 * 3600`（超 2 小时拒绝，避免 ASR 成本失控）；本地文件在流水线阶段 1 走同一上限
+- **充电专属/付费内容拦截**（`rights.is_charging_arc` / `rights.ugc_pay` / 课程集 `playable`）：view API 的 rights 与 pugv season API（付费课程 `cheese/play/ep*`，`_paywall_snapshot` 统一两类信号）对所有人公开，而 yt-dlp 对未购买用户只会下到试看预览流或直接报购买错误。三层拦截：① 快照判定付费且未配登录态（`YTDLP_COOKIES_FILE` / `YTDLP_COOKIES_FROM_BROWSER`）直接拒绝；② 时长比对兜底——yt-dlp 时长 < 页面完整时长（多P 取所选分P，与 `-J` 的单P 口径一致）的 80% 判为试看预览并拒绝；③ 配了登录态但 yt-dlp 仍报购买/权限错误时，换成中文拒绝文案。流水线下载音频后再用 ffprobe 实测时长做第四道防线（`_guard_preview_audio`），缓存命中的旧音频同样过检。课程链接无 BV 号，run-id 用 `ep{集号}` 前缀，`csource` 等追踪参数不入 canonical_url；预检结果对充电稿件带 `charging: true` 供前端提示
 - 起子进程一律走 `execution.run_command()`：统一 utf-8 / 文本模式 / 超时，并把「程序缺失」「超时」归一化为 `DownloadError`（本模块与 §6.4 的 ffmpeg 封装共用同一入口）
 
 ### 6.4 `audio.py`

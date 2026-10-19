@@ -580,8 +580,24 @@ body {
   vertical-align: middle;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+  /* 胶囊可能被注入成 grid/flex 子项（如卡片容器自身带 data-source-units），
+     显式禁止两个方向被拉伸，否则 border-radius:999px 会放大成椭圆 */
+  justify-self: start;
+  align-self: start;
+  flex: 0 0 auto;
+  width: auto;
+  height: auto;
 }
 .ts-jump:hover { background: #ffffff; border-color: var(--accent); }
+/* 卡片/对比/步骤等 grid 容器自身带 data-source-units 时，胶囊独占一行排在卡片之后 */
+.cards > .ts-jump,
+.comparison > .ts-jump,
+.categories > .ts-jump,
+.categories-detailed > .ts-jump,
+.steps > .ts-jump,
+.stats > .ts-jump,
+.tiles > .ts-jump,
+.bars > .ts-jump { grid-column: 1 / -1; margin-top: 2px; }
 </style>
 </head>
 <body>

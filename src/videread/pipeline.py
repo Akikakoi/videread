@@ -335,6 +335,22 @@ def _download_local(state: _RunState, local_path: Path) -> str:
     return detail
 
 
+def _guard_preview_audio(source_audio: Path, meta_duration: float, settings: Settings) -> None:
+    """试看预览兜底：音频远短于元信息时长 = 登录态无完整观看权限
+    （充电专属/付费内容）。在进 ASR 前中止，避免白烧转写费用；对缓存命中
+    的音频同样生效，能把历史遗留的预览缓存也拦下来。"""
+    if meta_duration <= 0:
+        return
+    actual = audio_mod.probe_duration(source_audio, settings)
+    if actual < meta_duration * download.PREVIEW_DURATION_RATIO:
+        raise download.DownloadError(
+            f"只下载到了 {format_time(actual)} 的试看内容，远短于完整的 "
+            f"{format_time(meta_duration)}——这个视频需要付费观看"
+            "（充电专属或付费课程），当前账号没有观看权限，"
+            "已停止解析，未进行转写，不会产生转写费用。"
+        )
+
+
 def _download_remote(state: _RunState) -> str:
     """远程视频：抓取元信息与字幕（合并为一次 yt-dlp 调用），按需下载音频。"""
     url_text = (state.url or "").strip()
@@ -401,6 +417,8 @@ def _download_remote(state: _RunState) -> str:
             source_audio = download.download_audio(meta.url, run_dir, state.settings)
             did_download = True
             stage.detail["audio"] = source_audio.name
+        if source_audio is not None:
+            _guard_preview_audio(source_audio, meta.duration, state.settings)
         if state.subtitle_path is not None:
             stage.detail["subtitle_first"] = state.subtitle_path.name
     detail = f"meta.json  {meta.bvid}  时长 {format_time(meta.duration)}"

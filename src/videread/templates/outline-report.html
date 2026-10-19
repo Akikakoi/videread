@@ -247,6 +247,13 @@ body {
   vertical-align: middle;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+  /* 胶囊可能被注入成 grid/flex 子项（如容器自身带 data-source-units），
+     显式禁止两个方向被拉伸，否则 border-radius:999px 会放大成椭圆 */
+  justify-self: start;
+  align-self: start;
+  flex: 0 0 auto;
+  width: auto;
+  height: auto;
 }
 .ts-jump:hover { background: #ffffff; border-color: var(--accent); }
 </style>
