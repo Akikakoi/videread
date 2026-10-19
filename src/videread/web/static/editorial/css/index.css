@@ -105,20 +105,7 @@ section.block{padding:56px 0 0;}
 /* ---------- feature spread ---------- */
 .spread{padding:44px 0;}
 .spread .article{max-width:none;margin:0;}
-.spread .figure{max-width:none;margin:0;}
-.spread .figure figcaption{border-bottom:1px solid var(--hairline);padding-bottom:8px;}
-.spread .figure .meta{margin-top:18px;}
-.figure{position:relative;}
-.thumb{aspect-ratio:16/10;background:var(--ink);display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;}
-.thumb::before{content:"";position:absolute;inset:0;background:linear-gradient(var(--paper-deep) 1px,transparent 1px),linear-gradient(90deg,var(--paper-deep) 1px,transparent 1px);background-size:32px 32px;opacity:.12;}
-.thumb svg{width:52px;height:52px;position:relative;}
-.figure figcaption{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;color:var(--faint);margin-top:10px;display:flex;justify-content:space-between;}
-.meta{margin-top:32px;}
-.meta dl{display:grid;grid-template-columns:auto 1fr;gap:10px 24px;}
-.meta dt{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--faint);padding-top:3px;white-space:nowrap;}
-.meta dd{font-size:14.5px;border-bottom:1px solid var(--hairline);padding-bottom:9px;overflow-wrap:anywhere;}
 .article h2{font-family:var(--serif);font-weight:500;font-size:26px;line-height:1.4;margin-bottom:6px;}
-.article .rubric{font-family:var(--mono);font-size:11px;letter-spacing:2.5px;color:var(--accent);margin-bottom:22px;}
 /* 特稿居中题头：眉题 + 标题 + 副标题 + 杂志式署名行（方案 C / 一） */
 .article .art-head{text-align:center;border-bottom:1px solid var(--hairline);padding:4px 12px 20px;margin:0 0 30px;}
 .article .art-head h2{font-size:30px;margin-bottom:0;}

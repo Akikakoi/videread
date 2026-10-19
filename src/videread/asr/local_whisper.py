@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..config import Settings
-from ..errors import AsrError, CancelledError, UsageError
+from ..errors import AsrError, UsageError
 from .base import AsrSegment, sort_segments
 
 #: 每 N 段向进度回调汇报一次，避免长视频把控制台日志刷爆

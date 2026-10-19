@@ -15,7 +15,6 @@ from pathlib import Path
 
 from . import execution
 from .config import (
-    FRAME_CLIP_SECONDS,
     FRAME_JPEG_QUALITY,
     FRAME_LEAD_IN,
     FRAME_MAX_TOTAL,

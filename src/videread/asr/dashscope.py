@@ -18,7 +18,6 @@ from ..audio import cut_segment, detect_silence, plan_chunks, probe_duration
 from ..config import (
     ASR_SEGMENT_SECONDS,
     ASR_SEGMENT_TIMEOUT_SEC,
-    DASHSCOPE_BASE_URL,
     Settings,
 )
 from ..errors import AsrError, CancelledError

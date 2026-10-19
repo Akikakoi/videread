@@ -3,7 +3,6 @@
 /* ================= 环境 ================= */
 const API = (location.protocol === "file:") ? "http://127.0.0.1:8765" : "";
 const STAGES = ["下载","音频处理","转写","规范化","结构规划","截图","逐节写作","渲染"];
-const PROFILE_ZH = {standard:"详细讲解",deep:"深度精读",brief:"快速概览",outline:"极简大纲"};
 /* outline.profile 是结构规划选出的信息结构（机器字段），五种合法值见 report/outline.py */
 const STRUCTURE_ZH = {mechanism:"机理拆解",procedure:"步骤流程",evidence:"论据实证",argument:"观点论述",narrative:"叙事纪事"};
 const structureZh = p => STRUCTURE_ZH[p] || (p ? p : "—");
@@ -619,58 +618,14 @@ async function submitJob(){
     const target = (probePages.length && pageSelKey === url) ? withPage(url, selectedPage()) : url;
     const job = await post("/api/jobs", {url: target, mode, frames, no_cache: true, keep_audio: false});
     localStorage.setItem("videread.activeJob", job.job_id);
-    /* M1：提交即进工单页盯进度（离线演示模式保留页内步进器） */
-    if(!OFFLINE){ location.href = "/editorial/job/" + encodeURIComponent(job.job_id); return; }
-    $("#submeta").innerHTML = "任务 <b>" + esc(job.job_id) + "</b> · 状态 " + esc(job.state) + ' · <a href="#" id="btn-cancel">取消</a>';
-    $("#btn-cancel").addEventListener("click", async e => {
-      e.preventDefault();
-      try{ await post("/api/jobs/" + encodeURIComponent(job.job_id) + "/cancel"); toast("已请求取消，将在检查点停止"); }
-      catch(err){ toast("取消失败：" + err.message); }
-    });
-    const es = new EventSource(API + "/api/jobs/" + encodeURIComponent(job.job_id) + "/events");
-    const log = $("#logbox");
-    const push = line => {
-      log.textContent += (log.textContent ? "\n" : "") + line;
-      log.scrollTop = log.scrollHeight;
-    };
-    const finish = () => { es.close(); btn.disabled = false; btn.textContent = "投印 →"; };
-    es.addEventListener("stage", ev => {
-      const d = JSON.parse(ev.data);
-      for(let i = 0; i < d.index; i++) doneSet.add(i);
-      renderStepper(d.index, doneSet);
-    });
-    es.addEventListener("log", ev => push(JSON.parse(ev.data).line || ""));
-    es.addEventListener("status", ev => {
-      const d = JSON.parse(ev.data);
-      if(d.state === "running") renderStepper(0, doneSet);
-    });
-    es.addEventListener("done", ev => {
-      const d = JSON.parse(ev.data);
-      doneSet.add(7); doneSet.add(6);
-      renderStepper(8, doneSet);
-      push("[完成] " + (d.run_id || ""));
-      $("#submeta").innerHTML = "印毕 · <a href='" + (d.report_url || ("/report/" + (d.run_id || ""))) + "' target='_blank' rel='noopener'>翻开新的一期 →</a>";
-      toast("新的一期印好了");
-      loadRuns(1, true);
-      if(d.run_id) openFeature(d.run_id);
-      finish();
-    });
-    es.addEventListener("error", ev => {
-      let d = {};
-      try{ d = JSON.parse(ev.data); }catch(e){}
-      push("[错误] " + (d.message || "任务失败") + (d.hint ? " · " + d.hint : ""));
-      renderStepper(-1, doneSet);
-      $("#submeta").innerHTML = '<span style="color:var(--accent)">印刷失败：' + esc(d.message || "未知错误") + '</span>';
-      toast("任务失败：" + (d.message || "未知错误"));
-      finish();
-    });
-    es.addEventListener("cancelled", ev => {
-      push("[取消] 已在最近的检查点停止，已落盘产物保留");
-      $("#submeta").textContent = "任务已取消 · 重新提交同一视频可从断点续跑";
-      toast("任务已取消");
-      finish();
-    });
-    es.onerror = () => { push("[连接] 事件流中断"); };
+    /* 提交后留在主页：工单入口就地给出（工单页有完整的步进器与日志），不整页跳转 */
+    showJobline(job.job_id);
+    toast("已投递，正在排印");
+    $("#stepper").innerHTML = "";
+    $("#logbox").style.display = "none";
+    $("#submeta").innerHTML = "";
+    btn.disabled = false; btn.textContent = "投印 →";
+    watchActiveJob();
   }catch(e){
     renderStepper(-1, doneSet);
     $("#submeta").innerHTML = '<span style="color:var(--accent)">' + (OFFLINE ? "演示模式 · 提交任务在启动本地服务后可用" : "提交失败：" + esc(e.message)) + '</span>';
@@ -908,6 +863,31 @@ function refreshAll(){
 
 /* 有进行中的工单时，在投印区给一个进入工单页的入口（终态/不存在则清标记） */
 const JOB_TERMINAL = new Set(["done", "cancelled", "failed", "error"]);
+function showJobline(id){
+  $("#jobline").innerHTML = '投印中 · 工单 <b>' + esc(id) + '</b> · <a href="/editorial/job/' + encodeURIComponent(id) + '">进入工单页盯进度 →</a>';
+}
+function clearJobline(){
+  localStorage.removeItem("videread.activeJob");
+  $("#jobline").innerHTML = "";
+}
+/* 提交后留在主页的代价是主页不知道工单何时终态——15s 轻量轮询兜底：
+   终态即清行，完成时 toast + 刷新目录（工单页才有的实时反馈，这里只要个结果） */
+let jobPoll = null;
+function watchActiveJob(){
+  if(jobPoll) return;
+  jobPoll = setInterval(async () => {
+    const id = localStorage.getItem("videread.activeJob");
+    if(!id){ clearInterval(jobPoll); jobPoll = null; $("#jobline").innerHTML = ""; return; }
+    try{
+      const job = await jfetch("/api/jobs/" + encodeURIComponent(id));
+      if(JOB_TERMINAL.has(job.state)){
+        clearJobline();
+        clearInterval(jobPoll); jobPoll = null;
+        if(job.state === "done"){ toast("新的一期印好了"); loadRuns(1, true); }
+      }
+    }catch(e){ /* 服务暂时下线等：保留现状，下轮再看 */ }
+  }, 15000);
+}
 async function checkActiveJob(){
   const id = localStorage.getItem("videread.activeJob");
   if(!id) return;
@@ -917,7 +897,8 @@ async function checkActiveJob(){
       localStorage.removeItem("videread.activeJob");
       return;
     }
-    $("#jobline").innerHTML = '有进行中的工单 <b>' + esc(id) + '</b> · <a href="/editorial/job/' + encodeURIComponent(id) + '">进入工单页盯进度 →</a>';
+    showJobline(id);
+    watchActiveJob();
   }catch(err){
     /* 404 = 工单确实没了才清标记；服务暂时下线时保留 */
     if(String(err.message) === "404") localStorage.removeItem("videread.activeJob");
