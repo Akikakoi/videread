@@ -135,7 +135,7 @@ videread/
 │  │  ├─ outline.py
 │  │  ├─ writer.py
 │  │  ├─ prompts.py
-│  │  └─ qa.py                # 报告内问答（检索 + 引用），仅控制台调用
+│  │  └─ qa.py                # 报告内问答（检索 + 引用），仅 Web 前端调用
 │  ├─ render.py
 │  ├─ trace.py
 │  └─ templates/
@@ -254,7 +254,7 @@ videread/
 
 ### 5.6 `qa.jsonl`
 
-仅控制台问答产生（不问答的 run 没有该文件），每行一次问答，追加写：
+仅 Web 前端问答产生（不问答的 run 没有该文件），每行一次问答，追加写：
 
 ```json
 {"ts": "2026-10-04 20:15:02", "question": "…", "answer_html": "…", "citations": [{"unit_id": "u0013", "seconds": 135.0, "time_text": "02:15", "snippet": "…", "section_id": "s1", "section_index": 1}], "usage_total": 1234}
@@ -319,7 +319,7 @@ videread/
 | 130 | 任务被用户取消（已生成产物保留，可续跑）      |
 
 退出码常量与异常分类定义在 `errors.py`；每个码对应的**失败类别与用户文案**由 `failures.py`
-用纯函数提供（`group()` / `hint()`），CLI 与 Web 控制台共用这一份，前端不再各自维护码表。
+用纯函数提供（`group()` / `hint()`），CLI 与 Web 前端共用这一份，前端不再各自维护码表。
 新增退出码时必须同步在 `failures.py` 登记，`tests/test_failures.py` 会挡住漏登记。
 
 ### 6.2 `pipeline.py`
@@ -340,7 +340,7 @@ def run(url: str, *, mode: str = "standard", out_root: Path,
 - 阶段边界记录 `run.trace.jsonl`
 - 将底层异常归类为上面 5 类退出码
 - **不吞异常**，失败时打印出错阶段与已生成产物路径（便于手工续跑）
-- **取消检查点**（Web 控制台取消任务用）：`cancel_check` 在每个阶段边界与
+- **取消检查点**（Web 前端取消任务用）：`cancel_check` 在每个阶段边界与
   长阶段内部（ASR 切段之间 / 逐节写作各节之间）被调用，抛 `CancelledError`
   （退出码 130）即终止；已落盘产物照常保留，重新提交可断点续跑
 
@@ -359,10 +359,10 @@ def pick_subtitle(subtitles: list[dict], run_dir: Path) -> Path | None
 - 音频格式优先 `m4a`；不支持时回退 `bestaudio`
 - 若视频自带字幕，一并下载到 `subtitle.<lang>.srt`
 - 多字幕并存时按 `zh-CN → zh-Hans → zh → zh-Hant → en` 取用（`pick_subtitle`）；`--sub-langs` 只做过滤，不决定取哪一份
-- **多 P 视频**：预检阶段用 B 站 view API（`fetch_pages`）拉分P列表，Web 控制台在提交前让用户选好分P，CLI 用 `--page N`；选定后给链接追加 `?p=N` 再走现有流程。`p` 参数参与 `canonical_url` 与 run-id 计算，各分P 落到独立 run 目录、缓存互不冲突；`page_url(url, 1)` 会移除 `p` 参数，保证裸链接与 `?p=1` 共享同一份缓存。分P探测失败一律降级为单P，不阻断预检
+- **多 P 视频**：预检阶段用 B 站 view API（`fetch_pages`）拉分P列表，Web 前端在提交前让用户选好分P，CLI 用 `--page N`；选定后给链接追加 `?p=N` 再走现有流程。`p` 参数参与 `canonical_url` 与 run-id 计算，各分P 落到独立 run 目录、缓存互不冲突；`page_url(url, 1)` 会移除 `p` 参数，保证裸链接与 `?p=1` 共享同一份缓存。分P探测失败一律降级为单P，不阻断预检
 - **字幕优先**（`SUBTITLE_FIRST`，默认开）：字幕覆盖视频时长 ≥ 50% 时判为完整，直接由字幕建转写稿，跳过音频下载、音频处理与 ASR；覆盖不足或字幕文件缺失时回退到「下载音频 + ASR」。CLI 可用 `--force-asr` 单次强制走 ASR
 - 校验：`duration > 0` 且 `duration <= 2 * 3600`（超 2 小时拒绝，避免 ASR 成本失控）；本地文件在流水线阶段 1 走同一上限
-- **充电专属/付费内容拦截（暂不支持解析）**（`rights.is_charging_arc` / `rights.ugc_pay` / 课程集 `playable`）：view API 的 rights 与 pugv season API（付费课程 `cheese/play/ep*`，`paywall_snapshot` 统一两类信号并带回标题）对所有人公开，而 yt-dlp 对未购买用户只会下到试看预览流或直接报购买错误。2026-10-19 决策：这两类内容**一律不支持解析**（不做登录态例外）。三层防线：① 预检阶段 `probe_source` 先查快照，命中即返回结构化信号 `paywalled: true` + 大白话 `message`（前端据此禁用「投递」按钮）；② `fetch_meta` 无条件拒绝（退出码 2）；③ 流水线下载音频后用 ffprobe 实测时长兜底（`_guard_preview_audio`），缓存命中的旧音频同样过检。课程链接无 BV 号，run-id 用 `ep{集号}` 前缀，`csource` 等追踪参数不入 canonical_url
+- **充电专属/付费内容拦截（暂不支持解析）**（充电专属 `is_upower_exclusive`——view API **顶层**字段，rights 里没有对应键 / `rights.ugc_pay` / 课程集 `playable`）：view API 的 rights 与 pugv season API（付费课程 `cheese/play/ep*`，`paywall_snapshot` 统一两类信号并带回标题）对所有人公开，而 yt-dlp 对未购买用户只会下到试看预览流或直接报购买错误。2026-10-19 决策：这两类内容**一律不支持解析**（不做登录态例外）。三层防线：① 预检阶段 `probe_source` 先查快照，命中即返回结构化信号 `paywalled: true` + 大白话 `message`（前端据此禁用「投递」按钮）；② `fetch_meta` 无条件拒绝（退出码 2）；③ 流水线下载音频后用 ffprobe 实测时长兜底（`_guard_preview_audio`），缓存命中的旧音频同样过检。课程链接无 BV 号，run-id 用 `ep{集号}` 前缀，`csource` 等追踪参数不入 canonical_url
 - 起子进程一律走 `execution.run_command()`：统一 utf-8 / 文本模式 / 超时，并把「程序缺失」「超时」归一化为 `DownloadError`（本模块与 §6.4 的 ffmpeg 封装共用同一入口）
 
 ### 6.4 `audio.py`
@@ -437,7 +437,7 @@ class LocalWhisperAsr:
   配套两条：单段上限 `ASR_REALTIME_SEGMENT_SECONDS`（默认 300s，比异步通道的 1800s 短，
   失败重推代价可控）、超时预算按 `段长/倍速 + 连接余量 + 收尾余量` 计算而**不是**固定的
   `ASR_SEGMENT_TIMEOUT_SEC`——固定 600s 在 5 分钟以上的段上必然不够，那正是此故障的另一直接成因
-- **长音频切段**：云 ASR 通常有单次时长上限。用 `detect_silence` 找到接近上限的静音点切分；异步与实时后端切段后都**并行提交**（路数共用 `ASR_MAX_CONCURRENCY`，实时通道每段是独立连接、独立任务），最后按 `start` 排序拼接。实时通道叠加 `ASR_REALTIME_SPEEDUP` 倍速推流（实测 4x 稳定、8x 收益见顶），700s 音频 3 路并行 × 4x 约 78s 出结果。切段之间有取消检查点（Web 控制台取消任务用）：抛 `CancelledError` 时撤销未开始的段，已完成的段缓存已落盘不白花
+- **长音频切段**：云 ASR 通常有单次时长上限。用 `detect_silence` 找到接近上限的静音点切分；异步与实时后端切段后都**并行提交**（路数共用 `ASR_MAX_CONCURRENCY`，实时通道每段是独立连接、独立任务），最后按 `start` 排序拼接。实时通道叠加 `ASR_REALTIME_SPEEDUP` 倍速推流（实测 4x 稳定、8x 收益见顶），700s 音频 3 路并行 × 4x 约 78s 出结果。切段之间有取消检查点（Web 前端取消任务用）：抛 `CancelledError` 时撤销未开始的段，已完成的段缓存已落盘不白花
 - 时间戳修正：每段 ASR 返回的时间戳是**段内相对时间**，需要加上该段的全局偏移
 - 失败重试：指数退避，最多 3 次；单段失败不影响其他段，失败段写进 `run.trace.jsonl`
 - 结果**立即落盘** `asr.raw.jsonl`，避免重试导致重复付费
@@ -516,7 +516,7 @@ def template_classes(template: Path) -> set[str]   # 模板已定义的 class �
 
 ### 6.11 `report/qa.py`
 
-报告内问答，只在本地控制台侧栏使用（报告 HTML 本身保持自包含），数据全部取自 run 目录的 `transcript.jsonl` / `outline.json`：
+报告内问答，只在 Web 前端「致编辑部来信」使用（报告 HTML 本身保持自包含），数据全部取自 run 目录的 `transcript.jsonl` / `outline.json`：
 
 ```python
 def retrieve(units, question, *, budget_chars=FULL_CONTEXT_BUDGET, top_k=TOP_K) -> list[TranscriptUnit]
@@ -832,7 +832,7 @@ HTTPS_PROXY=
 | 音频处理失败 | ffmpeg 缺失、文件损坏 | 立即失败，提示检查 ffmpeg |
 | ASR 失败 | 密钥无效、余额不足、单段超时 | 指数退避重试 3 次；单段失败不阻塞其他段 |
 | LLM 失败 | 超时、限流、JSON 非法 | 退避重试 3 次；JSON 非法时回灌报错重试 2 次 |
-| 用户取消 | Web 控制台点「取消」 | 检查点抛 `CancelledError`（退出码 130），已落盘产物保留可续跑，不重试 |
+| 用户取消 | Web 前端工单页点「取消投印」 | 检查点抛 `CancelledError`（退出码 130），已落盘产物保留可续跑，不重试 |
 | 渲染失败 | 模板占位符缺失、磁盘满 | 立即失败，提示具体缺失的占位符 |
 
 ### 11.2 重试策略
@@ -862,7 +862,7 @@ def retry(fn, *, attempts=3, base=1.0, jitter=0.2): ...
 
 ## 12. Windows 落地清单
 
-- **一键启动**：`run.bat` 先自检 Python / 虚拟环境 / ffmpeg / `.env` 四项；首次运行自动建 `.venv`、`pip install -e .`、并把 ffmpeg 静态包下载解压到 `bin/`。无参数时默认启动本地 Web 控制台并自动打开浏览器（等价于 `run.bat web`），带参数时原样透传给 CLI
+- **一键启动**：`run.bat` 先自检 Python / 虚拟环境 / ffmpeg / `.env` 四项；首次运行自动建 `.venv`、`pip install -e .`、并把 ffmpeg 静态包下载解压到 `bin/`。无参数时默认启动本地 Web 前端并自动打开浏览器（等价于 `run.bat web`），带参数时原样透传给 CLI
 - **ffmpeg**：`winget install Gyan.FFmpeg`，或将静态包解压到项目 `bin/`，代码优先探测 `bin/ffmpeg.exe`
 - **路径**：统一 `pathlib.Path`，禁止字符串拼接路径
 - **编码**：所有文件读写显式 `encoding="utf-8"`；子进程输出捕获显式指定 `encoding="utf-8", errors="replace"`
