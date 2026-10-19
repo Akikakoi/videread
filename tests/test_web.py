@@ -23,6 +23,12 @@ from videread.transcript import TranscriptUnit
 from videread.web import jobs, library, probe
 from videread.web.app import create_app
 
+
+@pytest.fixture(autouse=True)
+def _no_paywall_network(monkeypatch: pytest.MonkeyPatch):
+    """probe 的付费快照会请求 B 站接口，离线用例统一替换为「非付费」。"""
+    monkeypatch.setattr(probe.download, "paywall_snapshot", lambda *_a, **_k: None)
+
 URL = "https://www.bilibili.com/video/BV1xx411c7mD"
 RUN_ID = "BV1xx411c7mD-aaaaaaaa"
 BAD_RUN_ID = "BV1xx411c7mD-bbbbbbbb"
@@ -1271,3 +1277,69 @@ def test_qa_history_empty_without_file(tmp_path: Path):
         body = client.get(f"/api/runs/{RUN_ID}/qa").json()
 
     assert body == {"run_id": RUN_ID, "history": []}
+
+
+def test_probe_surfaces_paywalled_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """付费内容：probe 返回结构化信号（前端据此禁用投递按钮），且带中文提示。"""
+    snapshot = {
+        "paywalled": True,
+        "kind": "cheese",
+        "title": "剪辑课",
+        "full_duration": 306,
+    }
+    monkeypatch.setattr(download, "paywall_snapshot", lambda *_a, **_k: snapshot)
+    with TestClient(create_app(tmp_path)) as client:
+        r = client.post("/api/probe", json={"url": "https://www.bilibili.com/cheese/play/ep2564130"})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["paywalled"] is True
+    assert body["kind"] == "cheese"
+    assert "暂不支持" in body["message"]
+    assert "剪辑课" in body["message"]
+
+
+def test_probe_paywalled_overrides_cached_meta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """即使本地有旧缓存（meta.json），付费判定依然生效。"""
+    make_run(tmp_path, RUN_ID)
+    snapshot = {"paywalled": True, "kind": "charging", "title": "充电课", "full_duration": 3000}
+    monkeypatch.setattr(download, "paywall_snapshot", lambda *_a, **_k: snapshot)
+    with TestClient(create_app(tmp_path)) as client:
+        r = client.post("/api/probe", json={"url": URL})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["paywalled"] is True and "暂不支持" in body["message"]
+
+
+def test_probe_surfaces_paywalled_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """付费内容：probe 返回结构化信号（前端据此禁用投递按钮），且带中文提示。"""
+    snapshot = {
+        "paywalled": True,
+        "kind": "cheese",
+        "title": "剪辑课",
+        "full_duration": 306,
+    }
+    monkeypatch.setattr(download, "paywall_snapshot", lambda *_a, **_k: snapshot)
+    with TestClient(create_app(tmp_path)) as client:
+        r = client.post("/api/probe", json={"url": "https://www.bilibili.com/cheese/play/ep2564130"})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["paywalled"] is True
+    assert body["kind"] == "cheese"
+    assert "暂不支持" in body["message"]
+    assert "剪辑课" in body["message"]
+
+
+def test_probe_paywalled_overrides_cached_meta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """即使本地有旧缓存（meta.json），付费判定依然生效。"""
+    make_run(tmp_path, RUN_ID)
+    snapshot = {"paywalled": True, "kind": "charging", "title": "充电课", "full_duration": 3000}
+    monkeypatch.setattr(download, "paywall_snapshot", lambda *_a, **_k: snapshot)
+    with TestClient(create_app(tmp_path)) as client:
+        r = client.post("/api/probe", json={"url": URL})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["paywalled"] is True and "暂不支持" in body["message"]

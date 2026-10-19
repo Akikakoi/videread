@@ -178,15 +178,21 @@ def _view_client(payload: object):
 
 
 def _view_payload(
-    rights: dict, full: float, pages: list[dict] | None = None
+    rights: dict | None = None,
+    full: float = 3000,
+    pages: list[dict] | None = None,
+    upower: dict | None = None,
+    rights_extra: dict | None = None,
 ) -> dict:
     data: dict = {
         "bvid": "BV1xx411c7mD",
         "title": "充电专属课",
         "duration": full,
-        "rights": rights,
+        "rights": {**(rights or {}), **(rights_extra or {})},
         "owner": {"name": "某UP主"},
     }
+    if upower:
+        data.update(upower)
     if pages is not None:
         data["pages"] = pages
     return {"code": 0, "data": data}
@@ -215,19 +221,19 @@ def test_charging_exclusive_reads_rights_flag(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         download.httpx,
         "Client",
-        _view_client(_view_payload({"is_charging_arc": 1}, 3000)),
+        _view_client(_view_payload({}, 3000, None, {"is_upower_exclusive": 1})),
     )
     assert download.charging_exclusive(URL, _settings()) is True
 
     monkeypatch.setattr(
-        download.httpx, "Client", _view_client(_view_payload({"ugc_pay": 1}, 3000))
+        download.httpx, "Client", _view_client(_view_payload({}, 3000, None, None, {"ugc_pay": 1}))
     )
     assert download.charging_exclusive(URL, _settings()) is True
 
     monkeypatch.setattr(
         download.httpx,
         "Client",
-        _view_client(_view_payload({"is_charging_arc": 0, "ugc_pay": 0}, 3000)),
+        _view_client(_view_payload({}, 3000)),
     )
     assert download.charging_exclusive(URL, _settings()) is False
 
@@ -241,7 +247,7 @@ def test_fetch_video_info_surfaces_charging_flag(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(
         download.httpx,
         "Client",
-        _view_client(_view_payload({"is_charging_arc": 1}, 3000)),
+        _view_client(_view_payload({}, 3000, None, {"is_upower_exclusive": 1})),
     )
     info = download.fetch_video_info(URL, _settings())
     assert info is not None and info.charging is True
@@ -257,7 +263,7 @@ def test_fetch_meta_rejects_charging_without_cookies(
     monkeypatch.setattr(
         download.httpx,
         "Client",
-        _view_client(_view_payload({"is_charging_arc": 1}, 3000)),
+        _view_client(_view_payload({}, 3000, None, {"is_upower_exclusive": 1})),
     )
 
     def _boom(*_args: object, **_kwargs: object) -> None:
@@ -268,23 +274,22 @@ def test_fetch_meta_rejects_charging_without_cookies(
         download.fetch_meta(URL, no_cookies)
 
 
-def test_fetch_meta_allows_charging_with_cookies(
+def test_fetch_meta_rejects_charging_even_with_cookies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """配了登录态则放行——已充电用户可以完整解析。"""
+    """2026-10-19 决策：付费内容暂不支持解析，配了登录态也一律拒绝。"""
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
     monkeypatch.setattr(
         download.httpx,
         "Client",
-        _view_client(_view_payload({"is_charging_arc": 1}, 3000)),
+        _view_client(_view_payload({}, 3000, None, {"is_upower_exclusive": 1})),
     )
     monkeypatch.setattr(download, "_yt_dlp", _fake_yt_dlp(3000))
     settings = download.get_settings(cookies_file=str(cookies))
 
-    meta = download.fetch_meta(URL, settings)
-
-    assert meta.duration == 3000.0
+    with pytest.raises(DownloadError, match="暂不支持"):
+        download.fetch_meta(URL, settings)
 
 
 def test_fetch_meta_rejects_preview_duration(monkeypatch: pytest.MonkeyPatch):
@@ -292,7 +297,7 @@ def test_fetch_meta_rejects_preview_duration(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         download.httpx,
         "Client",
-        _view_client(_view_payload({"is_charging_arc": 0}, 2730)),
+        _view_client(_view_payload({}, 2730)),
     )
     monkeypatch.setattr(download, "_yt_dlp", _fake_yt_dlp(192))
     with pytest.raises(DownloadError, match="试看内容"):

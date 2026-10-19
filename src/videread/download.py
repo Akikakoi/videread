@@ -47,37 +47,23 @@ _SUBTITLE_LANGS = "zh-CN,zh-Hans,zh,zh-Hant,ai-zh,ai-en,en"
 _VIEW_API = "https://api.bilibili.com/x/web-interface/view"
 _VIEW_TIMEOUT_SEC = 8.0
 
-# 充电专属/付费内容拦截（§6.3）：view API 的 rights 对所有人公开，即使未充电也
-# 能拿到「这是充电专属稿件」的标志与完整时长——而 yt-dlp 对未充电用户只会下到
-# 几分钟的试看预览流。两个信号配合使用：
-#   rights 标志 + 未配登录态 → 直接拒绝（此时下载只会白烧 ASR/LLM 钱）；
-#   页面完整时长 vs yt-dlp 实际时长（< 80% 判为预览）→ 兜底拦截「配了 cookies
-#   但没给该 UP 充电」的场景。
-_PAYWALL_RIGHTS = ("is_charging_arc", "ugc_pay")
+# 充电专属/付费内容拦截（§6.3）：两类信号都对所有人公开——
+#   充电专属：view data 顶层 `is_upower_exclusive`（rights 里没有对应位；
+#     注意 view/yt-dlp 报告的时长是试看预览的时长，拿不到完整时长基准）；
+#   付费稿件：rights.ugc_pay；
+#   付费课程（Cheese）：pugv season API 的每集 playable（见 _cheese_season）。
+# 2026-10-19 决策：这两类内容一律不支持解析，预检即拒绝（无登录态例外），
+# 流水线还有 ffprobe 实测时长的兜底防线（_guard_preview_audio）。
+_PAYWALL_RIGHTS = ("ugc_pay",)
 PREVIEW_DURATION_RATIO = 0.8
 
 
-def _paywall_reject_text(kind: str, has_cookies: bool) -> str:
-    """付费内容拒绝的用户提示：全程大白话，具体配置方法见 README「B 站登录」。"""
+def paywall_reject_text(kind: str, title: str = "") -> str:
+    """付费内容拒绝的用户提示：全程大白话。"""
+    name = f"《{title}》" if title else "这个链接指向的内容"
     if kind == "cheese":
-        opener = "这是 B 站上的付费课程"
-        condition = "购买这门课程后"
-        confirm = "如果你已经购买这门课程"
-    else:
-        opener = "这是「充电专属」视频"
-        condition = "给这位 UP 主充电后"
-        confirm = "如果你已经给这位 UP 主充电"
-    if has_cookies:
-        return (
-            f"{opener}：当前配置的 B 站账号没有观看权限，已停止解析。\n"
-            f"{confirm}，请确认配置里填的是观看时使用的那个账号的登录信息；"
-            "如果是别的账号，换好之后重试即可（配置方法见 README 的「B 站登录」一节）。"
-        )
-    return (
-        f"{opener}：只有{condition}才能观看完整内容，已停止解析。\n"
-        "如果你有观看权限，请按 README 的「B 站登录」一节，把 B 站账号的登录信息"
-        "填入配置文件后重试。"
-    )
+        return f"{name}是 B 站上的付费课程（需要购买后才能观看），暂不支持解析这类视频。"
+    return f"{name}是「充电专属」视频（需要给 UP 主充电后才能观看），暂不支持解析这类视频。"
 
 
 def _preview_reject_text(actual: float, full: float) -> str:
@@ -346,7 +332,18 @@ def _view_data(url: str, settings: Settings | None = None) -> dict | None:
 
 
 def _charging_flag(data: dict) -> bool:
-    """view data 的 rights 里是否带「需要充电/付费才能看全片」的位。"""
+    """view data 是否为付费内容（充电专属或付费稿件）。
+
+    充电专属的标志在 view data **顶层** `is_upower_exclusive`——rights 里没有
+    对应位（实测：充电专属视频该字段为 True，普通视频为 False，且 rights 里
+    根本不存在 is_charging_arc）。付费稿件走 rights.ugc_pay。
+    """
+    for key in ("is_upower_exclusive",):
+        try:
+            if int(data.get(key) or 0) == 1:
+                return True
+        except (TypeError, ValueError):
+            continue
     rights = data.get("rights")
     if not isinstance(rights, dict):
         return False
@@ -407,10 +404,10 @@ def _cheese_season(url: str, settings: Settings | None = None) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _paywall_snapshot(url: str, settings: Settings | None = None) -> dict | None:
+def paywall_snapshot(url: str, settings: Settings | None = None) -> dict | None:
     """汇总两类付费内容的信号：paywalled（当前观看者能否看全集）与完整时长。
 
-    返回 `{paywalled, full_duration, kind}`；kind = charging / cheese。
+    返回 `{paywalled, full_duration, kind, title}`；kind = charging / cheese。
     与两类 API 都无关（普通视频 / 本地文件 / 探测失败）时返回 None。
     """
     if extract_bvid(url):
@@ -421,6 +418,7 @@ def _paywall_snapshot(url: str, settings: Settings | None = None) -> dict | None
             "paywalled": _charging_flag(data),
             "full_duration": _view_page_duration(url, data),
             "kind": "charging",
+            "title": str(data.get("title") or "").strip(),
         }
     ep_id = _cheese_ep_id(url)
     if ep_id:
@@ -446,6 +444,7 @@ def _paywall_snapshot(url: str, settings: Settings | None = None) -> dict | None
             "paywalled": not bool(episode.get("playable")),
             "full_duration": duration,
             "kind": "cheese",
+            "title": str(season.get("title") or "").strip(),
         }
     return None
 
@@ -524,15 +523,13 @@ def fetch_meta(
     """
     settings = settings or get_settings()
 
-    # 充电专属/付费课程拦截（第一层）：view / pugv API 的标志对所有人公开。
-    # 未配登录态时 yt-dlp 只会下到试看预览（或直接报需要购买），直接拒绝，
-    # 不白烧 ASR/LLM 费用；配了登录态则放行——已充电/已购买用户可完整解析，
-    # 未购买由第二层时长比对与 yt-dlp 的购买校验兜底。
-    has_cookies = bool(settings.cookies_file or settings.cookies_from_browser)
-    paywall = _paywall_snapshot(url, settings)
+    # 充电专属/付费课程拦截：view / pugv API 的标志对所有人公开，预检即可识别。
+    # 这两类内容暂不支持解析（2026-10-19 用户决策）：未付费拿不到完整内容，
+    # 试看预览生成的报告没有意义还白烧 ASR/LLM 费用，因此不做登录态例外。
+    paywall = paywall_snapshot(url, settings)
     if paywall is not None:
-        if paywall["paywalled"] and not has_cookies:
-            raise DownloadError(_paywall_reject_text(paywall["kind"], has_cookies))
+        if paywall["paywalled"]:
+            raise DownloadError(paywall_reject_text(paywall["kind"], paywall["title"]))
         # 第二层对照基准：页面完整时长（多P 取所选分P，与 yt-dlp 的单P 口径一致）
         view_duration = paywall["full_duration"]
     else:
@@ -540,10 +537,6 @@ def fetch_meta(
 
     result = _yt_dlp(["-J", "--skip-download", url], settings, timeout=180.0)
     if result.returncode != 0:
-        # 配了登录态但未购买（课程）/未充电（充电专属）时，yt-dlp 的报错是
-        # 英文购买提示——快照已判定付费内容，统一换成大白话拒绝文案。
-        if paywall is not None and paywall["paywalled"]:
-            raise DownloadError(_paywall_reject_text(paywall["kind"], has_cookies))
         raise _fail("获取视频元信息", result)
     try:
         info = json.loads(result.stdout)

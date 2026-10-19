@@ -346,8 +346,8 @@ def _guard_preview_audio(source_audio: Path, meta_duration: float, settings: Set
         raise download.DownloadError(
             f"只下载到了 {format_time(actual)} 的试看内容，远短于完整的 "
             f"{format_time(meta_duration)}——这个视频需要付费观看"
-            "（充电专属或付费课程），当前账号没有观看权限，"
-            "已停止解析，未进行转写，不会产生转写费用。"
+            "（充电专属或付费课程），暂不支持解析这类视频，"
+            "已停止处理，未进行转写。"
         )
 
 

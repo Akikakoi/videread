@@ -478,6 +478,7 @@ $("#url").addEventListener("input", () => {
 });
 
 let probePages = [];   /* 预检拿到的分P列表（多P 视频才有值） */
+let probeBlocked = false; /* 预检判定为付费内容（充电专属/付费课程）时禁用投递 */
 let pageSelKey = null; /* 分P 列表对应的输入源，换源即失效 */
 
 let selPageNum = null; /* 当前选中的分P（null = P1/未选） */
@@ -538,11 +539,23 @@ async function doProbe(){
   const url = $("#url").value.trim();
   if(url === lastProbedUrl) return; /* 同一输入不重复预检（点分P 下拉触发 blur 的场景） */
   const line = $("#probeline");
-  if(!url){ probePages = []; pageSelKey = null; lastProbedUrl = null; line.innerHTML = ""; return; }
+  if(!url){
+    probePages = []; pageSelKey = null; lastProbedUrl = null; probeBlocked = false;
+    $("#btn-submit").disabled = false; line.innerHTML = ""; return;
+  }
   line.innerHTML = "预检中…";
   try{
     const p = await post("/api/probe", {url});
     lastProbedUrl = url;
+    /* 付费内容：禁用投递按钮，提示暂不支持（流水线侧同样会拒绝） */
+    if(p.paywalled){
+      probeBlocked = true;
+      $("#btn-submit").disabled = true;
+      line.innerHTML = '<span class="warn">' + esc(p.message) + '</span>';
+      return;
+    }
+    probeBlocked = false;
+    $("#btn-submit").disabled = false;
     /* 同一输入的重复预检保留用户已选的分P */
     const keepPage = (pageSelKey === url) ? selectedPage() : null;
     let html = "预检 · <b>" + esc(p.title || "未知标题") + "</b>";
@@ -556,14 +569,14 @@ async function doProbe(){
       html += " · 时长 <b>" + esc(p.duration_text || "—") + "</b>";
     }
     if(p.uploader) html += " · " + esc(p.uploader);
-    if(p.charging) html += ' · <span class="warn">充电专属内容：只有充电后才能观看完整视频，未充电只能看到试看片段</span>';
     if(p.too_long) html += ' · <span class="warn">超出 ' + esc(p.limit_text || "") + ' 上限，将被拒绝</span>';
     if(p.existing_run) html += ' · <span class="warn">已解析过（' + esc(p.existing_run.generated_at) + '）</span> · <a href="' + p.existing_run.report_url + '" target="_blank" rel="noopener">查看上次报告</a>';
     line.innerHTML = html;
     wirePPick();
   }catch(e){
     probePages = []; pageSelKey = null; /* 预检失败放行原文，过期分P一并失效 */
-    lastProbedUrl = url;
+    lastProbedUrl = url; probeBlocked = false;
+    $("#btn-submit").disabled = false;
     /* 付费内容类拒绝是确定性的（流水线会再次拦截），不追加「仍可提交」 */
     const rejected = String(e.message || "").indexOf("已拒绝解析") >= 0;
     line.innerHTML = OFFLINE ? "演示模式 · 预检在启动本地服务后可用"
@@ -591,6 +604,7 @@ function renderStepper(current, doneSet){
 async function submitJob(){
   const url = $("#url").value.trim();
   if(!url){ toast("先填一个 B 站链接或 BV 号"); return; }
+  if(probeBlocked){ toast("这类付费视频暂不支持解析"); return; }
   const btn = $("#btn-submit");
   btn.disabled = true; btn.textContent = "排片中…";
   $("#logbox").style.display = "block";

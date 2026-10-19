@@ -93,6 +93,18 @@ def probe_source(
         title = local.stem
         source_kind = "local"
     elif url.lower().startswith(("http://", "https://")):
+        # 付费内容（充电专属 / 付费课程）提前拦截：返回结构化信号让前端
+        # 禁用提交按钮，而不是走 fetch_meta 抛错
+        snapshot = download.paywall_snapshot(url, settings)
+        if snapshot is not None and snapshot["paywalled"]:
+            title = snapshot.get("title") or ""
+            return {
+                "paywalled": True,
+                "kind": snapshot["kind"],
+                "title": title,
+                "message": download.paywall_reject_text(snapshot["kind"], title),
+                "source_kind": "remote",
+            }
         meta = _cached_meta(url, Path(out_root))
         if meta is None:
             # enforce_limit=False：拿到真实时长后由这里判定，才能区分超长与抓取失败
