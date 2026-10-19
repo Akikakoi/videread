@@ -78,6 +78,7 @@ async function open(runId, sec){
     document.getElementById("back").href = "/editorial";
     if(location.protocol === "file:") document.getElementById("back").href = "about:blank";
     if(sec) jump(sec);
+    buildNav();
   }catch(err){
     page.innerHTML = '<p class="skeleton">全文读取失败（' + esc(String(err.message || err)) +
       '）。这份报告可能还没有生成 report.html，回编辑部看看其它期。</p>';
@@ -87,6 +88,45 @@ async function open(runId, sec){
 function jump(sec){
   const el = page.querySelector("#sec-" + sec);
   if(el) requestAnimationFrame(() => el.scrollIntoView({behavior: "smooth", block: "start"}));
+}
+
+/* 左侧悬浮章节导航：原版报告由内嵌脚本生成，阅读页拼装时脚本被剥离、
+   nav 元素也不在搬运清单里，这里按同一套交互重建——h2 锚点 + 滚动高亮。 */
+function buildNav(){
+  const heads = Array.from(page.querySelectorAll("h2"));
+  if(!heads.length) return;
+  const nav = document.createElement("nav");
+  nav.className = "report-nav";
+  nav.setAttribute("aria-label", "章节导航");
+  const list = document.createElement("ol");
+  list.className = "report-nav-list";
+  const links = heads.map((h, i) => {
+    if(!h.id) h.id = "sec-" + (i + 1);
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.className = "report-nav-link";
+    a.href = "#" + h.id;
+    a.textContent = h.textContent.trim();
+    li.appendChild(a);
+    list.appendChild(li);
+    return a;
+  });
+  nav.appendChild(list);
+  document.body.appendChild(nav);
+  const activate = id => links.forEach(a => a.classList.toggle("is-active", a.getAttribute("href") === "#" + id));
+  if("IntersectionObserver" in window){
+    const io = new IntersectionObserver(entries => {
+      entries.forEach(e => { if(e.isIntersecting) activate(e.target.id); });
+    }, {rootMargin: "-10% 0px -70% 0px", threshold: 0});
+    heads.forEach(h => io.observe(h));
+  }else{
+    const onScroll = () => {
+      let cur = heads[0];
+      heads.forEach(h => { if(h.getBoundingClientRect().top <= 120) cur = h; });
+      activate(cur.id);
+    };
+    addEventListener("scroll", onScroll, {passive: true});
+  }
 }
 
 /* 段落级时间戳跳转：逻辑与原报告内嵌脚本一致——取段落

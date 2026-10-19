@@ -89,6 +89,14 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .foot .c1{font-family:var(--serif);font-weight:600;font-size:15px;}
 .foot .c1 em{font-style:italic;color:var(--accent);}
 .foot .c2{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;color:var(--faint);}
+/* ---------- 左侧悬浮章节导航（与原版报告同款交互，走主题令牌） ---------- */
+.report-nav{position:fixed;top:96px;left:22px;width:176px;max-height:calc(100vh - 140px);overflow-y:auto;z-index:4;font-size:13px;line-height:1.5;}
+.report-nav-list{margin:0;padding:0;list-style:none;border-left:2px solid var(--hairline);}
+.report-nav-link{display:block;margin-left:-2px;padding:6px 10px 6px 12px;color:var(--muted);text-decoration:none;border-left:2px solid transparent;transition:color .25s,border-color .25s;}
+.report-nav-link:hover{color:var(--ink);}
+.report-nav-link.is-active{color:var(--accent);font-weight:500;border-left-color:var(--accent);}
+@media (max-width:1180px){ .report-nav{display:none;} }
+
 @media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto;} }
 @media (max-width:640px){ .page{padding:40px 20px 96px;} .bar{padding:12px 20px;} }
 
