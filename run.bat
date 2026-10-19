@@ -2,7 +2,7 @@
 rem ==========================================================
 rem  videread one-click launcher  (dev doc: section 4 / 12)
 rem  First run: create .venv, install deps, fetch ffmpeg -> bin\
-rem  Usage: run.bat                       start web console + open browser (default)
+rem  Usage: run.bat                       start web frontend + open browser (default)
 rem         run.bat web                   same as above (explicit)
 rem         run.bat <url> [--mode brief --no-cache --open ...]   CLI passthrough
 rem ==========================================================
@@ -100,7 +100,7 @@ rem ---------- run ----------
 if /i "%~1"=="web" goto :run_web
 if not "%~1"=="" goto :run_args
 echo.
-echo No arguments given, starting the local web console ...
+echo No arguments given, starting the local web frontend ...
 echo (CLI passthrough is still available: run.bat "URL" --mode brief --open)
 goto :run_web
 
@@ -112,7 +112,7 @@ goto :done
 
 :run_web
 echo.
-echo Starting local web console at http://127.0.0.1:8765 ...
+echo Starting local web frontend at http://127.0.0.1:8765 ...
 "%VENV_PY%" -c "import fastapi, uvicorn" >nul 2>nul
 if errorlevel 1 (
   echo       installing web dependencies ...

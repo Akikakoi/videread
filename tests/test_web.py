@@ -219,15 +219,16 @@ def test_safe_run_dir_accepts_direct_child(tmp_path: Path):
 # ------------------------------------------------------------------- 路由
 
 
-def test_index_and_static_are_served(tmp_path: Path):
+def test_index_redirects_to_editorial(tmp_path: Path):
+    """P4 退役：根路径 302 到 /editorial，编辑风主页正常渲染。"""
     with TestClient(create_app(tmp_path)) as client:
-        index = client.get("/")
-        css = client.get("/static/styles.css")
+        index = client.get("/", follow_redirects=False)
+        editorial = client.get("/editorial")
 
-    assert index.status_code == 200
-    assert "videread" in index.text
-    assert css.status_code == 200
-    assert "--accent" in css.text
+    assert index.status_code == 302
+    assert index.headers["location"] == "/editorial"
+    assert editorial.status_code == 200
+    assert "VIDEREAD" in editorial.text
 
 
 def test_api_runs_lists_existing_runs(tmp_path: Path):
@@ -1168,143 +1169,6 @@ def test_probe_reports_existing_run(tmp_path: Path):
         monkeypatch.undo()
     assert "existing_run" not in response.json()
 
-
-# ------------------------------------------------------------- 自定义背景
-
-PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-
-
-def test_background_upload_serve_and_reset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """上传 → 带缓存戳的 URL 可取回原图 → 恢复默认后 404。"""
-    from videread.web import background as bg_mod
-
-    monkeypatch.setattr(bg_mod, "BG_DIR", tmp_path / ".ui")
-    png = PNG_MAGIC + b"fake-png-body"
-
-    with TestClient(create_app(tmp_path)) as client:
-        assert client.get("/api/ui/background").json()["url"] is None
-
-        created = client.post("/api/ui/background", content=png)
-        assert created.status_code == 200
-        url = created.json()["url"]
-        assert url.startswith("/api/ui/background/image?v=")
-
-        image = client.get(url)
-        assert image.status_code == 200
-        assert image.headers["content-type"].startswith("image/png")
-        assert image.content == png
-
-        # 列表接口与 GET 一致
-        assert client.get("/api/ui/background").json()["url"] == url
-
-        # 再传一张 jpg：覆盖旧图（只保留一份）
-        jpg = b"\xff\xd8\xff" + b"fake-jpeg"
-        url2 = client.post("/api/ui/background", content=jpg).json()["url"]
-        assert client.get(url2).headers["content-type"].startswith("image/jpeg")
-
-        # 恢复默认
-        assert client.delete("/api/ui/background").json()["url"] is None
-        assert client.get("/api/ui/background").json()["url"] is None
-        assert client.get("/api/ui/background/image").status_code == 404
-
-
-def test_background_rejects_invalid_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """魔数不对 / 空内容一律 400，不落盘。"""
-    from videread.web import background as bg_mod
-
-    monkeypatch.setattr(bg_mod, "BG_DIR", tmp_path / ".ui")
-
-    with TestClient(create_app(tmp_path)) as client:
-        assert client.post("/api/ui/background", content=b"not-an-image").status_code == 400
-        assert client.post("/api/ui/background", content=b"").status_code == 400
-
-    assert not (tmp_path / ".ui").exists() or not list((tmp_path / ".ui").glob("background.*"))
-
-
-# ------------------------------------------------------------- 自定义背景
-
-PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-
-
-def test_background_upload_serve_and_reset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """上传 → 带缓存戳的 URL 可取回原图 → 恢复默认后 404。"""
-    from videread.web import background as bg_mod
-
-    monkeypatch.setattr(bg_mod, "BG_DIR", tmp_path / ".ui")
-    png = PNG_MAGIC + b"fake-png-body"
-
-    with TestClient(create_app(tmp_path)) as client:
-        assert client.get("/api/ui/background").json()["url"] is None
-
-        created = client.post("/api/ui/background", content=png)
-        assert created.status_code == 200
-        url = created.json()["url"]
-        assert url.startswith("/api/ui/background/image?v=")
-
-        image = client.get(url)
-        assert image.status_code == 200
-        assert image.headers["content-type"].startswith("image/png")
-        assert image.content == png
-
-        # 列表接口与 GET 一致
-        assert client.get("/api/ui/background").json()["url"] == url
-
-        # 再传一张 jpg：覆盖旧图（只保留一份）
-        jpg = b"\xff\xd8\xff" + b"fake-jpeg"
-        url2 = client.post("/api/ui/background", content=jpg).json()["url"]
-        assert client.get(url2).headers["content-type"].startswith("image/jpeg")
-
-        # 恢复默认
-        assert client.delete("/api/ui/background").json()["url"] is None
-        assert client.get("/api/ui/background").json()["url"] is None
-        assert client.get("/api/ui/background/image").status_code == 404
-
-
-def test_background_rejects_invalid_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """魔数不对 / 空内容一律 400，不落盘。"""
-    from videread.web import background as bg_mod
-
-    monkeypatch.setattr(bg_mod, "BG_DIR", tmp_path / ".ui")
-
-    with TestClient(create_app(tmp_path)) as client:
-        assert client.post("/api/ui/background", content=b"not-an-image").status_code == 400
-        assert client.post("/api/ui/background", content=b"").status_code == 400
-
-    assert not (tmp_path / ".ui").exists() or not list((tmp_path / ".ui").glob("background.*"))
-
-
-def test_background_overlay_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """遮罩独立保存：设置/读取/非法名 400，换背景图不丢遮罩选择。"""
-    from videread.web import background as bg_mod
-
-    monkeypatch.setattr(bg_mod, "BG_DIR", tmp_path / ".ui")
-
-    with TestClient(create_app(tmp_path)) as client:
-        assert client.get("/api/ui/background").json()["overlay"] == "default"
-
-        ok = client.post(
-            "/api/ui/background/overlay", json={"name": "dark"}
-        )
-        assert ok.status_code == 200 and ok.json()["overlay"] == "dark"
-        assert client.get("/api/ui/background").json()["overlay"] == "dark"
-
-        # 换背景图不丢遮罩
-        url = client.post(
-            "/api/ui/background", content=PNG_MAGIC + b"x"
-        ).json()["url"]
-        assert client.get("/api/ui/background").json()["overlay"] == "dark"
-        assert client.get("/api/ui/background").json()["url"] == url
-
-        # 非法名 / 非法 JSON
-        assert client.post("/api/ui/background/overlay", json={"name": "epic"}).status_code == 400
-        assert client.post(
-            "/api/ui/background/overlay", content=b"not-json",
-            headers={"Content-Type": "application/json"},
-        ).status_code == 400
-
-        # 恢复默认背景不影响遮罩选择
-        client.delete("/api/ui/background")
-        assert client.get("/api/ui/background").json()["overlay"] == "dark"
 
 
 # ----------------------------------------------------------------- 报告内问答

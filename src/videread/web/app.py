@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -25,12 +25,11 @@ from .. import frames as frames_mod
 from ..config import get_settings
 from ..errors import VidereadError
 from ..report import qa
-from . import background as bg_mod
 from . import library, probe
 from .jobs import Job, JobBusy, JobManager
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-#: 编辑风正式版页面目录（随包分发；demos/ 里的同名页面冻结为历史参考）
+#: 编辑风正式版页面目录（随包分发；原 demos/ 实验页已随 P4 退役删除，历史在 git）
 EDITORIAL_DIR = STATIC_DIR / "editorial"
 EDITORIAL_ASSETS = (
     "css/index.css", "css/reader.css", "css/job.css",
@@ -119,19 +118,10 @@ def create_app(out_root: Path) -> FastAPI:
 
     # ------------------------------------------------------------------ 页面
 
-    @app.get("/", response_class=HTMLResponse)
-    def index() -> HTMLResponse:
-        page = STATIC_DIR / "index.html"
-        if not page.is_file():
-            raise HTTPException(status_code=500, detail=f"缺少控制台页面：{page}")
-        html = page.read_text(encoding="utf-8")
-        # 给静态资源引用注入 mtime 版本号：JS/CSS 改动后浏览器立即拉新版，
-        # 避免「新 HTML 配旧 JS」导致按钮存在但事件处理器缺失（点击无反应）
-        for name in ("app.js", "styles.css"):
-            asset = STATIC_DIR / name
-            stamp = int(asset.stat().st_mtime) if asset.is_file() else 0
-            html = html.replace(f"/static/{name}", f"/static/{name}?v={stamp}")
-        return HTMLResponse(html)
+    @app.get("/")
+    def index() -> RedirectResponse:
+        """磨砂玻璃控制台已退役（P4，见 plans/007）：根路径 302 到编辑风前端。"""
+        return RedirectResponse("/editorial", status_code=302)
 
     def _editorial_page(filename: str) -> HTMLResponse:
         """读取编辑风页面；静态资源注入 mtime 版本号（与控制台同策略，
@@ -408,49 +398,6 @@ def create_app(out_root: Path) -> FastAPI:
         if run_dir is None:
             raise HTTPException(status_code=404, detail="未找到该 run")
         return {"run_id": run_id, "history": qa.load_history(run_dir)}
-
-    # ------------------------------------------------------------------ 背景
-
-    @app.get("/api/ui/background")
-    def get_background() -> dict:
-        """当前背景：url 为 None 表示默认背景；overlay 为遮罩风格名。"""
-        return {"url": bg_mod.background_url(), "overlay": bg_mod.overlay_style()}
-
-    @app.post("/api/ui/background")
-    async def upload_background(request: Request) -> dict:
-        """上传自定义背景图（原始字节流，走魔数校验，不依赖 python-multipart）。"""
-        data = await request.body()
-        try:
-            url = bg_mod.save_background(data)
-        except VidereadError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"url": url, "overlay": bg_mod.overlay_style()}
-
-    @app.post("/api/ui/background/overlay")
-    async def set_background_overlay(request: Request) -> dict:
-        """设置遮罩风格：JSON {"name": default / strong / dark / none}。"""
-        try:
-            payload = json.loads((await request.body()) or b"{}")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="请求体不是合法 JSON") from exc
-        try:
-            name = bg_mod.set_overlay(str(payload.get("name", "")))
-        except VidereadError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"overlay": name}
-
-    @app.delete("/api/ui/background")
-    def reset_background() -> dict:
-        bg_mod.reset_background()
-        return {"url": None}
-
-    @app.get("/api/ui/background/image")
-    def background_image() -> Response:
-        path = bg_mod.background_path()
-        if path is None:
-            raise HTTPException(status_code=404, detail="未设置自定义背景")
-        ext = path.suffix.lstrip(".").lower()
-        return FileResponse(path, media_type=bg_mod.mime_for(ext))
 
     # ------------------------------------------------------------------ 预检
 

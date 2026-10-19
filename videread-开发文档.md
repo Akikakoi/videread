@@ -531,9 +531,20 @@ def load_history(run_dir) -> list[dict]
 - 引用由答案 HTML 反解：`data-source-units` → 时刻 + 所属章节（查 `outline.json`）
 - 问题非空且 ≤ 500 字；run 无转写稿时拒绝；每次问答追加一行 `qa.jsonl`（§5.6）供回放
 
-### 6.12 控制台接口（`web/`）
+### 6.12 Web 前端接口（`web/`）
 
-本地控制台（FastAPI）与报告库相关的接口：
+本地 Web 服务（FastAPI）。前端为编辑风杂志排版（页面位于 `static/editorial/`：index 主页 / reader 阅读页 / job 工单页 + `css/`、`js/` 分文件，`theme.js` 三页共享）；原磨砂玻璃控制台已退役（P4，见 `plans/007`），根路径 302 到 `/editorial`。
+
+页面路由（返回 HTML，带 no-cache 头，静态资源注入 mtime 版本戳）：
+
+| 路由 | 说明 |
+|---|---|
+| `GET /` | 302 → `/editorial`（控制台退役重定向） |
+| `GET /editorial` | 编辑风主页 |
+| `GET /read/{run_id}` | 阅读页（抓取该 run 的 report.html 重排为杂志版式） |
+| `GET /editorial/job/{job_id}` | 投印工单页（SSE 实时进度） |
+
+报告库相关的数据接口：
 
 | 接口 | 说明 |
 |---|---|
@@ -544,7 +555,7 @@ def load_history(run_dir) -> list[dict]
 | `POST /api/runs/{run_id}/qa` | 就指定报告提问，返回答案 HTML 与引用，并追加 `qa.jsonl` |
 | `GET /api/runs/{run_id}/qa` | 读取该报告的问答历史 |
 
-主题偏好（浅色 / 深色 / 跟随系统）为纯客户端能力，无对应接口：偏好存浏览器 `localStorage`（键 `videread.theme`），`index.html` 的 `<head>` 内联脚本在首屏渲染前落地 `<html data-theme>`（防闪白），深色令牌组在 `styles.css` 末尾 `[data-theme="dark"]` 整组覆盖；`app.js` 的主题段负责开关态、系统变化跟随与背景纱罩重算（深色下 default 遮罩换深纱，见 `BG_OVERLAYS_DARK`）。换浏览器 / 清缓存后偏好丢失，属预期。
+主题偏好（浅色 / 深色 / 自动跟随系统）为纯客户端能力，无对应接口：偏好存浏览器 `localStorage`（键 `videread.theme`），`<head>` 内联脚本在首屏渲染前落地 `<html data-theme>`（防闪白），深色令牌组「深夜印刷间」（深纸底 / 暖白字 / 强调红提亮）在三个页面 CSS 的 `[data-theme="dark"]` 整组覆盖；`js/theme.js` 三页共享，负责报头按钮三档循环、系统变化跟随与切换瞬间禁用全站过渡（防颜色闪烁）。换浏览器 / 清缓存后偏好丢失，属预期。
 
 ---
 
