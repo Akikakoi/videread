@@ -73,7 +73,6 @@ async function open(runId, sec){
     injectTsJumps(vts);
     const h1 = page.querySelector("h1");
     document.title = (h1 ? h1.textContent.trim() + " — " : "") + "VIDEREAD 视读";
-    document.getElementById("reader-title").textContent = h1 ? h1.textContent.trim() : "";
     document.getElementById("reader-run").textContent = runId;
     document.getElementById("back").href = "/editorial";
     if(location.protocol === "file:") document.getElementById("back").href = "about:blank";
