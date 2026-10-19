@@ -154,6 +154,7 @@ def _entry(run_dir: Path) -> dict | None:
         "run_id": run_dir.name,
         "title": meta.title,
         "uploader": meta.uploader,
+        "uploader_id": getattr(meta, "uploader_id", "") or "",
         "bvid": meta.bvid,
         "url": meta.url,
         "duration": meta.duration,

@@ -117,6 +117,15 @@ section.block{padding:56px 0 0;}
 .meta dd{font-size:14.5px;border-bottom:1px solid var(--hairline);padding-bottom:9px;overflow-wrap:anywhere;}
 .article h2{font-family:var(--serif);font-weight:500;font-size:26px;line-height:1.4;margin-bottom:6px;}
 .article .rubric{font-family:var(--mono);font-size:11px;letter-spacing:2.5px;color:var(--accent);margin-bottom:22px;}
+/* 特稿居中题头：眉题 + 标题 + 副标题 + 杂志式署名行（方案 C / 一） */
+.article .art-head{text-align:center;border-bottom:1px solid var(--hairline);padding:4px 12px 20px;margin:0 0 30px;}
+.article .art-head h2{font-size:30px;margin-bottom:0;}
+.article .art-sub{font-family:var(--serif);font-size:15px;color:var(--muted);margin-top:8px;letter-spacing:.5px;}
+.article .art-byline{display:flex;justify-content:center;align-items:baseline;flex-wrap:wrap;row-gap:4px;font-family:var(--mono);font-size:11.5px;letter-spacing:1px;color:var(--muted);margin-top:16px;}
+.article .art-byline span{padding:0 14px;}
+.article .art-byline span + span{border-left:1px solid var(--hairline);}
+.article .art-byline a{color:var(--accent);text-decoration:none;transition:border-color var(--t);}
+.article .art-byline a:hover{border-bottom:1px solid var(--accent);}
 .article .lead{margin-bottom:1.4em;color:#2E2A20;font-size:16.5px;}
 .article .lead.empty::before{content:"（这份报告还没有导语，点「阅读全文」直接看正文。）";color:var(--faint);font-size:14.5px;}
 .chapters{list-style:none;margin:28px 0 8px;border-top:2px solid var(--ink);}
@@ -393,6 +402,18 @@ html.js .reveal.in{opacity:1;transform:none;}
   .wrap{padding:0 20px;}
   .foot-cols{grid-template-columns:1fr;gap:32px;}
   footer{margin-top:80px;}
+}
+/* 手机端目录行：标题独占一行，时长/标签/按钮换行并与标题左缘对齐 */
+@media (max-width:640px){
+  .toc a{flex-wrap:wrap;row-gap:8px;column-gap:12px;}
+  .toc .dots{display:none;}
+  .toc .no{font-size:12px;}
+  .toc .t{flex:1 1 calc(100% - 48px);min-width:0;}
+  .toc .t small{overflow-wrap:anywhere;}
+  .toc .dur{margin-left:36px;}
+  .pager{column-gap:8px;}
+  .pager button{white-space:nowrap;padding:7px 10px;letter-spacing:.5px;}
+  .pg-mid{font-size:11px;letter-spacing:.5px;flex-wrap:wrap;justify-content:center;row-gap:4px;}
 }
 @media (max-width:1200px){
   .side-nav{display:none;}

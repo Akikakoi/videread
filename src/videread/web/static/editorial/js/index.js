@@ -192,22 +192,18 @@ async function openFeature(runId){
 
   const sections = d.sections_detail || [];
   currentVideoUrl = d.url || "";
-  $("#feature-hint").textContent = "FIG. 01 — " + (d.bvid || runId);
   body.innerHTML =
-    '<figure class="figure">' +
-      '<figcaption><span>' + esc(structureZh(d.profile)) + ' · ' + (sections.length) + ' 节</span><span>' + esc(d.duration_text || "") + '</span></figcaption>' +
-      '<div class="meta"><dl>' +
-        '<dt>标题</dt><dd>' + esc(d.title) + '</dd>' +
-        (d.uploader ? '<dt>UP 主</dt><dd>' + esc(d.uploader) + '</dd>' : "") +
-        (d.bvid ? '<dt>编号</dt><dd>' + esc(d.bvid) + '</dd>' : "") +
-        '<dt>章节</dt><dd>' + sections.length + ' 节 · 自动切分</dd>' +
-        '<dt>状态</dt><dd>' + (d.has_report ? "已生成文章稿" : "报告生成中") + ' · ' + esc(d.generated_at || "") + '</dd>' +
-      '</dl></div>' +
-    '</figure>' +
     '<article class="article">' +
-      '<div class="rubric">特稿 · ' + esc(structureZh(d.profile)) + '</div>' +
-      '<h2>' + esc(d.title_full || d.title) + '</h2>' +
-      (d.subtitle ? '<div class="rubric" style="color:var(--muted)">' + esc(d.subtitle) + '</div>' : "") +
+      '<header class="art-head">' +
+        '<h2>' + esc(d.title_full || d.title) + '</h2>' +
+        (d.subtitle ? '<div class="art-sub">' + esc(d.subtitle) + '</div>' : "") +
+        '<div class="art-byline">' +
+          (d.uploader ? '<span>文 / <a href="' + (d.uploader_id ? "https://space.bilibili.com/" + esc(d.uploader_id) : "https://search.bilibili.com/upuser?keyword=" + encodeURIComponent(d.uploader)) + '" target="_blank" rel="noopener">' + esc(d.uploader) + '</a></span>' : "") +
+          (d.bvid ? '<span><a href="' + esc(currentVideoUrl || ("https://www.bilibili.com/video/" + d.bvid)) + '" target="_blank" rel="noopener">' + esc(d.bvid) + '</a></span>' : "") +
+          (d.duration_text ? '<span>' + esc(d.duration_text) + '</span>' : "") +
+          (d.generated_at ? '<span>刊于 ' + esc(String(d.generated_at).split(" ")[0]) + '</span>' : "") +
+        '</div>' +
+      '</header>' +
       '<p class="lead' + (d.lead ? "" : " empty") + '">' + esc(d.lead || "") + '</p>' +
       (sections.length ?
         '<ul class="chapters">' + sections.map((s, i) =>
@@ -560,6 +556,7 @@ async function doProbe(){
       html += " · 时长 <b>" + esc(p.duration_text || "—") + "</b>";
     }
     if(p.uploader) html += " · " + esc(p.uploader);
+    if(p.charging) html += ' · <span class="warn">充电专属内容：只有充电后才能观看完整视频，未充电只能看到试看片段</span>';
     if(p.too_long) html += ' · <span class="warn">超出 ' + esc(p.limit_text || "") + ' 上限，将被拒绝</span>';
     if(p.existing_run) html += ' · <span class="warn">已解析过（' + esc(p.existing_run.generated_at) + '）</span> · <a href="' + p.existing_run.report_url + '" target="_blank" rel="noopener">查看上次报告</a>';
     line.innerHTML = html;
@@ -567,7 +564,11 @@ async function doProbe(){
   }catch(e){
     probePages = []; pageSelKey = null; /* 预检失败放行原文，过期分P一并失效 */
     lastProbedUrl = url;
-    line.innerHTML = OFFLINE ? "演示模式 · 预检在启动本地服务后可用" : '<span class="warn">预检失败：' + esc(e.message) + '（仍可提交）</span>';
+    /* 付费内容类拒绝是确定性的（流水线会再次拦截），不追加「仍可提交」 */
+    const rejected = String(e.message || "").indexOf("已拒绝解析") >= 0;
+    line.innerHTML = OFFLINE ? "演示模式 · 预检在启动本地服务后可用"
+      : rejected ? '<span class="warn">' + esc(e.message) + '</span>'
+      : '<span class="warn">预检失败：' + esc(e.message) + '（仍可提交）</span>';
   }
 }
 

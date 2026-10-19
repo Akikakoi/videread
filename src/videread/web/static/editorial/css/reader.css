@@ -1,6 +1,7 @@
 :root{
   --paper:#FAF7F1; --paper-deep:#F3EEE3;
   --ink:#17140E; --muted:#6E675A; --faint:#A39B8A;
+  --lead:#2E2A20; --body:#26221A;
   --hairline:#D9D2C2; --accent:#A6331E;
   --serif:"Fraunces","Noto Serif SC","Source Han Serif SC","Songti SC","STZhongsong","SimSun",serif;
   --sans:"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
@@ -11,6 +12,7 @@
 html[data-theme="dark"]{
   --paper:#14120E; --paper-deep:#1C1914;
   --ink:#EDE6D6; --muted:#A89F8C; --faint:#6E675A;
+  --lead:#E2D9C4; --body:#DCD3BE;
   --hairline:#3A352B; --accent:#D0563C;
 }
 html.theme-switching *,html.theme-switching *::before,html.theme-switching *::after{transition:none!important;}
@@ -35,14 +37,14 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .page{max-width:760px;margin:0 auto;padding:56px 32px 120px;}
 .page h1{font-family:var(--serif);font-weight:600;font-size:clamp(30px,5vw,42px);line-height:1.3;margin:0 0 14px;}
 .page .subtitle{font-family:var(--serif);font-weight:500;font-size:17px;color:var(--muted);margin:0 0 18px;}
-.page .lead{font-size:16.5px;line-height:1.95;color:#2E2A20;}
+.page .lead{font-size:16.5px;line-height:1.95;color:var(--lead);}
 .page .attribution{font-family:var(--mono);font-size:11.5px;color:var(--faint);letter-spacing:1px;margin:18px 0 0;padding-bottom:20px;border-bottom:1px solid var(--hairline);line-height:1.9;}
 .page .attribution a{color:var(--accent);text-decoration:none;}
 .page h2{font-family:var(--serif);font-weight:500;font-size:24px;line-height:1.45;border-top:2px solid var(--ink);margin:52px 0 18px;padding-top:22px;scroll-margin-top:84px;}
 .page h2 .num{font-family:var(--mono);font-size:13px;color:var(--accent);margin-right:12px;letter-spacing:1px;}
 .page h2 .section-time{float:right;font-family:var(--mono);font-size:11px;color:var(--faint);font-weight:400;letter-spacing:1px;padding-top:9px;}
 .page h3{font-family:var(--serif);font-weight:500;font-size:18px;margin:30px 0 10px;}
-.page p{font-size:16px;line-height:1.95;margin:0 0 1.35em;color:#26221A;text-align:justify;}
+.page p{font-size:16px;line-height:1.95;margin:0 0 1.35em;color:var(--body);text-align:justify;}
 .page ul,.page ol{margin:0 0 1.4em 1.5em;}
 .page li{margin-bottom:.4em;line-height:1.8;}
 .page blockquote{border-top:1px solid var(--ink);border-bottom:1px solid var(--ink);padding:20px 6px;margin:30px 0;font-family:var(--serif);font-weight:500;font-size:19px;line-height:1.7;}
