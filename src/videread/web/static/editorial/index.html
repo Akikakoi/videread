@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>(function(){var t;try{t=localStorage.getItem("videread.theme")}catch(e){}if(!t)t="system";var d=t==="dark"||(t==="system"&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.dataset.theme=d?"dark":"light";})();</script>
+<script>document.documentElement.classList.add("js");</script>
+<title>VIDEREAD · 视读 — 编辑部</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/fraunces@5.1.0/index.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/fraunces@5.1.0/500.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/fraunces@5.1.0/600-italic.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc@5.1.0/index.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc@5.1.0/500.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc@5.1.0/600.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.1.0/index.css">
+<link rel="stylesheet" href="/static/editorial/css/index.css">
+</head>
+<body>
+
+<div id="progress"></div>
+<div id="offline">未连接本地服务 — 当前为<b>演示数据</b>。启动控制台后访问 /editorial 可查看真实报告库。</div>
+<div id="toast"></div>
+
+<div class="veil" id="veil" aria-hidden="true">
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+    <div class="dlg-kicker">CONFIRM · 请确认</div>
+    <h3 class="dlg-title" id="dlg-title">撕掉这一期？</h3>
+    <p class="dlg-body">该期的转写缓存、正文报告与问答历史将一并清除，删除后不可恢复。</p>
+    <p class="dlg-run" id="dlg-run"></p>
+    <div class="dlg-actions">
+      <button class="dlg-btn ghost" id="dlg-cancel">先留着</button>
+      <button class="dlg-btn solid" id="dlg-confirm">确认删除</button>
+    </div>
+  </div>
+</div>
+
+<header class="wrap" id="top">
+  <div class="masthead">
+    <div class="wordmark">VIDEREAD <em>视读</em></div>
+    <div class="vol" id="vol">LIVE — 编辑部</div>
+    <nav>
+      <button class="theme-btn" id="theme-toggle" type="button" aria-label="切换主题"></button>
+      <a href="#submit">投印新篇</a>
+      <a href="#feature">本期特稿</a>
+      <a href="#toc">往期目录</a>
+      <a href="#stats">印务统计</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="hero reveal">
+    <div class="kicker">
+      <span><b id="kicker-no">THE LETTERS</b> · 每一期都是一本小杂志</span>
+      <span class="live" id="kicker-date"></span>
+    </div>
+    <h1>把视频，<br>读成一篇<span class="accent">文章</span>。</h1>
+    <p class="deck">这里陈列你解析过的每一个视频。每一期都有章节、要点与引文，像一本随时可以翻回去的杂志——而这一次，目录是活的。</p>
+    <div class="byline">
+      <span>在库 · <i id="hl-total">—</i></span>
+      <span>最近一期 · <i id="hl-last">—</i></span>
+      <span>数据源 · <i id="hl-api">—</i></span>
+    </div>
+  </section>
+
+  <section class="block reveal" id="submit">
+    <div class="section-head">
+      <h3>IMPRINT · 投印新篇</h3>
+      <span class="hint">同一时刻只印一本 · 其余排队</span>
+    </div>
+    <div class="submit-grid">
+      <div>
+        <div class="subline">
+          <input type="text" id="url" autocomplete="off" placeholder="B 站链接或 BV 号，如 BV1xx411c7mD" aria-label="视频链接">
+          <button id="btn-submit">投印 →</button>
+        </div>
+        <div class="modes" id="modes">
+          <button class="mode on" data-mode="standard">详细讲解</button>
+          <button class="mode" data-mode="deep">深度精读</button>
+          <button class="mode" data-mode="brief">快速概览</button>
+          <button class="mode" data-mode="outline">极简大纲</button>
+          <label class="switch" style="margin-left:auto"><input type="checkbox" id="frames-switch"><span class="knob"></span>带截图</label>
+        </div>
+        <p class="jobline" id="jobline"></p>
+        <p class="probeline" id="probeline"></p>
+        <p class="submeta" id="submeta"></p>
+      </div>
+      <div>
+        <ul class="stepper" id="stepper"></ul>
+        <div class="logbox" id="logbox"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block reveal" id="feature">
+    <div class="section-head">
+      <h3>FEATURE · 本期特稿</h3>
+      <span class="hint" id="feature-hint"></span>
+    </div>
+    <div class="spread" id="feature-body">
+      <p class="skeleton">正在装订最新一期…</p>
+    </div>
+  </section>
+
+  <section class="block reveal" id="toc">
+    <div class="section-head">
+      <h3>CONTENTS · 往期目录</h3>
+      <span class="hint" id="toc-hint"></span>
+    </div>
+    <div class="toolbar">
+      <div class="qwrap">
+        <input type="text" id="q" autocomplete="off" placeholder="按标题 / UP主 / BV 号过滤，或切到「全文」搜转写稿…" aria-label="过滤">
+        <div class="hist" id="hist" aria-hidden="true"></div>
+      </div>
+      <label class="switch"><input type="checkbox" id="fav-switch"><span class="knob"></span>收藏</label>
+      <label class="switch"><input type="checkbox" id="full-switch"><span class="knob"></span>全文</label>
+    </div>
+    <p class="search-note" id="search-note"></p>
+    <ul class="toc" id="toc-list"><li><p class="skeleton">正在翻检档案…</p></li></ul>
+    <div class="pager">
+      <button id="prev-page">← 上一页</button>
+      <div class="pg-mid">
+        <span class="pg-label">第</span>
+        <input type="number" id="jump-page" min="1" value="1" aria-label="当前页码，输入并回车跳转">
+        <span class="pg-label">/ <span id="pg-pages">1</span> 页 · 共 <span id="pg-total">—</span> 期</span>
+      </div>
+      <button id="next-page">下一页 →</button>
+    </div>
+  </section>
+
+  <section class="block reveal" id="stats">
+    <div class="section-head">
+      <h3>COLOPHON · 印务统计</h3>
+      <span class="hint">按日汇总 · 读自 run.trace.jsonl</span>
+    </div>
+    <div id="stats-body"><p class="skeleton">正在核对台账…</p></div>
+  </section>
+
+</main>
+
+<footer class="wrap">
+  <div class="foot-rule"></div>
+  <div class="foot-cols">
+    <div>
+      <div class="foot-h">COLOPHON · 版权页</div>
+      <dl class="colophon">
+        <dt>刊名</dt><dd class="brand">VIDEREAD <em>视读</em></dd>
+        <dt>出版</dt><dd>VIDEREAD 编辑部</dd>
+        <dt>主编</dt><dd>AI 编辑部 · 人最终复核</dd>
+        <dt>周期</dt><dd>每周一期 · 随投随印</dd>
+        <dt>结构</dt><dd>转写 → 规划 → 逐节写作 → 渲染</dd>
+        <dt>印刷</dt><dd>本机渲染 · 127.0.0.1:8765</dd>
+        <dt>纸张</dt><dd>runs/ 产物目录 · 自包含 HTML</dd>
+        <dt>转写</dt><dd id="conf-asr">读取中…</dd>
+        <dt>执笔</dt><dd id="conf-llm">读取中…</dd>
+      </dl>
+    </div>
+    <div class="foot-sys">
+      <div class="foot-h">NOTES · 编务说明</div>
+      <p>同一时刻只执行一个任务，其余排队。</p>
+      <p>中断续跑不重复付费，产物落盘即缓存。</p>
+      <p>本服务无鉴权，仅限本机访问。</p>
+    </div>
+  </div>
+  <div class="foot-base">
+    <span id="foot-note">© MMXXVI VIDEREAD · 用 AI 重新阅读视频 · BUILD 1017-2303</span>
+    <a href="#top">回到页首 ↑</a>
+  </div>
+</footer>
+
+<nav class="side-nav" aria-label="页面目录">
+  <a href="#submit" data-spy="submit"><span>投印新篇</span><span class="dot"></span></a>
+  <a href="#feature" data-spy="feature"><span>本期特稿</span><span class="dot"></span></a>
+  <a href="#toc" data-spy="toc"><span>往期目录</span><span class="dot"></span></a>
+  <a href="#stats" data-spy="stats"><span>印务统计</span><span class="dot"></span></a>
+</nav>
+
+<script src="/static/editorial/js/index.js"></script>
+
+<script src="/static/editorial/js/theme.js"></script>
+</body>
+</html>

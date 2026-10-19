@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>(function(){var t;try{t=localStorage.getItem("videread.theme")}catch(e){}if(!t)t="system";var d=t==="dark"||(t==="system"&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.dataset.theme=d?"dark":"light";})();</script>
+<title>投印工单 · VIDEREAD 视读</title>
+<link rel="stylesheet" href="/static/editorial/css/job.css">
+</head>
+<body>
+<header class="wrap">
+  <div class="masthead">
+    <div class="wordmark">VIDEREAD <em>视读</em></div>
+    <nav><button class="theme-btn" id="theme-toggle" type="button" aria-label="切换主题"></button><a href="/editorial">← 回到编辑部</a></nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="jobblock">
+    <div class="rubric">JOB · 投印工单</div>
+    <h1 id="job-state">读取中…</h1>
+    <p class="job-url" id="job-url">—</p>
+    <div class="meta" id="job-meta"></div>
+    <ol class="stepper" id="stepper"></ol>
+    <div class="proof-h">LOG · 排印日志</div>
+    <div class="proof" id="log"></div>
+    <div class="actions" id="job-actions"></div>
+    <p class="job-err" id="job-err"></p>
+  </section>
+</main>
+
+<div id="toast" role="status"></div>
+
+<script src="/static/editorial/js/job.js"></script>
+
+<script src="/static/editorial/js/theme.js"></script>
+</body>
+</html>

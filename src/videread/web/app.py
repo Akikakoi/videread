@@ -30,8 +30,12 @@ from . import library, probe
 from .jobs import Job, JobBusy, JobManager
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-#: 编辑风 demo 页面所在目录（项目根 demos/；仅源码运行时存在）
-DEMO_DIR = Path(__file__).resolve().parents[3] / "demos"
+#: 编辑风正式版页面目录（随包分发；demos/ 里的同名页面冻结为历史参考）
+EDITORIAL_DIR = STATIC_DIR / "editorial"
+EDITORIAL_ASSETS = (
+    "css/index.css", "css/reader.css", "css/job.css",
+    "js/index.js", "js/reader.js", "js/job.js", "js/theme.js",
+)
 HEARTBEAT_SEC = 15.0
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
@@ -129,33 +133,36 @@ def create_app(out_root: Path) -> FastAPI:
             html = html.replace(f"/static/{name}", f"/static/{name}?v={stamp}")
         return HTMLResponse(html)
 
+    def _editorial_page(filename: str) -> HTMLResponse:
+        """读取编辑风页面；静态资源注入 mtime 版本号（与控制台同策略，
+        改动后浏览器立即拉新版，不再依赖 no-cache 每次回源）。"""
+        page = EDITORIAL_DIR / filename
+        if not page.is_file():
+            raise HTTPException(status_code=500, detail=f"缺少编辑风页面：{page}")
+        html = page.read_text(encoding="utf-8")
+        for asset in EDITORIAL_ASSETS:
+            plain = f"/static/editorial/{asset}"
+            if plain not in html:
+                continue
+            full = EDITORIAL_DIR / asset
+            stamp = int(full.stat().st_mtime) if full.is_file() else 0
+            html = html.replace(plain, f"{plain}?v={stamp}")
+        return HTMLResponse(html, headers=_NO_CACHE)
+
     @app.get("/editorial", response_class=HTMLResponse)
     def editorial() -> HTMLResponse:
-        """杂志编辑风前端（实验性 demo，与控制台共用同一套 API 与产物目录）。
-
-        页面文件位于项目 demos/ 下；打包安装到别处时 demos 不随包分发，
-        统一按 404 提示，不影响控制台本体。
-        """
-        page = DEMO_DIR / "editorial-live.html"
-        if not page.is_file():
-            raise HTTPException(status_code=404, detail=f"缺少 demo 页面：{page}")
-        return HTMLResponse(page.read_text(encoding="utf-8"), headers=_NO_CACHE)
+        """编辑风主页（正式版）：杂志排版的报告库 + 投印入口，与控制台双轨过渡。"""
+        return _editorial_page("index.html")
 
     @app.get("/read/{run_id}", response_class=HTMLResponse)
     def editorial_read(run_id: str) -> HTMLResponse:
         """编辑风全文阅读页（新标签页打开）：抓取 report.html 重排为杂志版式。"""
-        page = DEMO_DIR / "editorial-reader.html"
-        if not page.is_file():
-            raise HTTPException(status_code=404, detail=f"缺少 demo 页面：{page}")
-        return HTMLResponse(page.read_text(encoding="utf-8"), headers=_NO_CACHE)
+        return _editorial_page("reader.html")
 
     @app.get("/editorial/job/{job_id}", response_class=HTMLResponse)
     def editorial_job(job_id: str) -> HTMLResponse:
         """编辑风投印工单页：八阶段步进器 + 排印日志 + 取消，SSE 实时刷新。"""
-        page = DEMO_DIR / "editorial-job.html"
-        if not page.is_file():
-            raise HTTPException(status_code=404, detail=f"缺少 demo 页面：{page}")
-        return HTMLResponse(page.read_text(encoding="utf-8"), headers=_NO_CACHE)
+        return _editorial_page("job.html")
 
     @app.get("/report/{run_id}", response_class=HTMLResponse)
     def report(run_id: str) -> HTMLResponse:
