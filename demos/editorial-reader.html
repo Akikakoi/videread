@@ -103,6 +103,25 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .foot .c2{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;color:var(--faint);}
 @media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto;} }
 @media (max-width:640px){ .page{padding:40px 20px 96px;} .bar{padding:12px 20px;} }
+
+/* ---------- 页面级滚动条：装订线打孔 + 红色游标 ----------
+   轨道 = 一列打孔圆点（骑马钉装订边），滑块 = 红色游标（上下留隙） ---------- */
+::-webkit-scrollbar{width:9px;height:9px;}
+::-webkit-scrollbar-track{
+  background-image:radial-gradient(circle, var(--hairline) 1.6px, transparent 2.2px);
+  background-size:9px 28px;background-repeat:repeat-y;background-position:center;
+}
+::-webkit-scrollbar:horizontal{
+  background-image:radial-gradient(circle, var(--hairline) 1.6px, transparent 2.2px);
+  background-size:28px 9px;background-repeat:repeat-x;background-position:center;
+}
+::-webkit-scrollbar-thumb{
+  background:var(--accent);
+  border-top:3px solid transparent;border-bottom:3px solid transparent;
+  background-clip:padding-box;
+}
+::-webkit-scrollbar-thumb:hover{background:var(--ink);background-clip:padding-box;}
+html{scrollbar-width:thin;scrollbar-color:var(--accent) transparent;}
 </style>
 </head>
 <body>

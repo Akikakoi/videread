@@ -203,14 +203,22 @@ section.block{padding:56px 0 0;}
 .hist ul{list-style:none;max-height:240px;overflow-y:auto;}
 .hist li{border-bottom:1px solid var(--hairline);}
 .hist li:last-child{border-bottom:0;}
+.hist .h-row{display:flex;align-items:stretch;}
+.hist .h-row:hover{background:var(--paper-deep);}
 .hist .h-item{
-  display:flex;justify-content:space-between;align-items:baseline;gap:14px;width:100%;
-  padding:10px 14px;background:none;border:0;cursor:pointer;text-align:left;
+  flex:1;display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+  padding:10px 6px 10px 14px;background:none;border:0;cursor:pointer;text-align:left;
   font-family:var(--sans);font-size:13.5px;color:var(--ink);
-  transition:color var(--t-fast),background var(--t-fast);
+  transition:color var(--t-fast);
 }
-.hist .h-item:hover{color:var(--accent);background:var(--paper-deep);}
+.hist .h-row:hover .h-item{color:var(--accent);}
 .hist .h-time{font-family:var(--mono);font-size:10px;color:var(--faint);letter-spacing:.5px;flex-shrink:0;}
+.hist .h-del{
+  border:0;background:none;cursor:pointer;flex-shrink:0;
+  color:var(--faint);font-family:var(--mono);font-size:10.5px;
+  padding:0 12px;transition:color var(--t-fast);
+}
+.hist .h-del:hover{color:var(--accent);}
 .switch{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;letter-spacing:1.5px;color:var(--muted);cursor:pointer;user-select:none;}
 .switch input{display:none;}
 .switch .knob{width:30px;height:16px;border:1px solid var(--muted);border-radius:99px;position:relative;transition:background var(--t),border-color var(--t);}
@@ -254,10 +262,23 @@ section.block{padding:56px 0 0;}
 
 /* ---------- submit ---------- */
 .submit-grid{display:grid;grid-template-columns:1fr;gap:24px 0;padding:36px 0 8px;}
-.subline{display:flex;border-bottom:2px solid var(--ink);}
-.subline input{flex:1;border:0;background:transparent;outline:none;font-family:var(--mono);font-size:14px;color:var(--ink);padding:13px 4px;letter-spacing:.5px;min-width:0;}
+.subline{
+  display:flex;align-items:center;gap:10px;
+  background:var(--paper-deep);border:2px solid var(--ink);
+  padding:5px 6px 5px 18px;
+  transition:border-color var(--t);
+}
+.subline:focus-within{border-color:var(--accent);}
+.subline input{flex:1;border:0;background:transparent;outline:none;font-family:var(--mono);font-size:16px;color:var(--ink);padding:14px 4px;letter-spacing:.5px;min-width:0;}
 .subline input::placeholder{color:var(--faint);}
-.subline button{border:0;background:transparent;cursor:pointer;font-family:var(--mono);font-size:13px;letter-spacing:2px;color:var(--ink);padding:13px 8px;transition:color var(--t);white-space:nowrap;}
+#btn-submit{
+  font-family:var(--mono);font-size:13px;letter-spacing:2px;
+  background:var(--ink);color:var(--paper);border:0;
+  padding:14px 26px;cursor:pointer;white-space:nowrap;
+  transition:background var(--t),color var(--t);
+}
+#btn-submit:hover:not(:disabled){background:var(--accent);color:var(--paper);}
+#btn-submit:disabled{opacity:.55;cursor:default;}
 .subline button:hover{color:var(--accent);}
 .subline button:disabled{color:var(--faint);cursor:default;}
 .modes{display:flex;gap:10px;margin:16px 0 0;flex-wrap:wrap;}
@@ -283,6 +304,36 @@ section.block{padding:56px 0 0;}
   border:0;border-bottom:2px solid var(--accent);background:transparent;outline:none;
   width:100%;padding:0 0 4px;
 }
+/* ---------- 分P 自绘下拉（原生 select 的弹出层无法定制样式） ---------- */
+.ppick-wrap{position:relative;display:inline-block;}
+.ppick-btn{
+  border:0;background:none;cursor:pointer;
+  font-family:var(--mono);font-size:11.5px;color:var(--ink);letter-spacing:.3px;
+  padding:0;border-bottom:1px solid var(--hairline);
+  transition:color var(--t),border-color var(--t);
+}
+.ppick-btn:hover{color:var(--accent);border-color:var(--accent);}
+.ppick{
+  position:absolute;top:calc(100% + 8px);left:0;z-index:30;
+  min-width:320px;max-width:min(440px,90vw);text-align:left;
+  background:var(--paper);border:1px solid var(--hairline);border-top:2px solid var(--ink);
+  box-shadow:0 14px 34px rgba(23,20,14,.12);display:none;
+  max-height:320px;overflow-y:auto;
+}
+.ppick.open{display:block;animation:dropIn var(--t-fast) var(--ease) both;}
+.ppick .pp-item{
+  display:flex;align-items:baseline;gap:10px;width:100%;padding:9px 14px;
+  background:none;border:0;border-bottom:1px solid var(--hairline);cursor:pointer;text-align:left;
+  font-family:var(--sans);font-size:13px;color:var(--ink);
+  transition:color var(--t-fast);
+}
+.ppick .pp-item:last-child{border-bottom:0;}
+.ppick .pp-item:hover{color:var(--accent);}
+.ppick .pp-no{font-family:var(--mono);font-size:11px;color:var(--faint);min-width:28px;flex-shrink:0;}
+.ppick .pp-t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ppick .pp-d{font-family:var(--mono);font-size:10px;color:var(--faint);flex-shrink:0;}
+.ppick .pp-item.on .pp-no,.ppick .pp-item.on .pp-t{color:var(--accent);}
+.ppick .pp-item.on .pp-d{color:var(--accent);}
 .stepper li.cur{color:var(--ink);}
 .stepper li.cur .mark{color:var(--accent);}
 .stepper li.cur .t::after{content:" …";}
@@ -363,6 +414,32 @@ html.js .reveal.in{opacity:1;transform:none;}
 @media (max-width:1200px){
   .side-nav{display:none;}
 }
+
+/* ---------- 细滚条（编辑风） ---------- */
+#logbox::-webkit-scrollbar,#page-pick::-webkit-scrollbar{width:8px;}
+#logbox::-webkit-scrollbar-track,#page-pick::-webkit-scrollbar-track{background:transparent;}
+#logbox::-webkit-scrollbar-thumb,#page-pick::-webkit-scrollbar-thumb{background:var(--hairline);border-radius:4px;}
+#logbox::-webkit-scrollbar-thumb:hover,#page-pick::-webkit-scrollbar-thumb:hover{background:var(--muted);}
+#logbox,#page-pick{scrollbar-width:thin;scrollbar-color:var(--hairline) transparent;}
+
+/* ---------- 页面级滚动条：装订线打孔 + 红色游标 ----------
+   轨道 = 一列打孔圆点（骑马钉装订边），滑块 = 红色游标（上下留隙） ---------- */
+::-webkit-scrollbar{width:9px;height:9px;}
+::-webkit-scrollbar-track{
+  background-image:radial-gradient(circle, var(--hairline) 1.6px, transparent 2.2px);
+  background-size:9px 28px;background-repeat:repeat-y;background-position:center;
+}
+::-webkit-scrollbar:horizontal{
+  background-image:radial-gradient(circle, var(--hairline) 1.6px, transparent 2.2px);
+  background-size:28px 9px;background-repeat:repeat-x;background-position:center;
+}
+::-webkit-scrollbar-thumb{
+  background:var(--accent);
+  border-top:3px solid transparent;border-bottom:3px solid transparent;
+  background-clip:padding-box;
+}
+::-webkit-scrollbar-thumb:hover{background:var(--ink);background-clip:padding-box;}
+html{scrollbar-width:thin;scrollbar-color:var(--accent) transparent;}
 </style>
 </head>
 <body>
@@ -1001,25 +1078,102 @@ document.querySelectorAll("#modes .mode").forEach(b => {
 });
 
 let probeTimer = null;
-$("#url").addEventListener("blur", () => { doProbe(); });
+$("#url").addEventListener("blur", e => {
+  /* 焦点移入预检行（如点分P 下拉）时不预检，避免下拉被重绘打断 */
+  if(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest("#probeline")) return;
+  doProbe();
+});
 $("#url").addEventListener("input", () => {
   clearTimeout(probeTimer);
   probeTimer = setTimeout(doProbe, 900);
 });
 
+let probePages = [];   /* 预检拿到的分P列表（多P 视频才有值） */
+let pageSelKey = null; /* 分P 列表对应的输入源，换源即失效 */
+
+let selPageNum = null; /* 当前选中的分P（null = P1/未选） */
+function selectedPage(){ return selPageNum || 1; }
+
+/* 分P 自绘下拉：触发钮 + 浮层（样式与搜索历史下拉同源） */
+function renderPPick(){
+  const cur = probePages.find(x => x.page === selPageNum) || probePages[0];
+  const btn = '<button type="button" id="page-btn" class="ppick-btn" aria-haspopup="listbox" aria-expanded="false">' +
+    'P' + cur.page + ' · ' + esc(cur.duration_text) + ' ▾</button>';
+  const items = probePages.map(it =>
+    '<button type="button" class="pp-item' + (it.page === selPageNum ? " on" : "") + '" data-page="' + it.page + '">' +
+    '<span class="pp-no">P' + it.page + '</span>' +
+    '<span class="pp-t">' + esc((it.title || "").slice(0, 30)) + '</span>' +
+    '<span class="pp-d">' + esc(it.duration_text) + '</span></button>').join("");
+  return btn + '<span class="ppick" id="page-pick">' + items + '</span>';
+}
+function wirePPick(){
+  const btn = document.getElementById("page-btn");
+  const pick = document.getElementById("page-pick");
+  if(!btn || !pick) return;
+  btn.addEventListener("click", e => {
+    e.stopPropagation();
+    pick.classList.toggle("open");
+    btn.setAttribute("aria-expanded", pick.classList.contains("open") ? "true" : "false");
+  });
+  pick.querySelectorAll(".pp-item").forEach(it => it.addEventListener("click", () => {
+    selPageNum = parseInt(it.dataset.page, 10) || 1;
+    const item = probePages.find(x => x.page === selPageNum) || probePages[0];
+    btn.innerHTML = "P" + item.page + " · " + esc(item.duration_text) + ' ▾';
+    pick.querySelectorAll(".pp-item").forEach(x => x.classList.toggle("on", Number(x.dataset.page) === selPageNum));
+    pick.classList.remove("open");
+    btn.setAttribute("aria-expanded", "false");
+  }));
+}
+document.addEventListener("click", e => {
+  const pick = document.getElementById("page-pick");
+  if(pick && pick.classList.contains("open") && !e.target.closest(".ppick-wrap")) pick.classList.remove("open");
+});
+
+/* 把所选分P 写进提交链接：P1 保持裸链接（与裸 BV 提交同目录），
+   其他分P 追加 ?p=N；已有 p 参数则替换。裸 BV 号先补全成标准链接。 */
+function withPage(source, page){
+  const url = /^BV[0-9A-Za-z]{10}$/i.test(source)
+    ? "https://www.bilibili.com/video/" + source
+    : source;
+  const queryAt = url.indexOf("?");
+  if(queryAt < 0) return page > 1 ? url + "?p=" + page : url;
+  const base = url.slice(0, queryAt);
+  const params = url.slice(queryAt + 1).split("&").filter(pair => pair.split("=")[0] !== "p");
+  if(page > 1) params.push("p=" + page);
+  return params.length ? base + "?" + params.join("&") : base;
+}
+
+let lastProbedUrl = null; /* 已预检过的输入：blur 重复触发同一输入时直接跳过 */
+
 async function doProbe(){
   const url = $("#url").value.trim();
+  if(url === lastProbedUrl) return; /* 同一输入不重复预检（点分P 下拉触发 blur 的场景） */
   const line = $("#probeline");
-  if(!url){ line.innerHTML = ""; return; }
+  if(!url){ probePages = []; pageSelKey = null; lastProbedUrl = null; line.innerHTML = ""; return; }
   line.innerHTML = "预检中…";
   try{
     const p = await post("/api/probe", {url});
-    let html = "预检 · <b>" + esc(p.title || "未知标题") + "</b> · 时长 <b>" + esc(p.duration_text || "—") + "</b>";
+    lastProbedUrl = url;
+    /* 同一输入的重复预检保留用户已选的分P */
+    const keepPage = (pageSelKey === url) ? selectedPage() : null;
+    let html = "预检 · <b>" + esc(p.title || "未知标题") + "</b>";
+    if(p.pages && p.pages.length > 1){
+      /* 多P：时长/超长判定跟随所选分P（选项里带各P时长），不显示整包时长 */
+      probePages = p.pages; pageSelKey = url;
+      selPageNum = keepPage || (p.current_page > 1 ? p.current_page : 1);
+      html += ' · 分P <span class="ppick-wrap">' + renderPPick() + '</span>';
+    } else {
+      probePages = []; pageSelKey = url; selPageNum = null;
+      html += " · 时长 <b>" + esc(p.duration_text || "—") + "</b>";
+    }
     if(p.uploader) html += " · " + esc(p.uploader);
     if(p.too_long) html += ' · <span class="warn">超出 ' + esc(p.limit_text || "") + ' 上限，将被拒绝</span>';
     if(p.existing_run) html += ' · <span class="warn">已解析过（' + esc(p.existing_run.generated_at) + '）</span> · <a href="' + p.existing_run.report_url + '" target="_blank" rel="noopener">查看上次报告</a>';
     line.innerHTML = html;
+    wirePPick();
   }catch(e){
+    probePages = []; pageSelKey = null; /* 预检失败放行原文，过期分P一并失效 */
+    lastProbedUrl = url;
     line.innerHTML = OFFLINE ? "演示模式 · 预检在启动本地服务后可用" : '<span class="warn">预检失败：' + esc(e.message) + '（仍可提交）</span>';
   }
 }
@@ -1052,7 +1206,10 @@ async function submitJob(){
   renderStepper(-1, doneSet);
   try{
     const frames = $("#frames-switch") && $("#frames-switch").checked ? true : null;
-    const job = await post("/api/jobs", {url, mode, frames});
+    /* 投印策略固定：忽略缓存强制重跑、不留音频文件、转写引擎按 .env 配置（不传即"自动"） */
+    /* 多P 视频：仅当分P 列表仍对应当前输入时才改写链接，避免过期分P 误选 */
+    const target = (probePages.length && pageSelKey === url) ? withPage(url, selectedPage()) : url;
+    const job = await post("/api/jobs", {url: target, mode, frames, no_cache: true, keep_audio: false});
     localStorage.setItem("videread.activeJob", job.job_id);
     /* M1：提交即进工单页盯进度（离线演示模式保留页内步进器） */
     if(!OFFLINE){ location.href = "/editorial/job/" + encodeURIComponent(job.job_id); return; }
@@ -1204,18 +1361,29 @@ function renderHist(){
     '<div class="h-head"><span>RECENT · 最近搜索</span>' +
     (list.length ? '<button id="hist-clear">清空</button>' : "") + '</div>' +
     (list.length
-      ? '<ul>' + list.map(x =>
-          '<li><button class="h-item" data-q="' + esc(x.q) + '">' +
+      ? '<ul>' + list.map((x, i) =>
+          '<li class="h-row">' +
+          '<button class="h-item" data-i="' + i + '">' +
           '<span>' + esc(x.q) + '</span><span class="h-time">' + esc(x.t || "") + '</span>' +
-          '</button></li>').join("") + '</ul>'
+          '</button>' +
+          '<button class="h-del" data-i="' + i + '" title="删除这条记录">✕</button>' +
+          '</li>').join("") + '</ul>'
       : '<p style="padding:12px 14px;font-size:12.5px;color:var(--faint);margin:0;">暂无搜索记录</p>');
   box.classList.add("open");
   box.setAttribute("aria-hidden", "false");
   box.querySelectorAll(".h-item").forEach(b => b.addEventListener("click", () => {
-    $("#q").value = b.dataset.q;
-    state.q = b.dataset.q;
+    const list = loadHist();
+    $("#q").value = list[Number(b.dataset.i)].q;
+    state.q = $("#q").value;
     closeHist();
     loadRuns(1);
+  }));
+  box.querySelectorAll(".h-del").forEach(b => b.addEventListener("click", e => {
+    e.stopPropagation();
+    const list = loadHist();
+    list.splice(Number(b.dataset.i), 1);
+    try{ localStorage.setItem(HIST_KEY, JSON.stringify(list)); }catch(err){}
+    renderHist(); /* 重渲染保持面板展开 */
   }));
   const clear = $("#hist-clear");
   if(clear) clear.addEventListener("click", () => {
