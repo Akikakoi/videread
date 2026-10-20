@@ -147,6 +147,9 @@ section.block{padding:56px 0 0;}
 .letter .q{font-family:var(--serif);font-weight:500;font-size:16px;}
 .letter .q::before{content:"问 · ";font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:1px;}
 .letter .a{font-size:14.5px;color:var(--soft);margin-top:6px;}
+/* 新到的来信一次性入场（历史回放不重播）：ask() 重绘后给最后一封加 .enter */
+.letter.enter{animation:letterIn var(--t) var(--ease) both;}
+@keyframes letterIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 .letter .a::before{content:"答 · ";font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:1px;}
 .letter .cite{font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:6px;}
 .askline{display:flex;border-bottom:2px solid var(--ink);margin-top:16px;}
@@ -381,7 +384,7 @@ html.js .reveal.in{opacity:1;transform:none;}
   .side-nav a.on .dot{transform:none;}
   .switch .knob,.switch .knob::after{transition:none;}
   .pg-mid input{transition:none;}
-  .veil.open,.dialog,.hist.open,.ppick.open,#toast,#toast.out,.stepper li.pop .mark{animation:none;}
+  .veil.open,.dialog,.hist.open,.ppick.open,#toast,#toast.out,.stepper li.pop .mark,.letter.enter{animation:none;}
 }
 .skeleton{color:var(--faint);font-family:var(--mono);font-size:12px;letter-spacing:2px;padding:32px 0;}
 

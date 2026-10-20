@@ -284,7 +284,11 @@ async function ask(runId, btn){
     await post("/api/runs/" + encodeURIComponent(runId) + "/qa", {question: q});
     const h = await jfetch("/api/runs/" + encodeURIComponent(runId) + "/qa");
     const list = $("#letters-list");
+    const prev = list.querySelectorAll(".letter").length;
     list.innerHTML = (h.history || []).map(renderLetter).join("") || list.innerHTML;
+    /* 只给新到的那封一次性入场（历史回放不重播）；历史追加在尾部，新信即最后一封 */
+    const fresh = list.querySelectorAll(".letter");
+    if(fresh.length > prev) fresh[fresh.length - 1].classList.add("enter");
     input.value = "";
     toast("编辑部已回信");
   }catch(e){
@@ -292,6 +296,7 @@ async function ask(runId, btn){
       const list = $("#letters-list");
       if(list.querySelector("p")) list.innerHTML = "";
       list.insertAdjacentHTML("afterbegin", renderLetter({question: q, answer_html: "（演示模式）这里会显示只依据转写稿生成的回答，并附上可点击的章节定位与时间戳引文。"}));
+      list.firstElementChild.classList.add("enter");
       input.value = "";
     }else{
       toast("提问失败：" + e.message);

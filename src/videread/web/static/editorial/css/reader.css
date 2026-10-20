@@ -6,6 +6,7 @@
   --serif:"Fraunces","Noto Serif SC","Source Han Serif SC","Songti SC","STZhongsong","SimSun",serif;
   --sans:"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
   --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Consolas,monospace;
+  --ease:cubic-bezier(.22,.61,.36,1);--t-fast:.18s;--t:.28s;--t-slow:.8s;
 }
 
 /* ── 深夜印刷间：深色主题令牌 ── */
@@ -29,9 +30,9 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
   /* 水平内边距与文章栏同源：宽屏下返回钮/标题与正文左对齐，主题钮与正文右对齐 */
   padding:14px max(32px, calc((100% - 696px)/2));
 }
-.bar .back{border:0;background:none;cursor:pointer;font-family:var(--mono);font-size:13px;letter-spacing:2px;color:var(--ink);padding:0;text-decoration:none;transition:color .25s;}
+.bar .back{border:0;background:none;cursor:pointer;font-family:var(--mono);font-size:13px;letter-spacing:2px;color:var(--ink);padding:0;text-decoration:none;transition:color var(--t) var(--ease);}
 .bar .back:hover{color:var(--accent);}
-.theme-btn{border:1px solid var(--hairline);background:transparent;cursor:pointer;font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--muted);padding:3px 12px;border-radius:99px;transition:color .25s,border-color .25s;}
+.theme-btn{border:1px solid var(--hairline);background:transparent;cursor:pointer;font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--muted);padding:3px 12px;border-radius:99px;transition:color var(--t) var(--ease),border-color var(--t) var(--ease);}
 .theme-btn:hover{color:var(--accent);border-color:var(--accent);}
 .bar .rp{flex:1;font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
@@ -93,7 +94,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 /* ---------- 左侧悬浮章节导航（与原版报告同款交互，走主题令牌） ---------- */
 .report-nav{position:fixed;top:96px;left:22px;width:176px;max-height:calc(100vh - 140px);overflow-y:auto;z-index:4;font-size:13px;line-height:1.5;}
 .report-nav-list{margin:0;padding:0;list-style:none;border-left:2px solid var(--hairline);}
-.report-nav-link{display:block;margin-left:-2px;padding:6px 10px 6px 12px;color:var(--muted);text-decoration:none;border-left:2px solid transparent;transition:color .25s,border-color .25s;}
+.report-nav-link{display:block;margin-left:-2px;padding:6px 10px 6px 12px;color:var(--muted);text-decoration:none;border-left:2px solid transparent;transition:color var(--t) var(--ease),border-color var(--t) var(--ease);}
 .report-nav-link:hover{color:var(--ink);}
 .report-nav-link.is-active{color:var(--accent);font-weight:500;border-left-color:var(--accent);}
 @media (max-width:1180px){ .report-nav{display:none;} }

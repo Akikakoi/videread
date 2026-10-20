@@ -19,6 +19,7 @@
     const dark = current === "dark" || (current === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.dataset.theme = dark ? "dark" : "light";
     label();
-    setTimeout(() => document.documentElement.classList.remove("theme-switching"), 250);
+    /* 禁过渡窗口要盖住最长的 --t-slow=.8s，否则切换瞬间恰有 reveal 在播会被截断加速 */
+    setTimeout(() => document.documentElement.classList.remove("theme-switching"), 850);
   });
 })();
