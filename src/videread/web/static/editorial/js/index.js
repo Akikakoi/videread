@@ -3,6 +3,8 @@
 /* ================= 环境 ================= */
 const API = (location.protocol === "file:") ? "http://127.0.0.1:8765" : "";
 const STAGES = ["下载","音频处理","转写","规范化","结构规划","截图","逐节写作","渲染"];
+/* JS 触发的滚动不受 CSS scroll-behavior:auto 管，reduce 下须显式降级为瞬间跳转 */
+const scrollBehavior = () => matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
 /* outline.profile 是结构规划选出的信息结构（机器字段），五种合法值见 report/outline.py */
 const STRUCTURE_ZH = {mechanism:"机理拆解",procedure:"步骤流程",evidence:"论据实证",argument:"观点论述",narrative:"叙事纪事"};
 const structureZh = p => STRUCTURE_ZH[p] || (p ? p : "—");
@@ -387,8 +389,7 @@ async function loadRuns(page, silent){
   if(state.scrollAfterLoad){
     state.scrollAfterLoad = false;
     /* 翻页后回到目录板块顶部，让新列表从头看起 */
-    const smooth = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
-    requestAnimationFrame(() => document.getElementById("toc").scrollIntoView({behavior: smooth, block: "start"}));
+    requestAnimationFrame(() => document.getElementById("toc").scrollIntoView({behavior: scrollBehavior(), block: "start"}));
   }
 }
 
@@ -410,7 +411,7 @@ function bindToc(){
       if(e.target.closest(".fav") || e.target.closest(".del")) return;
       e.preventDefault();
       openFeature(a.dataset.run);
-      document.getElementById("feature").scrollIntoView({behavior: "smooth"});
+      document.getElementById("feature").scrollIntoView({behavior: scrollBehavior()});
     });
   });
   document.querySelectorAll("#toc-list .fav").forEach(b => {

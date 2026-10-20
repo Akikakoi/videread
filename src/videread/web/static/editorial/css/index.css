@@ -381,7 +381,7 @@ html.js .reveal.in{opacity:1;transform:none;}
   .side-nav a.on .dot{transform:none;}
   .switch .knob,.switch .knob::after{transition:none;}
   .pg-mid input{transition:none;}
-  .veil.open,.dialog,.hist.open,#toast,#toast.out,.stepper li.pop .mark{animation:none;}
+  .veil.open,.dialog,.hist.open,.ppick.open,#toast,#toast.out,.stepper li.pop .mark{animation:none;}
 }
 .skeleton{color:var(--faint);font-family:var(--mono);font-size:12px;letter-spacing:2px;padding:32px 0;}
 

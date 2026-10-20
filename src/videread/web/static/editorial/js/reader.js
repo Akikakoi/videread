@@ -1,6 +1,8 @@
 "use strict";
 const API = (location.protocol === "file:") ? "http://127.0.0.1:8765" : "";
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+/* JS 触发的滚动不受 CSS scroll-behavior:auto 管，reduce 下须显式降级为瞬间跳转 */
+const scrollBehavior = () => matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
 
 const params = new URLSearchParams(location.search);
 let runId = params.get("run_id") || "";
@@ -86,7 +88,7 @@ async function open(runId, sec){
 
 function jump(sec){
   const el = page.querySelector("#sec-" + sec);
-  if(el) requestAnimationFrame(() => el.scrollIntoView({behavior: "smooth", block: "start"}));
+  if(el) requestAnimationFrame(() => el.scrollIntoView({behavior: scrollBehavior(), block: "start"}));
 }
 
 /* 左侧悬浮章节导航：原版报告由内嵌脚本生成，阅读页拼装时脚本被剥离、
