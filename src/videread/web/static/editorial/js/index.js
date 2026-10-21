@@ -32,8 +32,9 @@ function toast(msg){
 
 /* ================= 确认弹窗（替代原生 confirm） ================= */
 let dlgResolve = null;
-function askDelete(runId){
-  $("#dlg-run").textContent = runId;
+function askDelete(runId, title){
+  /* 弹窗里只示视频标题，run_id 仅作兜底（标题缺失时才回落） */
+  $("#dlg-run").textContent = title || runId;
   $("#veil").classList.add("open");
   $("#veil").setAttribute("aria-hidden", "false");
   $("#dlg-confirm").focus();
@@ -406,7 +407,7 @@ function rowOf(item, i){
     '<span class="dur">' + esc(item.duration_text || "—") + '</span>' +
     tagOf(item) +
     '<button class="fav' + (item.favorite ? " on" : "") + '" data-fav-run="' + esc(item.run_id) + '" data-on="' + (item.favorite ? 1 : 0) + '" title="收藏">' + (item.favorite ? "★" : "☆") + '</button>' +
-    '<button class="del" data-del-run="' + esc(item.run_id) + '" title="删除这一期">✕</button>' +
+    '<button class="del" data-del-run="' + esc(item.run_id) + '" data-del-title="' + esc(item.title || item.run_id) + '" title="删除这一期">✕</button>' +
     '</a></li>';
 }
 
@@ -440,12 +441,13 @@ function bindToc(){
     b.addEventListener("click", async e => {
       e.preventDefault();
       const runId = b.dataset.delRun;
+      const title = b.dataset.delTitle || runId;
       if(OFFLINE){ toast("离线演示模式，暂不支持删除"); return; }
-      const ok = await askDelete(runId);
+      const ok = await askDelete(runId, title);
       if(!ok) return;
       try{
         await del("/api/runs/" + encodeURIComponent(runId));
-        toast("已删除：" + runId);
+        toast("已删除：" + title);
         if(currentRunId === runId){
           currentRunId = null;
           try{

@@ -61,10 +61,12 @@ a{color:inherit;}
 .dlg-title{font-family:var(--serif);font-weight:600;font-size:22px;line-height:1.4;margin-bottom:10px;}
 .dlg-body{font-size:14px;color:var(--muted);line-height:1.8;}
 .dlg-run{
-  font-family:var(--mono);font-size:12px;color:var(--ink);
+  font-family:var(--serif);font-size:14px;font-weight:500;line-height:1.65;color:var(--ink);
   background:var(--paper-deep);border:1px solid var(--hairline);
-  padding:8px 12px;margin-top:14px;word-break:break-all;letter-spacing:.5px;
+  border-left:2px solid var(--accent);
+  padding:9px 13px;margin-top:14px;word-break:break-word;
 }
+.dlg-run:empty{display:none;}
 .dlg-actions{display:flex;justify-content:flex-end;align-items:baseline;gap:22px;margin-top:24px;}
 .dlg-btn{cursor:pointer;font-family:var(--mono);font-size:13px;letter-spacing:1.5px;transition:color var(--t),background var(--t);}
 .dlg-btn.ghost{border:0;background:none;color:var(--muted);padding:8px 2px;}
