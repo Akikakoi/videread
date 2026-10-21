@@ -230,13 +230,14 @@ body {
 .keyline > :first-child { margin-top: 0; }
 .keyline > :last-child { margin-bottom: 0; }
 
-/* ── .cards / .comparison / .categories 两列并列 ── */
+/* ── .cards / .comparison / .categories 两列瀑布流 ──
+   多列布局让高度不均的卡片按列流动、列高自动配平，
+   消除 grid 固定行高模型下换行卡片下方的空洞 */
 .cards,
 .comparison,
 .categories {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  columns: 2;
+  column-gap: 16px;
   margin: 22px 0;
 }
 .cards > *,
@@ -245,6 +246,8 @@ body {
   background: #fafbfc;
   border: 1px solid var(--line);
   border-radius: 8px;
+  break-inside: avoid;
+  margin-bottom: 16px;
 }
 .cards > * > :first-child,
 .categories > * > :first-child { margin-top: 0; }
@@ -257,6 +260,8 @@ body {
   border: 1px solid var(--line);
   border-top: 3px solid var(--accent);
   border-radius: 8px;
+  break-inside: avoid;
+  margin-bottom: 16px;
 }
 .comparison > *:last-child { border-top-color: #b4552d; }
 .comparison > * > :first-child { margin-top: 0; }
@@ -507,7 +512,7 @@ body {
   .section-time { margin-left: 0; }
   .cards,
   .comparison,
-  .categories { grid-template-columns: 1fr; }
+  .categories { columns: 1; }
   .table-details,
   .table-compact { font-size: 14px; }
   .table-details th,

@@ -59,8 +59,11 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .page .callout{border-left:3px solid var(--accent);background:var(--paper-deep);padding:16px 20px;margin:24px 0;font-size:15px;}
 .page .callout p:last-child,.page .cards p:last-child{margin-bottom:0;}
 .page .cards,.page .comparison,.page .stats{margin:26px 0;}
-.page .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;}
-.page .cards > *{border:1px solid var(--hairline);padding:16px;}
+/* 卡片容器用多列瀑布流（column-width 自适应列数，复刻原 auto-fit）：
+   高度不均的卡片按列流动、列高自动配平，消除换行卡片下方的空洞；
+   break-inside:avoid 保证整卡不被劈开跨列 */
+.page .cards{columns:200px;column-gap:14px;}
+.page .cards > *{border:1px solid var(--hairline);padding:16px;break-inside:avoid;margin-bottom:14px;}
 .page .stats{display:flex;gap:32px;flex-wrap:wrap;border-top:2px solid var(--ink);padding-top:16px;}
 .page .stat-value{font-family:var(--serif);font-weight:600;font-size:30px;line-height:1.2;}
 .page .stat-label{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;color:var(--faint);}
@@ -84,7 +87,8 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 }
 .page .ts-jump:hover{border-color:var(--accent);}
 /* 卡片/对比容器自身带 data-source-units 时，胶囊独占一行排在卡片之后 */
-.page .cards > .ts-jump,.page .comparison > .ts-jump,.page .stats > .ts-jump{grid-column:1/-1;margin-top:2px;}
+.page .cards > .ts-jump{column-span:all;}
+.page .comparison > .ts-jump,.page .stats > .ts-jump{margin-top:2px;}
 .skeleton{color:var(--faint);font-family:var(--mono);font-size:12px;letter-spacing:2px;padding:48px 0;}
 .foot{max-width:760px;margin:0 auto;padding:0 32px 72px;}
 .foot-inner{border-top:3px double var(--ink);padding-top:22px;display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:12px;}
