@@ -9,6 +9,12 @@
 
 完整的接口契约、数据 schema 与验收标准见 [videread-开发文档.md](videread-开发文档.md)。
 
+## 效果预览
+
+| 编辑部首页（浅色） | 编辑部首页（深夜印刷间） |
+|---|---|
+| <img src="docs/screenshots/web-editorial.png" width="100%" alt="编辑部首页"/> | <img src="docs/screenshots/web-editorial-dark.png" width="100%" alt="编辑部首页深色模式"/> |
+
 ---
 
 ## 快速开始
@@ -126,7 +132,17 @@ python -m videread.cli BV1xx411c7mD
 
 ## Web 前端（编辑风）
 
-不想敲命令时用本地 Web 服务：浏览器打开后会进入杂志编辑风的「编辑部」界面，包含投印新篇（提交 BV 号 / 本地文件，多P 可选）、本期特稿（最新一期报告的完整排版与操作）、往期目录（全部报告：分页 / 关键词 / 收藏 / 全文检索 / 改名 / 删除 / 导出）、印务统计（按日耗时与 token）四大板块。投印提交后进入独立工单页，实时显示 8 阶段步进器与排印日志，可随时取消；报告点「翻开全文」进入阅读页——原 `report.html` 重排为杂志版式，支持章节直达与时间戳跳转原视频，并提供 MD / PDF / PNG 导出；「致编辑部来信」可就单篇报告提问，答案只依据转写稿作答。报头按钮循环切换浅色 / 深色（深夜印刷间）/ 自动主题。
+不想敲命令时用本地 Web 服务：浏览器打开后会进入杂志编辑风的「编辑部」界面，包含投印新篇（提交 BV 号 / 本地文件，多P 可选）、本期特稿（最新一期报告的完整排版与操作）、往期目录（全部报告：分页 / 关键词 / 收藏 / 全文检索 / 改名 / 删除 / 导出）、印务统计（按日耗时与 token）四大板块。投印提交后进入独立工单页，实时显示 8 阶段步进器与排印日志，可随时取消。
+
+| 本期特稿 | 往期目录 |
+|---|---|
+| <img src="docs/screenshots/web-feature.png" width="100%" alt="本期特稿"/> | <img src="docs/screenshots/web-toc.png" width="100%" alt="往期目录"/> |
+
+报告点「翻开全文」进入阅读页——原 `report.html` 重排为杂志版式，支持章节直达与时间戳跳转原视频，并提供 MD / PDF / PNG 导出；「致编辑部来信」可就单篇报告提问，答案只依据转写稿作答。
+
+| 阅读页（杂志版式） |
+|---|
+| <img src="docs/screenshots/web-reading.png" width="100%" alt="阅读页"/> |
 
 ```powershell
 run.bat                          # Windows 一键启动（无参数即起 Web 服务并开浏览器）
@@ -177,6 +193,12 @@ videread-web                     # 安装后的服务命令
 | `run.trace.jsonl` | 逐阶段耗时 / token 埋点 | — |
 
 阶段 1 命中 `meta.json` 前会先校验其中的 `url` 与本次请求的规范 URL 是否一致，不一致即视为未命中，避免 run 目录被别的视频复用。
+
+最终产出自包含的 `report.html`。在 Web 阅读页中的呈现如下——开启 `--frames` 的报告按章节内嵌视频画面，未开启则为纯文字排版：
+
+| 开启 `--frames`（内嵌视频画面） | 纯文字报告 |
+|---|---|
+| <img src="docs/screenshots/report-agent.png" width="100%" alt="含视频画面截图的报告阅读页示例"/> | <img src="docs/screenshots/report-text.png" width="100%" alt="纯文字报告阅读页示例"/> |
 
 ---
 
