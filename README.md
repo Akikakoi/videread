@@ -138,7 +138,7 @@ python -m videread.cli BV1xx411c7mD
 |---|---|
 | <img src="docs/screenshots/web-feature.png" width="100%" alt="本期特稿"/> | <img src="docs/screenshots/web-toc.png" width="100%" alt="往期目录"/> |
 
-报告点「翻开全文」进入阅读页——原 `report.html` 重排为杂志版式，支持章节直达与时间戳跳转原视频，并提供 MD / PDF / PNG 导出；「致编辑部来信」可就单篇报告提问，答案只依据转写稿作答。
+报告点「翻开全文」进入阅读页——原 `report.html` 重排为杂志版式，支持章节直达与时间戳跳转原视频，并提供 MD / PDF 导出与编辑风 PNG 长图（无头浏览器整页截取阅读页版式，缓存在 run 目录）；「致编辑部来信」可就单篇报告提问，答案只依据转写稿作答。
 
 | 阅读页（杂志版式） |
 |---|

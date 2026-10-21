@@ -120,6 +120,80 @@ def test_export_png_reports_missing_browser(tmp_path: Path, monkeypatch: pytest.
         png_mod.export_png(html, tmp_path / "report.png", _settings())
 
 
+# ---------------------------------------------------------------- 编辑风阅读页导出
+
+
+def test_export_reader_png_two_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """阅读页导出同样两趟：dump-dom 读 ?png=1 写入的测高标记，再按高截图。"""
+    html = _make_html(tmp_path)
+    out = tmp_path / "report.png"
+    calls: list = []
+    _stub_browser(monkeypatch, calls)
+
+    result = png_mod.export_reader_png(
+        "http://127.0.0.1:8765/read/x?png=1", out, _settings(), cache_key=html
+    )
+
+    assert result == out and out.is_file()
+    assert len(calls) == 2
+    assert "--dump-dom" in calls[0]
+    assert any(arg == "http://127.0.0.1:8765/read/x?png=1" for arg in calls[0])
+    assert any(arg.startswith("--virtual-time-budget=") for arg in calls[0])
+    assert "--window-size=900,2400" in calls[1]
+
+
+def test_export_reader_png_cache_uses_report_html(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """缓存新旧以 cache_key（report.html）为准，PNG 较新则直接复用。"""
+    html = _make_html(tmp_path)
+    out = tmp_path / "report.png"
+    calls: list = []
+    _stub_browser(monkeypatch, calls)
+
+    png_mod.export_reader_png("http://127.0.0.1:8765/read/x?png=1", out, _settings(), cache_key=html)
+    png_mod.export_reader_png("http://127.0.0.1:8765/read/x?png=1", out, _settings(), cache_key=html)
+
+    assert len(calls) == 2  # 第二次缓存命中
+
+
+def test_web_png_endpoint_prefers_reader_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """配置 self_base 后，导出 PNG 走阅读页 URL 而不是原始 report.html。"""
+    from tests.test_web import make_run, RUN_ID
+
+    make_run(tmp_path, RUN_ID)
+    seen: dict = {}
+
+    def _fake_reader(page_url: str, out_png: Path, settings: object = None, **_kw: object) -> Path:
+        seen["url"] = page_url
+        out_png.write_bytes(_PNG_BYTES)
+        return out_png
+
+    monkeypatch.setattr("videread.web.app.png_mod.export_reader_png", _fake_reader)
+
+    client = TestClient(create_app(tmp_path, self_base="http://127.0.0.1:8765"))
+    response = client.get(f"/api/runs/{RUN_ID}/png")
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"\x89PNG")
+    assert seen["url"] == f"http://127.0.0.1:8765/read/{RUN_ID}?png=1"
+
+
+def test_web_png_endpoint_falls_back_without_self_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """未配置 self_base（离线测试场景）时仍走原始 export_png。"""
+    from tests.test_web import make_run, RUN_ID
+
+    make_run(tmp_path, RUN_ID)
+
+    def _fake_export(html_path: Path, out_png: Path, settings: object = None) -> Path:
+        out_png.write_bytes(_PNG_BYTES)
+        return out_png
+
+    monkeypatch.setattr("videread.web.app.png_mod.export_png", _fake_export)
+
+    client = TestClient(create_app(tmp_path))
+    response = client.get(f"/api/runs/{RUN_ID}/png")
+    assert response.status_code == 200
+
+
 # ---------------------------------------------------------------- Web 端点
 
 

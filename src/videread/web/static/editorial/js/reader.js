@@ -11,6 +11,10 @@ if(!runId){
   if(seg !== "read" && seg !== "editorial-reader.html") runId = decodeURIComponent(seg);
 }
 const sec = parseInt(params.get("sec") || "0", 10);
+/* 长图导出模式（?png=1）：无头浏览器经由此页截编辑风长图。
+   渲染完成后把内容高度写进 document.title（VRH: 标记）供 --dump-dom 测高。 */
+const PNG_MODE = params.has("png");
+if(PNG_MODE) document.documentElement.classList.add("png-mode");
 
 const page = document.getElementById("reader-page");
 const progress = document.getElementById("progress");
@@ -80,9 +84,12 @@ async function open(runId, sec){
     if(location.protocol === "file:") document.getElementById("back").href = "about:blank";
     if(sec) jump(sec);
     buildNav();
+    if(PNG_MODE) document.title = "VRH:" + document.documentElement.scrollHeight;
   }catch(err){
     page.innerHTML = '<p class="skeleton">全文读取失败（' + esc(String(err.message || err)) +
       '）。这份报告可能还没有生成 report.html，回编辑部看看其它期。</p>';
+    /* 失败也要给测高标记：截图趟拿到的是错误页，但导出不至于整体挂死 */
+    if(PNG_MODE) document.title = "VRH:" + document.documentElement.scrollHeight;
   }
 }
 

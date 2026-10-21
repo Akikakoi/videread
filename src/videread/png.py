@@ -26,6 +26,8 @@ _FALLBACK_HEIGHT = 16000
 #: 浏览器窗口最大高度（再高会被合成器拒绝），超长报告截断到此处
 _MAX_HEIGHT = 32000
 _MEASURE_MARK = "VRH:"
+#: 阅读页渲染预算（毫秒，虚拟时间）：覆盖字体 CDN + API 拉取 + 拼版
+_READER_BUDGET_MS = 15000
 
 
 def _inject_measure_script(html: str) -> str:
@@ -128,6 +130,83 @@ def export_png(html_path: Path, out_png: Path, settings: Settings | None = None,
     finally:
         shutil.rmtree(profile, ignore_errors=True)
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+    if not _valid_png(out_png):
+        raise PngError(f"长图导出失败：浏览器未产出有效文件 {out_png}")
+    return out_png
+
+
+def export_reader_png(
+    page_url: str,
+    out_png: Path,
+    settings: Settings | None = None,
+    width: int = PNG_WIDTH,
+    cache_key: Path | None = None,
+) -> Path:
+    """把在线编辑风阅读页（/read/{run_id}?png=1）截成竖长 PNG。
+
+    与 export_png 同为两趟，但浏览的是活页面：?png=1 让 reader.js 在拼版
+    完成后把内容高度写进 document.title，第一趟 --dump-dom 读标记测高，
+    第二趟按高开窗整页截图（--virtual-time-budget 等字体 CDN / API 就绪）。
+    `cache_key`（通常是 run 的 report.html）做缓存新旧判据，未提供则不缓存。
+    """
+    out_png = out_png.resolve()
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    if (
+        cache_key is not None
+        and cache_key.is_file()
+        and out_png.is_file()
+        and out_png.stat().st_mtime >= cache_key.stat().st_mtime
+    ):
+        return out_png
+
+    browser = find_browser(settings)
+    if browser is None:
+        raise PngError(
+            "未找到 Edge / Chrome，无法导出长图。"
+            "请安装 Microsoft Edge，或用 PDF_BROWSER_BIN 指定浏览器路径"
+        )
+
+    profile = tempfile.mkdtemp(prefix="videread-png-reader-")
+    base_flags = [
+        browser,
+        "--headless",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--hide-scrollbars",
+        f"--user-data-dir={profile}",
+        f"--virtual-time-budget={_READER_BUDGET_MS}",
+    ]
+    try:
+        # 第一趟：同宽视口下等拼版完成，从 dump 出的 <title> 里读测高标记
+        result = execution.run_command(
+            base_flags + [f"--window-size={width},800", "--dump-dom", page_url],
+            timeout=PDF_TIMEOUT_SEC,
+            error_cls=PngError,
+            missing_message=lambda program: f"浏览器启动失败（{program} 已不存在）",
+            timeout_message=lambda seconds, _program: f"长图导出超时（{seconds:.0f}s）",
+        )
+        match = re.search(_MEASURE_MARK + r"(\d+)", result.stdout or "")
+        height = _FALLBACK_HEIGHT
+        if match:
+            height = min(max(int(match.group(1)), 400), _MAX_HEIGHT)
+
+        # 第二趟：按测得高度开窗整页截图
+        result = execution.run_command(
+            base_flags + [f"--screenshot={out_png}", f"--window-size={width},{height}", page_url],
+            timeout=PDF_TIMEOUT_SEC,
+            error_cls=PngError,
+            missing_message=lambda program: f"浏览器启动失败（{program} 已不存在）",
+            timeout_message=lambda seconds, _program: f"长图导出超时（{seconds:.0f}s）",
+        )
+        if result.returncode not in (0, None) and not _valid_png(out_png):
+            raise PngError(
+                f"长图导出失败（退出码 {result.returncode}）："
+                f"{result.stderr.strip()[-500:]}"
+            )
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)
 
     if not _valid_png(out_png):
         raise PngError(f"长图导出失败：浏览器未产出有效文件 {out_png}")

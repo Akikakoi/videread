@@ -56,7 +56,14 @@ def main(argv: list[str] | None = None) -> int:
         # 等服务起来再开浏览器，否则首屏会因连接被拒而显示错误页
         threading.Timer(_OPEN_DELAY_SEC, webbrowser.open, args=(url,)).start()
 
-    uvicorn.run(create_app(out_root), host=args.host, port=args.port, log_level="info")
+    # 无头导出回头访问自身固定走 127.0.0.1：服务只绑本机（README 约定），
+    # host 即便配成 0.0.0.0，本机回环也总是可达
+    uvicorn.run(
+        create_app(out_root, self_base=f"http://127.0.0.1:{args.port}"),
+        host=args.host,
+        port=args.port,
+        log_level="info",
+    )
     return EXIT_OK
 
 

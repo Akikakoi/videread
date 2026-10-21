@@ -98,7 +98,12 @@ async def _event_stream(job: Job, request: Request, since: int):
         job.unsubscribe(channel)
 
 
-def create_app(out_root: Path) -> FastAPI:
+def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
+    """`self_base`：本服务自身的基址（如 http://127.0.0.1:8765）。
+
+    提供后「导出 PNG」走编辑风阅读页长图（无头浏览器截 /read/{run_id}?png=1）；
+    为 None（离线测试等场景）时回退为直接截 report.html 的原始样式。
+    """
     out_root = Path(out_root)
     app = FastAPI(title="videread", docs_url=None, redoc_url=None)
     # demo 页面禁缓存：开发迭代时浏览器必须每次拿到最新 HTML
@@ -232,9 +237,10 @@ def create_app(out_root: Path) -> FastAPI:
 
     @app.get("/api/runs/{run_id}/png")
     def run_png(run_id: str) -> Response:
-        """导出竖长 report.png（Edge / Chrome 无头截图，产物缓存于 run 目录）。
+        """导出竖长 PNG（Edge / Chrome 无头截图，产物缓存于 run 目录）。
 
-        两趟浏览器调用：先测内容高度再按高开窗截一整张。失败转 400。
+        配置了 self_base 时优先截编辑风阅读页（/read/{run_id}?png=1），
+        失败转 400，前端展示后端给出的具体原因。
         """
         run_dir = library.safe_run_dir(out_root, run_id)
         if run_dir is None:
@@ -246,7 +252,16 @@ def create_app(out_root: Path) -> FastAPI:
         detail = library.run_detail(out_root, run_id) or {}
         title = str(detail.get("title") or "").strip() or run_id
         try:
-            png_path = png_mod.export_png(html_path, run_dir / "report.png", get_settings())
+            if self_base:
+                # 编辑风长图：缓存判据仍是 report.html 的新旧
+                png_path = png_mod.export_reader_png(
+                    f"{self_base}/read/{quote(run_id)}?png=1",
+                    run_dir / "report.png",
+                    get_settings(),
+                    cache_key=html_path,
+                )
+            else:
+                png_path = png_mod.export_png(html_path, run_dir / "report.png", get_settings())
         except VidereadError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return Response(
