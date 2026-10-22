@@ -50,7 +50,14 @@ function closeDlg(v){
 }
 $("#dlg-cancel").addEventListener("click", () => closeDlg(false));
 $("#dlg-confirm").addEventListener("click", () => closeDlg(true));
-$("#veil").addEventListener("click", e => { if(e.target.id === "veil") closeDlg(false); });
+/* 仅当「按下」也发生在遮罩上才关闭：按住弹窗内文本拖到弹窗外松开时，
+   click 会被派发到按下/松开点的公共祖先（遮罩），不做此判断弹窗会被误关 */
+let veilPressed = false;
+$("#veil").addEventListener("mousedown", e => { veilPressed = (e.target === e.currentTarget); });
+$("#veil").addEventListener("click", e => {
+  if(e.target.id === "veil" && veilPressed) closeDlg(false);
+  veilPressed = false;
+});
 addEventListener("keydown", e => { if(e.key === "Escape") closeDlg(false); });
 
 async function jfetch(path, opts){
@@ -400,8 +407,10 @@ async function loadRuns(page, silent){
 }
 
 function rowOf(item, i){
+  /* 期号跨页连续：第 N 页从 (N-1)*10+1 续编，而不是每页都从 01 重来 */
+  const no = (state.page - 1) * 10 + i + 1;
   return '<li><a href="#" data-run="' + esc(item.run_id) + '">' +
-    '<span class="no">' + String(i + 1).padStart(2, "0") + '</span>' +
+    '<span class="no">' + String(no).padStart(2, "0") + '</span>' +
     '<span class="t">' + esc(item.title) + '<small>' + esc(item.uploader || "—") + ' · ' + esc(item.generated_at || "") + '</small></span>' +
     '<span class="dots"></span>' +
     '<span class="dur">' + esc(item.duration_text || "—") + '</span>' +
@@ -1109,7 +1118,13 @@ function setBaseVisible(show){
 }
 
 $("#nav-settings").addEventListener("click", e => { e.preventDefault(); openSettings(); });
-$("#settings-veil").addEventListener("click", e => { if(e.target.id === "settings-veil") closeSettings(); });
+/* 同 #veil：按下在弹窗内、拖出遮罩松开的 click 不应关闭（详见上方注释） */
+let stVeilPressed = false;
+$("#settings-veil").addEventListener("mousedown", e => { stVeilPressed = (e.target === e.currentTarget); });
+$("#settings-veil").addEventListener("click", e => {
+  if(e.target.id === "settings-veil" && stVeilPressed) closeSettings();
+  stVeilPressed = false;
+});
 addEventListener("keydown", e => { if(e.key === "Escape") closeSettings(); });
 
 $("#st-preset").addEventListener("change", e => {
