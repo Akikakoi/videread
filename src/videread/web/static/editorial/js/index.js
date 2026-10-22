@@ -524,7 +524,32 @@ function wirePPick(){
 document.addEventListener("click", e => {
   const pick = document.getElementById("page-pick");
   if(pick && pick.classList.contains("open") && !e.target.closest(".ppick-wrap")) pick.classList.remove("open");
+  const langPick = document.getElementById("lang-pick");
+  if(langPick && langPick.classList.contains("open") && !e.target.closest(".lang-wrap")){
+    langPick.classList.remove("open");
+    document.getElementById("lang-btn").setAttribute("aria-expanded", "false");
+  }
 });
+
+/* 语言自绘下拉：触发钮复用 .mode 胶囊（与模式按钮同一套样式），浮层同分P 选择器 */
+(function wireLangPick(){
+  const btn = document.getElementById("lang-btn");
+  const pick = document.getElementById("lang-pick");
+  if(!btn || !pick) return;
+  btn.addEventListener("click", e => {
+    e.stopPropagation();
+    const open = pick.classList.toggle("open");
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  pick.querySelectorAll(".lang-item").forEach(it => it.addEventListener("click", () => {
+    pick.querySelectorAll(".lang-item").forEach(x => x.classList.toggle("on", x === it));
+    btn.dataset.lang = it.dataset.lang;
+    btn.dataset.label = it.dataset.label;
+    btn.textContent = "语言 · " + it.dataset.label + " ▾";
+    pick.classList.remove("open");
+    btn.setAttribute("aria-expanded", "false");
+  }));
+})();
 
 /* 把所选分P 写进提交链接：P1 保持裸链接（与裸 BV 提交同目录），
    其他分P 追加 ?p=N；已有 p 参数则替换。裸 BV 号先补全成标准链接。 */
@@ -621,7 +646,7 @@ async function submitJob(){
   renderStepper(-1, doneSet);
   try{
     const frames = $("#frames-switch") && $("#frames-switch").checked ? true : null;
-    const lang = ($("#lang-select") || {}).value || null;
+    const lang = ($("#lang-btn") || {}).dataset ? ($("#lang-btn").dataset.lang || null) : null;
     /* 投印策略固定：忽略缓存强制重跑、不留音频文件、转写引擎按 .env 配置（不传即"自动"） */
     /* 多P 视频：仅当分P 列表仍对应当前输入时才改写链接，避免过期分P 误选 */
     const target = (probePages.length && pageSelKey === url) ? withPage(url, selectedPage()) : url;
