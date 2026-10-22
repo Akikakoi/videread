@@ -465,7 +465,8 @@ function bindToc(){
 let mode = "standard";
 let jobSource = null;
 
-document.querySelectorAll("#modes .mode").forEach(b => {
+document.querySelectorAll("#modes .mode[data-mode]").forEach(b => {
+  /* 只绑模式钮：语言下拉钮同为 .mode 但无 data-mode，误绑会覆盖提交模式 */
   b.addEventListener("click", () => {
     document.querySelectorAll("#modes .mode").forEach(x => x.classList.remove("on"));
     b.classList.add("on");
@@ -545,7 +546,7 @@ document.addEventListener("click", e => {
     pick.querySelectorAll(".lang-item").forEach(x => x.classList.toggle("on", x === it));
     btn.dataset.lang = it.dataset.lang;
     btn.dataset.label = it.dataset.label;
-    btn.textContent = "语言 · " + it.dataset.label + " ▾";
+    btn.textContent = "语言 · " + it.dataset.label;
     pick.classList.remove("open");
     btn.setAttribute("aria-expanded", "false");
   }));
@@ -880,6 +881,11 @@ document.querySelectorAll(".reveal").forEach(el => io.observe(el));
 function refreshAll(){
   loadHero(); loadRuns(1, true); loadStats();
   if(currentRunId) openFeature(currentRunId);
+  updateConfFootnote();
+}
+
+/* 页脚版权页的转写/执笔两行（模型设置保存后也要即时刷新） */
+function updateConfFootnote(){
   jfetch("/api/config").then(c => {
     const asr = $("#conf-asr");
     if(asr) asr.textContent = (c.asr_backend || "—") + (c.asr_model ? " · " + c.asr_model : "");
@@ -938,6 +944,131 @@ async function checkActiveJob(){
     if(String(err.message) === "404") localStorage.removeItem("videread.activeJob");
   }
 }
+
+/* ================= 模型设置（自定义 API Key / 模型） ================= */
+const LLM_PRESETS = {
+  deepseek:   {base_url: "https://api.deepseek.com/v1", plan: "deepseek-chat", write: "deepseek-chat"},
+  dashscope:  {base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1", plan: "qwen-plus", write: "qwen-max"},
+  moonshot:   {base_url: "https://api.moonshot.cn/v1", plan: "moonshot-v1-8k", write: "moonshot-v1-32k"},
+  openai:     {base_url: "https://api.openai.com/v1", plan: "gpt-4o-mini", write: "gpt-4o"},
+  openrouter: {base_url: "https://openrouter.ai/api/v1", plan: "openai/gpt-4o-mini", write: "openai/gpt-4o"},
+  ollama:     {base_url: "http://127.0.0.1:11434/v1", plan: "qwen2.5", write: "qwen2.5"}
+};
+
+function openSettings(){
+  if(OFFLINE){ toast("离线演示模式，暂不支持模型设置"); return; }
+  $("#settings-veil").classList.add("open");
+  $("#settings-veil").setAttribute("aria-hidden", "false");
+  setStNote("");
+  jfetch("/api/settings").then(s => {
+    $("#st-base-url").value = s.base_url || "";
+    $("#st-model-plan").value = s.model_plan || "";
+    $("#st-model-write").value = s.model_write || "";
+    const keyInput = $("#st-api-key");
+    keyInput.value = "";
+    keyInput.placeholder = s.has_key
+      ? (s.source === "custom" ? "已保存 " + s.api_key_masked + "（留空保持不变）" : ".env 中的 Key " + s.api_key_masked + "（留空保持不变）")
+      : "尚未设置，报告写作需要 Key";
+    /* 当前端点能对上预设就选中它（用户只见 Key 输入框）；
+       对不上说明是自定义网关，才露出 Base URL 一栏 */
+    const preset = detectPreset(s.base_url || "");
+    $("#st-preset").value = preset;
+    setBaseVisible(preset === "custom");
+  }).catch(e => { closeSettings(); toast("读取设置失败：" + e.message); });
+}
+function closeSettings(){
+  const veil = $("#settings-veil");
+  if(!veil.classList.contains("open")) return;
+  veil.classList.remove("open");
+  veil.setAttribute("aria-hidden", "true");
+}
+function setStNote(html, ok){
+  const note = $("#st-note");
+  note.innerHTML = html;
+  note.classList.toggle("ok", ok === true);
+  note.classList.toggle("bad", ok === false);
+}
+function settingsForm(){
+  return {
+    api_key: $("#st-api-key").value.trim(),
+    base_url: $("#st-base-url").value.trim(),
+    model_plan: $("#st-model-plan").value.trim(),
+    model_write: $("#st-model-write").value.trim()
+  };
+}
+
+function detectPreset(base){
+  /* 当前 Base URL 对上哪家预设就显示哪家；对不上 = 自定义网关 */
+  for(const [key, p] of Object.entries(LLM_PRESETS)){
+    if(p.base_url === base) return key;
+  }
+  return "custom";
+}
+function setBaseVisible(show){
+  $("#st-base-field").style.display = show ? "" : "none";
+}
+
+$("#nav-settings").addEventListener("click", e => { e.preventDefault(); openSettings(); });
+$("#settings-veil").addEventListener("click", e => { if(e.target.id === "settings-veil") closeSettings(); });
+addEventListener("keydown", e => { if(e.key === "Escape") closeSettings(); });
+
+$("#st-preset").addEventListener("change", e => {
+  const v = e.target.value;
+  const p = LLM_PRESETS[v];
+  if(p){
+    /* 选预设 = Base URL 与模型名自动带出，用户只填 Key */
+    $("#st-base-url").value = p.base_url;
+    $("#st-model-plan").value = p.plan;
+    $("#st-model-write").value = p.write;
+    setBaseVisible(false);
+  }else{
+    /* 自定义网关或未选：露出 Base URL 手动填 */
+    setBaseVisible(true);
+  }
+});
+
+$("#st-save").addEventListener("click", async () => {
+  const btn = $("#st-save");
+  const form = settingsForm();
+  if(!form.base_url){ setStNote("Base URL 不能为空", false); return; }
+  btn.disabled = true;
+  try{
+    await post("/api/settings", form);
+    setStNote("已保存，之后投印的报告都会用这套模型", true);
+    toast("模型设置已保存");
+    updateConfFootnote();
+    setTimeout(closeSettings, 700);
+  }catch(e){
+    setStNote("保存失败：" + esc(e.message), false);
+  }finally{
+    btn.disabled = false;
+  }
+});
+
+$("#st-test").addEventListener("click", async () => {
+  const btn = $("#st-test");
+  btn.disabled = true; btn.textContent = "测试中…";
+  setStNote("正在向 " + esc($("#st-base-url").value.trim() || "当前网关") + " 发送测试请求…");
+  try{
+    const r = await post("/api/settings/test", settingsForm());
+    setStNote("连接成功 · " + esc(r.model) + " 回复：" + esc(r.reply || "（空）"), true);
+  }catch(e){
+    setStNote("连接失败：" + esc(e.message), false);
+  }finally{
+    btn.disabled = false; btn.textContent = "测试连接";
+  }
+});
+
+$("#st-reset").addEventListener("click", async () => {
+  try{
+    await del("/api/settings");
+    toast("已恢复默认（.env / 内置配置）");
+    updateConfFootnote();
+    openSettings(); /* 重新拉取回填 */
+  }catch(e){
+    setStNote("恢复失败：" + esc(e.message), false);
+  }
+});
 
 refreshAll();
 checkActiveJob();

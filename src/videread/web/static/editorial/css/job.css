@@ -33,8 +33,13 @@ header{padding:34px 0 22px;border-bottom:3px double var(--ink);}
 .wordmark em{font-style:italic;color:var(--accent);font-weight:500;}
 .masthead nav a{font-size:13px;color:var(--muted);text-decoration:none;letter-spacing:1px;transition:color var(--t);}
 .masthead nav a:hover{color:var(--accent);}
-.theme-btn{border:1px solid var(--hairline);background:transparent;cursor:pointer;font-family:var(--mono);font-size:11.5px;letter-spacing:1px;color:var(--muted);padding:5px 12px;border-radius:99px;transition:color var(--t),border-color var(--t);}
-.theme-btn:hover{color:var(--accent);border-color:var(--accent);}
+/* 主题开关：滑块跟随实际外观（浅左深右），右侧文字显示三档状态名；点击仍按 浅→深→自动 循环 */
+.theme-switch{display:inline-flex;align-items:center;gap:8px;border:0;background:none;cursor:pointer;font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--ink);padding:0;}
+.theme-switch .track{flex:none;width:34px;height:18px;border:1px solid var(--muted);border-radius:99px;position:relative;transition:background var(--t),border-color var(--t);}
+.theme-switch .knob{position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--muted);transition:transform var(--t),background var(--t);}
+.theme-switch[data-appearance="dark"] .track{background:var(--ink);border-color:var(--ink);}
+.theme-switch[data-appearance="dark"] .knob{transform:translateX(16px);background:var(--paper);}
+.theme-switch:hover .theme-label{color:var(--accent);}
 
 /* ---------- 工单主体 ---------- */
 .rubric{font-family:var(--mono);font-size:11px;letter-spacing:3px;color:var(--faint);text-transform:uppercase;}
@@ -110,6 +115,7 @@ h1{
   .act:hover{transform:none;}
   .stepper li.pop .mark{animation:none;}
   #toast,#toast.out{animation:none;}
+  .theme-switch .knob,.theme-switch .track{transition:none;}
 }
 
 /* ---------- 细滚条（编辑风） ---------- */

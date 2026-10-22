@@ -32,8 +32,13 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 }
 .bar .back{border:0;background:none;cursor:pointer;font-family:var(--mono);font-size:13px;letter-spacing:2px;color:var(--ink);padding:0;text-decoration:none;transition:color var(--t) var(--ease);}
 .bar .back:hover{color:var(--accent);}
-.theme-btn{border:1px solid var(--hairline);background:transparent;cursor:pointer;font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--muted);padding:3px 12px;border-radius:99px;transition:color var(--t) var(--ease),border-color var(--t) var(--ease);}
-.theme-btn:hover{color:var(--accent);border-color:var(--accent);}
+/* 主题开关：滑块跟随实际外观（浅左深右），右侧文字显示三档状态名；点击仍按 浅→深→自动 循环 */
+.theme-switch{display:inline-flex;align-items:center;gap:8px;border:0;background:none;cursor:pointer;font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--ink);padding:0;}
+.theme-switch .track{flex:none;width:34px;height:18px;border:1px solid var(--muted);border-radius:99px;position:relative;transition:background var(--t),border-color var(--t);}
+.theme-switch .knob{position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--muted);transition:transform var(--t),background var(--t);}
+.theme-switch[data-appearance="dark"] .track{background:var(--ink);border-color:var(--ink);}
+.theme-switch[data-appearance="dark"] .knob{transform:translateX(16px);background:var(--paper);}
+.theme-switch:hover .theme-label{color:var(--accent);}
 .bar .rp{flex:1;font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
 .page{max-width:760px;margin:0 auto;padding:56px 32px 120px;}
@@ -103,7 +108,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .report-nav-link.is-active{color:var(--accent);font-weight:500;border-left-color:var(--accent);}
 @media (max-width:1180px){ .report-nav{display:none;} }
 
-@media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto;} }
+@media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto;} .theme-switch .knob,.theme-switch .track{transition:none;} }
 /* ---------- B3 跨列规则的窄屏分档：列数变化时同步换算 ----------
    ≤700px 两列：先重置 3 列档的跨列，再按余 1（2n+1）跨满；
    ≤520px 单列：全部重置，单列下无需跨列。 */

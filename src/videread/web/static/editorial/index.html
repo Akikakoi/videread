@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<script>(function(){var t;try{t=localStorage.getItem("videread.theme")}catch(e){}if(!t)t="system";var d=t==="dark"||(t==="system"&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.dataset.theme=d?"dark":"light";})();</script>
+<script>(function(){var t;try{t=localStorage.getItem("videread.theme")}catch(e){}if(t!=="light"&&t!=="dark"){t=window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";try{localStorage.setItem("videread.theme",t)}catch(e){}}document.documentElement.dataset.theme=t==="dark"?"dark":"light";})();</script>
 <script>document.documentElement.classList.add("js");</script>
 <title>VIDEREAD · 视读 — 编辑部</title>
 <link rel="preconnect" href="https://cdn.jsdelivr.net">
@@ -35,12 +35,60 @@
   </div>
 </div>
 
+<div class="veil" id="settings-veil" aria-hidden="true">
+  <div class="dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="st-title">
+    <div class="dlg-kicker">PRESSROOM · 模型设置</div>
+    <h3 class="dlg-title" id="st-title">换成你自己的模型</h3>
+    <p class="dlg-body">填写任意 OpenAI 兼容服务的 API Key，报告规划、逐节写作与问答都会改用它。配置保存在本机 <code>.llm-settings.json</code>，完整 Key 不会回传到页面。</p>
+    <div class="st-form">
+      <label class="st-field">
+        <span>服务商预设</span>
+        <select id="st-preset">
+          <option value="">— 选择服务商 —</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="dashscope">通义千问（DashScope）</option>
+          <option value="moonshot">Moonshot Kimi</option>
+          <option value="openai">OpenAI</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="ollama">Ollama（本机）</option>
+          <option value="custom">自定义网关（填 Base URL）</option>
+        </select>
+      </label>
+      <label class="st-field" id="st-base-field">
+        <span>Base URL</span>
+        <input type="text" id="st-base-url" autocomplete="off" placeholder="https://api.deepseek.com/v1">
+      </label>
+      <label class="st-field">
+        <span>API Key</span>
+        <input type="password" id="st-api-key" autocomplete="new-password" placeholder="">
+      </label>
+      <div class="st-row">
+        <label class="st-field">
+          <span>规划模型（结构规划）</span>
+          <input type="text" id="st-model-plan" autocomplete="off" placeholder="deepseek-chat">
+        </label>
+        <label class="st-field">
+          <span>写作模型（逐节写作）</span>
+          <input type="text" id="st-model-write" autocomplete="off" placeholder="deepseek-chat">
+        </label>
+      </div>
+    </div>
+    <p class="st-note" id="st-note"></p>
+    <div class="dlg-actions st-actions">
+      <button class="dlg-btn ghost" id="st-reset">恢复默认</button>
+      <button class="dlg-btn ghost" id="st-test">测试连接</button>
+      <button class="dlg-btn solid" id="st-save">保存</button>
+    </div>
+  </div>
+</div>
+
 <header class="wrap" id="top">
   <div class="masthead">
     <div class="wordmark">VIDEREAD <em>视读</em></div>
     <div class="vol" id="vol">LIVE — 编辑部</div>
     <nav>
-      <button class="theme-btn" id="theme-toggle" type="button" aria-label="切换主题"></button>
+      <button class="theme-switch" id="theme-toggle" type="button" aria-label="主题：浅色" data-appearance="light"><span class="track"><span class="knob"></span></span><span class="theme-label">浅色</span></button>
+      <a href="#" id="nav-settings">模型设置</a>
       <a href="#submit">投印新篇</a>
       <a href="#feature">本期特稿</a>
       <a href="#toc">往期目录</a>
@@ -82,7 +130,7 @@
           <button class="mode" data-mode="brief">快速概览</button>
           <button class="mode" data-mode="outline">极简大纲</button>
           <span class="lang-wrap">
-            <button type="button" id="lang-btn" class="mode" aria-haspopup="listbox" aria-expanded="false" data-lang="" data-label="跟随配置">语言 · 跟随配置 ▾</button>
+            <button type="button" id="lang-btn" class="mode" aria-haspopup="listbox" aria-expanded="false" data-lang="" data-label="跟随配置">语言 · 跟随配置</button>
             <span class="lang-pick" id="lang-pick" role="listbox">
               <button type="button" class="lang-item on" data-lang="" data-label="跟随配置">跟随配置</button>
               <button type="button" class="lang-item" data-lang="zh" data-label="中文">中文</button>
