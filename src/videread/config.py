@@ -245,8 +245,17 @@ def get_settings(**overrides: object) -> Settings:
         pdf_browser=(os.environ.get("PDF_BROWSER_BIN", "").strip() or None),
         report_lang=(os.environ.get("REPORT_LANG", "").strip().lower() or REPORT_LANG),
     )
+    # Web 设置页保存的用户配置覆盖 .env 默认；CLI overrides 最后应用，优先级最高
+    from .usersettings import load_user_llm_settings
+
+    user = load_user_llm_settings()
+    user_fields = {k: user[k] for k in user if hasattr(settings, k)}
+    if user_fields:
+        settings = replace(settings, **user_fields)
     applied = {k: v for k, v in overrides.items() if v is not None}
-    return replace(settings, **applied) if applied else settings
+    if applied:
+        settings = replace(settings, **applied)
+    return settings
 
 
 def configure_console() -> None:

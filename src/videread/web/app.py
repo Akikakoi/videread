@@ -23,8 +23,9 @@ from .. import pdf as pdf_mod
 from .. import png as png_mod
 from .. import frames as frames_mod
 from ..config import get_settings
-from ..errors import VidereadError
+from ..errors import UsageError, VidereadError
 from ..report import qa
+from .. import usersettings
 from . import library, probe
 from .jobs import Job, JobBusy, JobManager
 
@@ -64,6 +65,22 @@ class QaRequest(BaseModel):
 
 class TitleRequest(BaseModel):
     title: str = ""
+
+
+class LlmSettingsRequest(BaseModel):
+    """模型设置表单：api_key 留空 = 沿用已保存的 key（前端语义）。"""
+
+    api_key: str = ""
+    base_url: str = ""
+    model_plan: str = ""
+    model_write: str = ""
+
+
+class ModelListRequest(BaseModel):
+    """拉取可用模型列表：key / 网关留空则回退当前生效配置。"""
+
+    api_key: str = ""
+    base_url: str = ""
 
 
 def _frame(item: dict) -> str:
@@ -414,6 +431,118 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
         if run_dir is None:
             raise HTTPException(status_code=404, detail="未找到该 run")
         return {"run_id": run_id, "history": qa.load_history(run_dir)}
+
+    # --------------------------------------------------------- 模型设置
+
+    def _settings_payload() -> dict:
+        """设置弹窗数据：生效配置 + 脱敏 key；完整 key 永不出后端。"""
+        s = get_settings()
+        user = usersettings.load_user_llm_settings()
+        return {
+            "base_url": s.llm_base_url,
+            "model_plan": s.llm_model_plan,
+            "model_write": s.llm_model_write,
+            "api_key_masked": usersettings.mask_key(s.llm_api_key),
+            "has_key": bool(s.llm_api_key),
+            "source": "custom" if user.get("llm_api_key") else "env",
+        }
+
+    @app.get("/api/settings")
+    def api_get_settings() -> dict:
+        return _settings_payload()
+
+    @app.post("/api/settings")
+    def api_save_settings(payload: LlmSettingsRequest) -> dict:
+        """保存模型设置；空 base_url / 模型名不覆盖已有值。"""
+        try:
+            usersettings.save_user_llm_settings(
+                llm_api_key=(payload.api_key or "").strip() or "keep",
+                llm_base_url=payload.base_url,
+                llm_model_plan=payload.model_plan,
+                llm_model_write=payload.model_write,
+            )
+        except UsageError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _settings_payload()
+
+    @app.delete("/api/settings")
+    def api_clear_settings() -> dict:
+        """删除用户配置，回退 .env / 内置默认。"""
+        usersettings.clear_user_llm_settings()
+        return _settings_payload()
+
+    @app.post("/api/settings/test")
+    def api_test_settings(payload: LlmSettingsRequest) -> dict:
+        """用表单配置（缺省回退生效配置）发一次极小补全，验证连通性。
+
+        表单里没填 key 时沿用已保存/环境里的 key；都没有则用占位串，
+        让 Ollama 这类不需要 key 的本地网关也能测。
+        """
+        s = get_settings()
+        base_url = (payload.base_url or "").strip() or s.llm_base_url
+        model = (payload.model_plan or "").strip() or s.llm_model_plan
+        api_key = _resolve_llm_key(payload.api_key)
+        if not base_url.startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="Base URL 必须以 http(s):// 开头")
+        if not model:
+            raise HTTPException(status_code=400, detail="请先填写规划模型名")
+
+        from openai import OpenAI
+
+        try:
+            client = OpenAI(api_key=api_key, base_url=base_url, timeout=20.0)
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "请只回复两个字：连通"}],
+                max_tokens=64,
+            )
+            choices = getattr(response, "choices", None) or []
+            message = getattr(choices[0], "message", None) if choices else None
+            content = (getattr(message, "content", None) or "").strip()
+            reasoning = (getattr(message, "reasoning_content", None) or "").strip()
+        except Exception as exc:  # 连网失败是预期路径，统一转成可读文案
+            detail = str(exc)
+            raise HTTPException(
+                status_code=400, detail=f"连接失败：{detail[:300]}"
+            ) from exc
+        reply = content or reasoning
+        note = ""
+        if not content and reasoning:
+            note = "连接正常；该模型是推理型（先思维链后正文），测试上限内只产出了思维链"
+        elif not reply:
+            note = "连接正常（Key 与模型名均有效）；该模型在测试上限内没产出文本，正式写作无此限制"
+        return {"ok": True, "model": model, "reply": reply[:50], "note": note}
+
+    def _resolve_llm_key(form_key: str) -> str:
+        """表单 key → 已保存/环境 key → 占位串（Ollama 等免 key 网关可用）。"""
+        s = get_settings()
+        key = (form_key or "").strip() or s.llm_api_key
+        return key or "sk-placeholder"
+
+    @app.post("/api/settings/models")
+    def api_list_models(payload: ModelListRequest) -> dict:
+        """按表单配置调 GET /models，返回该 key 可用的模型 id 列表。
+
+        供前端把「规划/写作模型」变成可下拉选择；拉取失败转 400，
+        前端降级为手动输入。列表去重排序后截断到 500 条兜底。
+        """
+        s = get_settings()
+        base_url = (payload.base_url or "").strip() or s.llm_base_url
+        api_key = _resolve_llm_key(payload.api_key)
+        if not base_url.startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="Base URL 必须以 http(s):// 开头")
+
+        from openai import OpenAI
+
+        try:
+            client = OpenAI(api_key=api_key, base_url=base_url, timeout=15.0)
+            ids = [str(m.id) for m in client.models.list()]
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400, detail=f"拉取模型列表失败：{str(exc)[:300]}"
+            ) from exc
+        models = sorted({i for i in ids if i})[:500]
+        return {"models": models, "count": len(models)}
 
     # ------------------------------------------------------------------ 预检
 

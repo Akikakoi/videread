@@ -1,5 +1,6 @@
 # --- 密钥与本地配置 ---
 .env
+.llm-settings.json
 
 # --- 运行产物（缓存/音频/报告）---
 runs/
@@ -33,3 +34,7 @@ bilibili_cookies.txt
 
 # --- 浏览器自动化工具缓存 ---
 .playwright-cli/
+# --- AI 会话本地工作区 ---
+.workbuddy-ai/
+# --- 平台 cookies（含凭据，禁止入库） ---
+www.bilibili.com_cookies.txt
