@@ -47,9 +47,10 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .page .lead{font-size:16.5px;line-height:1.95;color:var(--lead);}
 .page .attribution{font-family:var(--mono);font-size:11.5px;color:var(--faint);letter-spacing:1px;margin:18px 0 0;padding-bottom:20px;border-bottom:1px solid var(--hairline);line-height:1.9;}
 .page .attribution a{color:var(--accent);text-decoration:none;}
-.page h2{font-family:var(--serif);font-weight:500;font-size:24px;line-height:1.45;border-top:2px solid var(--ink);margin:52px 0 18px;padding-top:22px;scroll-margin-top:84px;}
-.page h2 .num{font-family:var(--mono);font-size:13px;color:var(--accent);margin-right:12px;letter-spacing:1px;}
-.page h2 .section-time{float:right;font-family:var(--mono);font-size:11px;color:var(--faint);font-weight:400;letter-spacing:1px;padding-top:9px;}
+/* 节标题：flex + 基线对齐（与原版模板同款），编号/时间戳与标题同行稳定对齐 */
+.page h2{display:flex;align-items:baseline;font-family:var(--serif);font-weight:500;font-size:24px;line-height:1.45;border-top:2px solid var(--ink);margin:52px 0 18px;padding-top:22px;scroll-margin-top:84px;}
+.page h2 .num{flex:0 0 auto;font-family:var(--mono);font-size:24px;font-weight:500;color:var(--accent);margin-right:14px;letter-spacing:1px;}
+.page h2 .section-time{flex:0 0 auto;margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--faint);font-weight:400;letter-spacing:1px;}
 .page h3{font-family:var(--serif);font-weight:500;font-size:18px;margin:30px 0 10px;}
 .page p{font-size:16px;line-height:1.95;margin:0 0 1.35em;color:var(--body);text-align:justify;}
 .page ul,.page ol{margin:0 0 1.4em 1.5em;}
@@ -80,18 +81,25 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .page .report-foot p{font-size:13.5px;color:var(--muted);}
 .page .meta-fold summary,.page .sources summary{cursor:pointer;font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--muted);}
 .page a{color:var(--accent);}
+/* 时间戳跳转：编辑部样式的「页码签」——直角、细线框、等宽字 + 字距，
+   与 callout / meta-fold / 章节导航同一语言；hover 才点亮 accent。
+   旧的圆角胶囊是从控制台样式带过来的，全文唯一的圆角元素，已弃。 */
 .page .ts-jump{
-  display:inline-block;margin-left:8px;padding:1px 9px;
-  font-family:var(--mono);font-size:11px;line-height:1.7;
-  color:var(--accent);background:var(--paper-deep);
-  border:1px solid var(--hairline);border-radius:999px;
+  /* inline-flex + line-height:1 + 对称 padding：文字在签内严格垂直居中，
+     不受 ▷ 符号回退字体基线偏移影响（此前 line-height:1.9 会显得上紧下松） */
+  display:inline-flex;align-items:center;justify-content:center;
+  margin-left:10px;padding:3px 8px;
+  font-family:var(--mono);font-size:11px;line-height:1;
+  color:var(--muted);background:transparent;
+  border:1px solid var(--hairline);
   text-decoration:none;vertical-align:middle;white-space:nowrap;
-  font-variant-numeric:tabular-nums;letter-spacing:.5px;
-  /* 胶囊可能被注入成 flex/grid 子项（如卡片容器自身带 data-source-units），
-     显式禁止两个方向被拉伸，否则 border-radius:999px 会放大成椭圆 */
+  font-variant-numeric:tabular-nums;letter-spacing:1px;
+  /* 可能被注入成 flex/grid 子项（如卡片容器自身带 data-source-units），
+     显式禁止两个方向被拉伸，避免高度随容器变化 */
   justify-self:start;align-self:start;flex:0 0 auto;width:auto;height:auto;
+  transition:color var(--t) var(--ease),border-color var(--t) var(--ease);
 }
-.page .ts-jump:hover{border-color:var(--accent);}
+.page .ts-jump:hover{color:var(--accent);border-color:var(--accent);}
 /* 卡片/对比容器自身带 data-source-units 时，胶囊独占一行排在卡片之后 */
 .page .cards > .ts-jump,.page .comparison > .ts-jump,.page .stats > .ts-jump{grid-column:1/-1;margin-top:2px;}
 .skeleton{color:var(--faint);font-family:var(--mono);font-size:12px;letter-spacing:2px;padding:48px 0;}

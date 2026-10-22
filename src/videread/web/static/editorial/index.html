@@ -60,17 +60,26 @@
       </label>
       <label class="st-field">
         <span>API Key</span>
-        <input type="password" id="st-api-key" autocomplete="new-password" placeholder="">
+        <span class="st-key-wrap">
+          <input type="text" id="st-api-key" class="st-key st-key-masked" autocomplete="off" spellcheck="false" placeholder="">
+          <button type="button" id="st-key-toggle" class="st-key-eye">显示</button>
+        </span>
       </label>
       <div class="st-row">
-        <label class="st-field">
-          <span>规划模型（结构规划）</span>
-          <input type="text" id="st-model-plan" autocomplete="off" placeholder="deepseek-chat">
-        </label>
-        <label class="st-field">
-          <span>写作模型（逐节写作）</span>
-          <input type="text" id="st-model-write" autocomplete="off" placeholder="deepseek-chat">
-        </label>
+        <div class="st-cell">
+          <label class="st-field">
+            <span>规划模型（结构规划）</span>
+            <input type="text" id="st-model-plan" autocomplete="off" placeholder="点开选择，或手动输入">
+          </label>
+          <div class="st-suggest" data-target="st-model-plan" style="display:none"></div>
+        </div>
+        <div class="st-cell">
+          <label class="st-field">
+            <span>写作模型（逐节写作）</span>
+            <input type="text" id="st-model-write" autocomplete="off" placeholder="点开选择，或手动输入">
+          </label>
+          <div class="st-suggest" data-target="st-model-write" style="display:none"></div>
+        </div>
       </div>
     </div>
     <p class="st-note" id="st-note"></p>

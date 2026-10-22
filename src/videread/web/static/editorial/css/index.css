@@ -79,7 +79,7 @@ a{color:inherit;}
 .wordmark{font-family:var(--serif);font-weight:600;font-size:22px;letter-spacing:.5px;}
 .wordmark em{font-style:italic;color:var(--accent);}
 .masthead .vol{font-family:var(--mono);font-size:12px;letter-spacing:3px;color:var(--muted);}
-.masthead nav{display:flex;gap:24px;flex-wrap:wrap;}
+.masthead nav{display:flex;align-items:center;gap:24px;flex-wrap:wrap;}
 .masthead nav a{font-size:13px;color:var(--ink);text-decoration:none;letter-spacing:1px;background-image:linear-gradient(var(--accent),var(--accent));background-repeat:no-repeat;background-size:0 1.5px;background-position:0 100%;padding-bottom:2px;transition:background-size var(--t) var(--ease);}
 .masthead nav a:hover{background-size:100% 1.5px;}
 /* 主题开关：滑块跟随实际外观（浅左深右），右侧文字显示三档状态名；点击仍按 浅→深→自动 循环 */
@@ -487,6 +487,16 @@ html{scrollbar-width:thin;scrollbar-color:var(--accent) transparent;}
 }
 .st-field input:focus,.st-field select:focus{border-color:var(--accent);}
 .st-field input::placeholder{color:var(--faint);}
+/* API Key：text + CSS 圆点遮罩，避免浏览器当成登录表单弹「记住密码」 */
+.st-key-wrap{display:flex;gap:6px;}
+.st-key-wrap input{flex:1;min-width:0;}
+.st-key-masked{-webkit-text-security:disc;}
+.st-key-eye{
+  flex:none;cursor:pointer;font-family:var(--mono);font-size:11px;letter-spacing:1px;
+  color:var(--muted);background:none;border:1px solid var(--hairline);
+  padding:0 10px;transition:color var(--t),border-color var(--t);
+}
+.st-key-eye:hover{color:var(--accent);border-color:var(--accent);}
 .st-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 .st-note{
   margin:14px 0 0;font-size:13px;line-height:1.7;color:var(--muted);min-height:1em;
@@ -499,3 +509,19 @@ html{scrollbar-width:thin;scrollbar-color:var(--accent) transparent;}
   .st-row{grid-template-columns:1fr;}
   .st-actions{flex-wrap:wrap;justify-content:flex-start;}
 }
+
+/* ---------- 模型下拉建议面板 ---------- */
+.st-cell{position:relative;min-width:0;}
+.st-suggest{
+  position:absolute;top:100%;left:0;right:0;z-index:20;
+  background:var(--paper);border:1px solid var(--hairline);border-top:0;
+  max-height:220px;overflow-y:auto;
+  box-shadow:0 12px 28px rgba(23,20,14,.14);
+}
+.st-opt{
+  display:block;width:100%;text-align:left;border:0;background:none;cursor:pointer;
+  font-family:var(--mono);font-size:12.5px;color:var(--ink);
+  padding:7px 12px;transition:background var(--t),color var(--t);
+}
+.st-opt:hover{background:var(--paper-deep);color:var(--accent);}
+.st-empty{font-family:var(--mono);font-size:11.5px;color:var(--faint);padding:8px 12px;letter-spacing:1px;}

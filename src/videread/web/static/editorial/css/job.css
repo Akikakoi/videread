@@ -26,11 +26,14 @@ body{
 }
 .wrap{max-width:1016px;margin:0 auto;padding:0 32px;}
 
-/* ---------- 报头（工单页精简版） ---------- */
-header{padding:34px 0 22px;border-bottom:3px double var(--ink);}
-.masthead{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:12px;}
+/* ---------- 报头（工单页精简版） ----------
+   双线画在 .masthead（内容区宽 952px）而非 header.wrap（1016px 全宽含内边距），
+   否则顶部的两条横线会比下方步进器等线条每边长出 32px，长度不一致 */
+header{padding:34px 0 0;}
+.masthead{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:12px;padding-bottom:22px;border-bottom:3px double var(--ink);}
 .wordmark{font-family:var(--serif);font-weight:600;font-size:26px;letter-spacing:.5px;}
 .wordmark em{font-style:italic;color:var(--accent);font-weight:500;}
+.masthead nav{display:flex;align-items:center;gap:20px;}
 .masthead nav a{font-size:13px;color:var(--muted);text-decoration:none;letter-spacing:1px;transition:color var(--t);}
 .masthead nav a:hover{color:var(--accent);}
 /* 主题开关：滑块跟随实际外观（浅左深右），右侧文字显示三档状态名；点击仍按 浅→深→自动 循环 */

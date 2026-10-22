@@ -904,7 +904,7 @@ function updateConfFootnote(){
 /* 有进行中的工单时，在投印区给一个进入工单页的入口（终态/不存在则清标记） */
 const JOB_TERMINAL = new Set(["done", "cancelled", "failed", "error"]);
 function showJobline(id){
-  $("#jobline").innerHTML = '投印中 · 工单 <b>' + esc(id) + '</b> · <a href="/editorial/job/' + encodeURIComponent(id) + '">进入工单页盯进度 →</a>';
+  $("#jobline").innerHTML = '投印中 · 工单 <b>' + esc(id) + '</b> · <a href="/editorial/job/' + encodeURIComponent(id) + '" target="_blank" rel="noopener">进入工单页盯进度 →</a>';
 }
 function clearJobline(){
   localStorage.removeItem("videread.activeJob");
@@ -961,6 +961,7 @@ function openSettings(){
   $("#settings-veil").setAttribute("aria-hidden", "false");
   setStNote("");
   jfetch("/api/settings").then(s => {
+    stEffectiveBaseUrl = s.base_url || "";
     $("#st-base-url").value = s.base_url || "";
     $("#st-model-plan").value = s.model_plan || "";
     $("#st-model-write").value = s.model_write || "";
@@ -974,6 +975,7 @@ function openSettings(){
     const preset = detectPreset(s.base_url || "");
     $("#st-preset").value = preset;
     setBaseVisible(preset === "custom");
+    fetchModels(); /* 已保存过 Key 时，打开即带出可选模型 */
   }).catch(e => { closeSettings(); toast("读取设置失败：" + e.message); });
 }
 function closeSettings(){
@@ -996,6 +998,104 @@ function settingsForm(){
     model_write: $("#st-model-write").value.trim()
   };
 }
+
+/* 按当前 Key / 网关拉取可用模型列表；模型输入框点开即出下拉面板 */
+let stModelCache = [];      /* 最近一次拉到的模型 id */
+let stModelsSeq = 0;        /* 请求序号：快速切换厂商时丢弃过期响应 */
+let stSuggestFor = null;    /* 当前展开建议面板的输入框 id */
+let stEffectiveBaseUrl = "";/* 打开弹窗时的生效端点（判断回退 Key 是否匹配） */
+let stTypedQuery = false;   /* 本次聚焦后用户是否输入过；没输入过则展开全部、不过滤 */
+
+function fetchModels(){
+  const form = settingsForm();
+  if(!form.base_url) return;
+  /* 没填 Key 且端点已换：回退的旧 Key 对新厂商必然失败，别浪费这次请求 */
+  if(!form.api_key && form.base_url !== stEffectiveBaseUrl){
+    setStNote("填好 API Key 后会自动拉取该服务的模型列表");
+    return;
+  }
+  const seq = ++stModelsSeq;
+  setStNote("正在拉取可用模型列表…");
+  post("/api/settings/models", {api_key: form.api_key, base_url: form.base_url}).then(r => {
+    if(seq !== stModelsSeq) return;
+    stModelCache = r.models || [];
+    setStNote("拉到 " + stModelCache.length + " 个可用模型：点模型栏直接选择，也可手动输入", true);
+    applySuggest();
+  }).catch(e => {
+    if(seq !== stModelsSeq) return;
+    stModelCache = [];
+    applySuggest();
+    setStNote("模型列表拉取失败（不影响保存，可手动填模型名）：" + esc(e.message), false);
+  });
+}
+$("#st-api-key").addEventListener("blur", fetchModels);
+$("#st-base-url").addEventListener("change", fetchModels);
+
+/* Key 输入框显示/隐藏；不支持 CSS 遮罩的浏览器（Firefox）退回 type=password */
+if(!CSS.supports("-webkit-text-security", "disc")){
+  $("#st-api-key").type = "password";
+}
+$("#st-key-toggle").addEventListener("click", () => {
+  const input = $("#st-api-key");
+  const masked = input.classList.toggle("st-key-masked");
+  $("#st-key-toggle").textContent = masked ? "显示" : "隐藏";
+});
+
+function applySuggest(){
+  /* 渲染建议面板。过滤只对「用户本次聚焦后输入的内容」生效：
+     打开面板时输入框里的值多半是预设/已保存的模型名，拿它过滤会把
+     刚拉到的列表滤成空（面板看起来「什么都没有」）——所以未输入前
+     一律展开全部，输入后才按内容过滤 */
+  document.querySelectorAll(".st-suggest").forEach(panel => {
+    const input = $("#" + panel.dataset.target);
+    if(!input) return;
+    const q = stTypedQuery ? input.value.trim().toLowerCase() : "";
+    const hits = stModelCache.filter(m => !q || m.toLowerCase().includes(q)).slice(0, 200);
+    panel.innerHTML = hits.length
+      ? hits.map(m => '<button type="button" class="st-opt" data-v="' + esc(m) + '">' + esc(m) + '</button>').join("")
+      : '<div class="st-empty">' + (stModelCache.length ? "无匹配项" : "（未拉到模型列表，手动输入即可）") + '</div>';
+    panel.style.display = (stSuggestFor === input.id) ? "block" : "none";
+  });
+}
+function openSuggest(input){
+  stSuggestFor = input.id;
+  stTypedQuery = false; /* 重新展开 = 回到「显示全部」状态 */
+  if(!stModelCache.length) fetchModels(); /* 缓存为空则现场拉取 */
+  applySuggest();
+}
+function closeSuggest(){
+  stSuggestFor = null;
+  applySuggest();
+}
+
+["st-model-plan", "st-model-write"].forEach(id => {
+  const input = document.getElementById(id);
+  /* mousedown 先于 focus：已聚焦时再点击也能重新展开面板 */
+  input.addEventListener("mousedown", () => {
+    if(stSuggestFor !== input.id) openSuggest(input);
+  });
+  input.addEventListener("focus", () => { input.select(); openSuggest(input); });
+  input.addEventListener("input", () => { stTypedQuery = true; applySuggest(); });
+  /* blur 先于选项 click 触发，延迟收起让点击能落上；
+     收起前确认面板没有被另一个输入框重新打开（切栏时旧定时器会迟到） */
+  input.addEventListener("blur", () => {
+    const from = id;
+    setTimeout(() => { if(stSuggestFor === from) closeSuggest(); }, 150);
+  });
+});
+/* mousedown 抢在 blur 之前完成选中；preventDefault 避免焦点闪烁 */
+document.addEventListener("mousedown", e => {
+  const opt = e.target.closest(".st-opt");
+  if(!opt) return;
+  e.preventDefault();
+  const panel = opt.closest(".st-suggest");
+  const input = $("#" + panel.dataset.target);
+  if(input){
+    input.value = opt.dataset.v;
+    input.dispatchEvent(new Event("input"));
+  }
+  closeSuggest();
+});
 
 function detectPreset(base){
   /* 当前 Base URL 对上哪家预设就显示哪家；对不上 = 自定义网关 */
@@ -1021,6 +1121,7 @@ $("#st-preset").addEventListener("change", e => {
     $("#st-model-plan").value = p.plan;
     $("#st-model-write").value = p.write;
     setBaseVisible(false);
+    fetchModels(); /* 换厂商后按新端点刷新模型列表 */
   }else{
     /* 自定义网关或未选：露出 Base URL 手动填 */
     setBaseVisible(true);
@@ -1051,7 +1152,9 @@ $("#st-test").addEventListener("click", async () => {
   setStNote("正在向 " + esc($("#st-base-url").value.trim() || "当前网关") + " 发送测试请求…");
   try{
     const r = await post("/api/settings/test", settingsForm());
-    setStNote("连接成功 · " + esc(r.model) + " 回复：" + esc(r.reply || "（空）"), true);
+    setStNote(r.note
+      ? "连接成功 · " + esc(r.model) + "：" + esc(r.note)
+      : "连接成功 · " + esc(r.model) + " 回复：" + esc(r.reply || "（空）"), true);
   }catch(e){
     setStNote("连接失败：" + esc(e.message), false);
   }finally{
