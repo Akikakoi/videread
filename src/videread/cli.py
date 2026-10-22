@@ -59,8 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
         dest="lang",
         default=None,
         metavar="LANG",
-        help="报告输出语言（zh / en / ja / ko / fr / de / es / pt / ru / it，"
-        "默认取 .env 的 REPORT_LANG，再默认 zh）；转写稿保持源语言",
+        help="报告输出语言（zh / en / ja，默认取 .env 的 REPORT_LANG，再默认 zh；"
+        "未收录的代码会原样透传给模型）；转写稿保持源语言",
     )
     parser.add_argument(
         "--page",

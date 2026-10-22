@@ -217,24 +217,6 @@ _CHROME = {
         "subtitle_first": "プラットフォーム字幕（字幕優先、ASR 未使用）",
         "no_units": "なし",
     },
-    "ko": {
-        "doc_title": "영상 리딩 리포트",
-        "description_title": "영상 소개",
-        "sources_title": "출처 및 처리 노트",
-        "source_video": "원본 영상",
-        "mode": "읽기 모드",
-        "structure": "정보 구조",
-        "transcript": "전사",
-        "units": "전사 유닛",
-        "llm": "LLM",
-        "generated_at": "생성 시각",
-        "note_1": "본문의 data-source-units 속성은 transcript.jsonl의 전사 유닛 id를 가리키며 원문으로 거슬러 올라갈 수 있습니다.",
-        "note_2": "이 리포트는 전사문을 재구성하여 생성되었으므로 전사나 해석 오류가 있을 수 있습니다. 중요한 정보는 원본 영상을 확인하세요.",
-        "local_file": "로컬 파일",
-        "uploader": "업로더",
-        "subtitle_first": "플랫폼 자막(자막 우선, ASR 미사용)",
-        "no_units": "없음",
-    },
 }
 
 # 模板固定中文的三处 chrome 占位符：DOC_TITLE / DESC_TITLE / SOURCES_TITLE

@@ -61,17 +61,11 @@ REPORT_LANG = "zh"
 
 # 报告语言 → 展示名。名字直接写进 prompt，用各语言的「自称」而非中文译名，
 # LLM 对自称的语种遵循度最好。zh 之外的语言按「词」计数篇幅。
+# 只收录 zh / en / ja 三种（2026-10-22 用户决策）；未收录代码原样透传给 LLM。
 LANG_NAMES = {
     "zh": "简体中文",
     "en": "English",
     "ja": "日本語",
-    "ko": "한국어",
-    "fr": "Français",
-    "de": "Deutsch",
-    "es": "Español",
-    "pt": "Português",
-    "ru": "Русский",
-    "it": "Italiano",
 }
 
 
