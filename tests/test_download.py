@@ -489,3 +489,69 @@ def test_fetch_meta_translates_cheese_purchase_failure(
     monkeypatch.setattr(download, "_yt_dlp", _fail_yt_dlp)
     with pytest.raises(DownloadError, match="付费课程"):
         download.fetch_meta(CHEESE_URL, settings)
+
+
+# ------------------------------------------ cookies 登录态判据与字幕提示
+
+
+_NETSCAPE_HEADER = "# Netscape HTTP Cookie File"
+
+
+def _write_cookies(tmp_path: Path, rows: list[str]) -> str:
+    target = tmp_path / "cookies.txt"
+    target.write_text(
+        "\n".join([_NETSCAPE_HEADER, *rows]) + "\n", encoding="utf-8"
+    )
+    return str(target)
+
+
+_SESSDATA_ROW = ".bilibili.com\tTRUE\t/\tTRUE\t1999999999\tSESSDATA\tabc123"
+_DEVICE_ROW = ".bilibili.com\tTRUE\t/\tTRUE\t1999999999\tbuvid3\twhatever"
+
+
+def test_cookies_have_login_true_with_sessdata(tmp_path: Path):
+    cookies = _write_cookies(tmp_path, [_SESSDATA_ROW])
+    assert download.cookies_have_login(cookies) is True
+
+
+def test_cookies_have_login_false_without_sessdata(tmp_path: Path):
+    # 只有 buvid3 等设备 cookie 不算登录：AI 字幕对未登录用户不可见
+    cookies = _write_cookies(tmp_path, [_DEVICE_ROW])
+    assert download.cookies_have_login(cookies) is False
+
+
+def test_cookies_have_login_false_for_empty_sessdata_value(tmp_path: Path):
+    cookies = _write_cookies(tmp_path, [".bilibili.com\tTRUE\t/\tTRUE\t1999999999\tSESSDATA\t"])
+    assert download.cookies_have_login(cookies) is False
+
+
+def test_cookies_have_login_false_for_missing_file_and_none(tmp_path: Path):
+    assert download.cookies_have_login(None) is False
+    assert download.cookies_have_login(str(tmp_path / "nope.txt")) is False
+
+
+def _hint_settings(**overrides: object) -> Settings:
+    merged: dict[str, object] = {"cookies_from_browser": "", **overrides}
+    return replace(download.get_settings(), **merged)  # type: ignore[arg-type]
+
+
+def test_subtitle_login_hint_silent_when_logged_in(tmp_path: Path):
+    settings = _hint_settings(cookies_file=_write_cookies(tmp_path, [_SESSDATA_ROW]))
+    assert download.subtitle_login_hint(settings) is None
+
+
+def test_subtitle_login_hint_silent_with_browser_cookies():
+    settings = _hint_settings(cookies_file=None, cookies_from_browser="edge")
+    assert download.subtitle_login_hint(settings) is None
+
+
+def test_subtitle_login_hint_reports_missing_sessdata(tmp_path: Path):
+    settings = _hint_settings(cookies_file=_write_cookies(tmp_path, [_DEVICE_ROW]))
+    hint = download.subtitle_login_hint(settings)
+    assert hint is not None and "SESSDATA" in hint
+
+
+def test_subtitle_login_hint_suggests_configuring_cookies():
+    settings = _hint_settings(cookies_file=None)
+    hint = download.subtitle_login_hint(settings)
+    assert hint is not None and "YTDLP_COOKIES_FILE" in hint

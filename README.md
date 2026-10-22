@@ -73,7 +73,8 @@ pip install -e .
 | `LOCAL_ASR_MODEL` / `LOCAL_ASR_DEVICE` / `LOCAL_ASR_COMPUTE_TYPE` / `LOCAL_ASR_LANGUAGE` | 用 `local` 后端时 | 模型规格（tiny/base/small/medium/large-v3，默认 small）、设备（默认 auto）、计算精度（默认 auto）、语言提示（默认 auto） |
 | `FFMPEG_BIN` / `FFPROBE_BIN` | 否 | 留空则按 `bin/` → PATH 顺序探测 |
 | `PDF_BROWSER_BIN` | 否 | PDF / PNG 长图导出用的浏览器路径；留空自动探测 Edge / Chrome（Windows 10/11 自带 Edge，无需安装） |
-| `YTDLP_COOKIES_FILE` / `YTDLP_COOKIES_FROM_BROWSER` | 否 | B 站登录信息，用于需要登录态的视频（如大会员专享；充电专属 / 付费课程不适用，见下方「B 站登录」） |
+| `YTDLP_COOKIES_FILE` / `YTDLP_COOKIES_FROM_BROWSER` | 否 | B 站登录信息，用于需要登录态的视频（如大会员专享；充电专属 / 付费课程不适用，见下方「B 站登录」）。登录态同时决定 B 站 AI 字幕是否可见，见下 |
+| `SUBTITLE_FIRST` | 否 | 字幕优先，默认 `1`：平台字幕（含 AI 字幕）覆盖视频时长 ≥50% 时直接由字幕建稿，**跳过音频下载、音频处理与 ASR**；覆盖不足或无字幕自动回退 ASR。cookies 里缺 SESSDATA 导致没抓到字幕时，流水线会给出提示 |
 | `HTTP_PROXY` / `HTTPS_PROXY` | 否 | 同时作用于 `httpx` 与 `yt-dlp` |
 
 优先级：`.env` → 环境变量 → CLI 参数（后者覆盖前者）。
@@ -89,6 +90,8 @@ pip install -e .
 3. 重启服务生效。
 
 注意：**充电专属视频和付费课程暂不支持解析**——无论是否配置登录信息，预检都会直接拒绝并给出中文提示（见下方「约定与限制」）；普通视频不受影响。
+
+登录态的另一个作用：**B 站 AI 生成字幕（ai-zh / ai-en）只对登录用户可见**。配置好含 SESSDATA 的 cookies 后，带 AI 字幕的视频（口播、知识类最常见）可以直接由字幕建稿——不下载音频、不调 ASR，几分钟的报告几十秒出。设备 cookie（buvid3 等）不算登录；cookies 里没有 SESSDATA 时，流水线在「下载」阶段会提示。导出方法同上，导出前确认浏览器已登录 B 站。
 
 ---
 
@@ -110,6 +113,7 @@ python -m videread.cli BV1xx411c7mD
 | `--keep-audio` | 关 | 跑完保留音频中间文件（默认自动清理） |
 | `--open` | 关 | 生成后用浏览器打开报告 |
 | `--asr` | 取自 `.env` | 临时覆盖 ASR 后端 |
+| `--force-asr` | 关 | 单次强制走 ASR 路径（忽略字幕优先），用于验证字幕与 ASR 的差异 |
 | `--frames` | 取自 `.env` | 按章节截取视频画面并内嵌进报告（每节 1 张、全片 16 张封顶） |
 | `--pdf` | 关 | 报告生成后用本机 Edge / Chrome 无头打印导出 `report.pdf`（已存在且较新则复用） |
 | `--png` | 关 | 报告生成后用本机 Edge / Chrome 无头截图导出竖长 `report.png`（宽 900，整页一图，适合直接分享） |

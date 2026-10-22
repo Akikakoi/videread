@@ -694,6 +694,52 @@ def collect_subtitles(dest_dir: Path) -> list[dict]:
     ]
 
 
+def cookies_have_login(cookies_file: str | None) -> bool:
+    """cookies.txt 是否含非空 SESSDATA（B 站登录态的唯一判据）。
+
+    AI 生成字幕（ai-zh / ai-en）只对登录用户可见，设备 cookie（buvid3 等）
+    不算登录。Netscape 格式每行 7 列 tab 分隔，第 6 列是名字、第 7 列是值。
+    """
+    if not cookies_file:
+        return False
+    path = Path(cookies_file)
+    if not path.is_file():
+        return False
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 7 and parts[5] == "SESSDATA" and parts[6].strip():
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def subtitle_login_hint(settings: Settings) -> str | None:
+    """本期没抓到字幕时，给一条「为什么 / 怎么办」的提示；已具备登录态则 None。
+
+    只做静态判断（cookies 文件里有没有 SESSDATA / 是否配置浏览器直读），
+    不发任何网络请求。`cookies-from-browser` 视为已登录——文件锁与加密问题
+    由 _yt_dlp 的去 cookie 重试兜底，这里无法也不必廉价验证。
+    """
+    if settings.cookies_from_browser or cookies_have_login(settings.cookies_file):
+        return None
+    if settings.cookies_file:
+        return (
+            "cookies 文件里没有 SESSDATA（B 站登录态），AI 生成字幕对未登录"
+            "用户不可见——本期未抓到字幕。用已登录的浏览器重新导出一份 "
+            "cookies.txt（需包含 SESSDATA）可让字幕优先路径生效，"
+            "省去音频下载与 ASR 费用。"
+        )
+    return (
+        "本期未抓到平台字幕。B 站 AI 生成字幕（常见于口播/知识类视频）需登录态"
+        "才可见：在 .env 里配置 YTDLP_COOKIES_FILE（已登录浏览器导出的 "
+        "cookies.txt）后，带 AI 字幕的视频可由字幕直接建稿，跳过音频下载与 ASR。"
+    )
+
+
 def download_subtitles(
     url: str, dest_dir: Path, settings: Settings | None = None
 ) -> list[dict]:

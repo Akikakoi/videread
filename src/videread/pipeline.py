@@ -380,6 +380,12 @@ def _download_remote(state: _RunState) -> str:
         if not meta_cached:
             download.write_meta(meta, run_dir / "meta.json")
             stage.detail["subtitles"] = len(meta.subtitles)
+            if not meta.subtitles:
+                # 静默空字幕最伤「字幕优先」：用户不知道这条省 ASR 的路被堵了。
+                # 只在本次真实抓取时提示（缓存命中重跑不再念叨）
+                hint = download.subtitle_login_hint(state.settings)
+                if hint:
+                    state.progress(f"提示：{hint}")
         else:
             stage.detail["cached"] = True
 
