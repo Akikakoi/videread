@@ -10,6 +10,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -46,6 +47,21 @@ _SUBTITLE_LANGS = "zh-CN,zh-Hans,zh,zh-Hant,ai-zh,ai-en,en"
 # B 站分P探测用的公开 view 接口：无需登录，一次请求带回全部分P 的标题与时长
 _VIEW_API = "https://api.bilibili.com/x/web-interface/view"
 _VIEW_TIMEOUT_SEC = 8.0
+
+# player wbi/v2 接口：字幕权威来源。必须带 wbi 签名——未签名（yt-dlp 现状）
+# 恒返回空；老版非签名 /x/player/v2 虽有返回但内容会与视频错乱（实测会把
+# 别的视频的 AI 字幕张冠李戴），两者都不可用
+_PLAYER_API = "https://api.bilibili.com/x/player/wbi/v2"
+_NAV_API = "https://api.bilibili.com/x/web-interface/nav"
+_PLAYER_TIMEOUT_SEC = 10.0
+
+# wbi 签名的固定混淆表（B 站前端 JS 里的 WBI_MIXIN_KEY_ENC_TAB，公开知识）
+_WBI_MIXIN_TAB = (
+    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
+    33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
+    61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62,
+    11, 36, 20, 34, 44, 52,
+)
 
 # 充电专属/付费内容拦截（§6.3）：两类信号都对所有人公开——
 #   充电专属：view data 顶层 `is_upower_exclusive`（rights 里没有对应位；
@@ -579,10 +595,189 @@ def fetch_meta(
     return meta
 
 
+def _cookies_dict(settings: Settings) -> dict[str, str]:
+    """Netscape cookies.txt → 名值字典（供 httpx 直连 B 站 API 时携带）。"""
+    if not settings.cookies_file:
+        return {}
+    path = Path(settings.cookies_file)
+    if not path.is_file():
+        return {}
+    cookies: dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 7 and parts[5] and parts[6].strip():
+                cookies[parts[5]] = parts[6].strip()
+    except OSError:
+        return {}
+    return cookies
+
+
+def _srt_timecode(seconds: float) -> str:
+    """字幕 JSON 的秒数 → SRT 时间码（HH:MM:SS,mmm）。"""
+    seconds = max(seconds, 0.0)
+    hours = int(seconds // 3600)
+    minutes = int(seconds % 3600 // 60)
+    whole = seconds - hours * 3600 - minutes * 60
+    return f"{hours:02d}:{minutes:02d}:{int(whole):02d},{int(round(whole % 1 * 1000)):03d}"
+
+
+def _subtitle_json_to_srt(body: list) -> str:
+    """AI 字幕 JSON（body: from/to/content）→ SRT 文本，与 yt-dlp 的 json2srt 同构。"""
+    lines: list[str] = []
+    for index, item in enumerate(body):
+        if not isinstance(item, dict):
+            continue
+        content = str(item.get("content") or "")
+        if not content:
+            continue
+        try:
+            start, end = float(item.get("from") or 0), float(item.get("to") or 0)
+        except (TypeError, ValueError):
+            continue
+        lines.append(
+            f"{index + 1}\n{_srt_timecode(start)} --> {_srt_timecode(end)}\n{content}\n"
+        )
+    return "\n".join(lines)
+
+
+def _wbi_mixin_key(settings: Settings) -> str:
+    """nav 接口取 wbi_img 双 key，按混淆表重排得 32 位混入密钥。
+
+    密钥随 B 站下发（通常每日轮换），每次字幕下载现取现用即可，不值得缓存。
+    nav 接口未登录也能访问（游客也有 wbi_img），这里带 cookies 只是顺手。
+    """
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(_PLAYER_TIMEOUT_SEC),
+            proxy=settings.proxy,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (videread)"},
+        ) as client:
+            payload = client.get(_NAV_API, cookies=_cookies_dict(settings)).json()
+        wbi_img = (payload.get("data") or {}).get("wbi_img") or {}
+        img_url, sub_url = str(wbi_img.get("img_url") or ""), str(wbi_img.get("sub_url") or "")
+        img_key = img_url.rsplit("/", 1)[-1].split(".")[0]
+        sub_key = sub_url.rsplit("/", 1)[-1].split(".")[0]
+    except (httpx.HTTPError, ValueError):
+        return ""
+    combined = img_key + sub_key
+    return "".join(combined[i] for i in _WBI_MIXIN_TAB if i < len(combined))[:32]
+
+
+def _wbi_sign(params: dict, mixin_key: str) -> dict:
+    """按 B 站 wbi 规则签名：加 wts → 排序 → 过滤字符 → md5 拼 w_rid。"""
+    filtered = {
+        key: "".join(c for c in str(value) if c not in "!'()*")
+        for key, value in sorted({**params, "wts": int(time.time())}.items())
+    }
+    w_rid = hashlib.md5((urlencode(filtered) + mixin_key).encode()).hexdigest()
+    return {**filtered, "w_rid": w_rid}
+
+
+def _subtitle_span_ok(body: list, duration: float) -> bool:
+    """字幕末段时间是否合理：远超视频时长的字幕是接口错乱数据，判否。
+
+    容忍 50% + 10s 的余量（片尾曲、字幕轨自身的小偏差）。
+    """
+    if duration <= 0 or not body:
+        return True
+    try:
+        last_to = max(float(seg.get("to") or 0) for seg in body if isinstance(seg, dict))
+    except (TypeError, ValueError):
+        return True
+    return last_to <= duration * 1.5 + 10
+
+
+def _api_subtitles(url: str, dest_dir: Path, settings: Settings) -> list[dict]:
+    """签名 wbi/v2 接口直接拉平台字幕（含 yt-dlp 拿不到的 AI 字幕）。
+
+    需要登录态（SESSDATA）：AI 字幕对未登录请求不可见，接口返回空列表。
+    多P 链接按 current_page 选取对应分P 的 cid。任何失败返回空列表，
+    由调用方回退 yt-dlp 路径。返回与 collect_subtitles 同构的记录。
+
+    防御：接口偶尔会对请求返回**别的视频**的字幕（实测见过 34s 视频配
+    562s 亲子内容），因此按分P 时长校验字幕末段时间，超出 50% 以上整体
+    丢弃，宁走 ASR 也不能把别人的稿子写进报告。
+    """
+    bvid = extract_bvid(url)
+    if not bvid:
+        return []
+    settings = settings or get_settings()
+    view = _view_data(url, settings)
+    if view is None:
+        return []
+    # 多P：页码从 1 起；view data 的 cid/duration 是 P1，pages[N-1] 才是所选分P
+    page = max(current_page(url), 1)
+    pages = view.get("pages") or []
+    page_item = pages[page - 1] if page <= len(pages) else {}
+    if not isinstance(page_item, dict):
+        page_item = {}
+    cid = page_item.get("cid") or view.get("cid")
+    duration = float(page_item.get("duration") or view.get("duration") or 0)
+    if not cid:
+        return []
+    mixin_key = _wbi_mixin_key(settings)
+    if not mixin_key:
+        return []
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(_PLAYER_TIMEOUT_SEC),
+            proxy=settings.proxy,
+            follow_redirects=True,
+            headers={
+                "User-Agent": "Mozilla/5.0 (videread)",
+                "Referer": "https://www.bilibili.com/",
+            },
+        ) as client:
+            response = client.get(
+                _PLAYER_API,
+                params=_wbi_sign({"bvid": bvid, "cid": cid}, mixin_key),
+                cookies=_cookies_dict(settings),
+            )
+            payload = response.json()
+            if not isinstance(payload, dict) or payload.get("code") != 0:
+                return []
+            subs = (payload.get("data") or {}).get("subtitle") or {}
+            items = subs.get("subtitles") or []
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            written = 0
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                lan, sub_url = str(item.get("lan") or ""), str(item.get("subtitle_url") or "")
+                if not lan or not sub_url:
+                    continue
+                if sub_url.startswith("//"):
+                    sub_url = "https:" + sub_url
+                body = client.get(sub_url).json().get("body") or []
+                srt = _subtitle_json_to_srt(body)
+                if not srt.strip():
+                    continue
+                if not _subtitle_span_ok(body, duration):
+                    continue  # 张冠李戴的错乱字幕，整体丢弃
+                (dest_dir / f"subtitle.{lan}.srt").write_text(srt, encoding="utf-8")
+                written += 1
+    except (httpx.HTTPError, ValueError, OSError):
+        return []
+    if written == 0:
+        return []
+    return collect_subtitles(dest_dir)
+
+
 def _download_subtitles_into(
     url: str, subtitle_dir: Path, settings: Settings
 ) -> list[dict]:
-    """单独一次 yt-dlp 调用下载平台字幕；没有可用字幕时返回空列表。"""
+    """下载平台字幕到 `subtitle.<lang>.srt`；没有字幕时返回空列表。
+
+    优先走 player v2 接口（登录态下能拿到 AI 字幕；yt-dlp 的 wbi/v2 通道
+    已拿不到）；接口失败或非 BV 链接（如付费课程）回退 yt-dlp。
+    """
+    api_subs = _api_subtitles(url, subtitle_dir, settings)
+    if api_subs:
+        return api_subs
     subtitle_dir.mkdir(parents=True, exist_ok=True)
     _yt_dlp(
         [

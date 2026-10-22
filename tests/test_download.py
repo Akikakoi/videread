@@ -555,3 +555,39 @@ def test_subtitle_login_hint_suggests_configuring_cookies():
     settings = _hint_settings(cookies_file=None)
     hint = download.subtitle_login_hint(settings)
     assert hint is not None and "YTDLP_COOKIES_FILE" in hint
+
+
+# ------------------------------------------ 直连接口字幕：JSON→SRT 与错乱防御
+
+
+def test_srt_timecode_formats():
+    assert download._srt_timecode(0) == "00:00:00,000"
+    assert download._srt_timecode(1.5) == "00:00:01,500"
+    assert download._srt_timecode(3661.25) == "01:01:01,250"
+
+
+def test_subtitle_json_to_srt_matches_ytdlp_shape():
+    body = [
+        {"from": 0.08, "to": 0.92, "content": "来了兄弟们"},
+        {"from": 1.0, "to": 2.4, "content": "今天讲数列"},
+        {"from": 3.0, "to": 4.0, "content": ""},  # 空内容跳过
+    ]
+    srt = download._subtitle_json_to_srt(body)
+    lines = srt.strip().splitlines()
+    assert lines[0] == "1"
+    assert lines[1] == "00:00:00,080 --> 00:00:00,920"
+    assert lines[2] == "来了兄弟们"
+    assert "2\n00:00:01,000 --> 00:00:02,400\n今天讲数列" in srt
+    assert srt.count("00:00:03") == 0  # 空内容不产出段落
+
+
+def test_subtitle_span_ok_rejects_mismatched_subtitle():
+    # 接口错乱时会把别的视频的字幕张冠李戴：末段远超时长必须整体丢弃
+    body = [{"to": 562.0, "content": "别人的内容"}]
+    assert download._subtitle_span_ok(body, 34.0) is False
+    # 正常字幕（略超视频时长）放行
+    ok_body = [{"to": 33.8, "content": "本片内容"}]
+    assert download._subtitle_span_ok(ok_body, 34.0) is True
+    # 时长未知时不误杀
+    assert download._subtitle_span_ok(body, 0.0) is True
+    assert download._subtitle_span_ok([], 34.0) is True
