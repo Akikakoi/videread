@@ -54,6 +54,7 @@ class Job:
         asr_backend: str | None,
         frames: bool | None = None,
         retry: bool = False,
+        lang: str | None = None,
     ) -> None:
         self.id = uuid.uuid4().hex[:12]
         self.url = url
@@ -64,6 +65,7 @@ class Job:
         self.keep_audio = keep_audio
         self.asr_backend = asr_backend
         self.frames = frames
+        self.lang = (lang or "").strip().lower() or None
         self.state = "queued"
         self.stage_index = 0
         self.logs: list[str] = []
@@ -226,6 +228,7 @@ class JobManager:
         asr_backend: str | None = None,
         frames: bool | None = None,
         retry: bool = False,
+        lang: str | None = None,
     ) -> Job:
         url = (url or "").strip()
         mode = (mode or "standard").strip().lower()
@@ -246,6 +249,7 @@ class JobManager:
                 asr_backend=asr_backend,
                 frames=frames,
                 retry=retry,
+                lang=lang,
             )
             self._jobs[job.id] = job
             self._prune_jobs_locked()
@@ -309,6 +313,7 @@ class JobManager:
                 open_report=False,
                 frames=job.frames,
                 fresh_dir=job.retry,
+                report_lang=job.lang,
                 cancel_check=job.cancel_check,
                 progress=job.progress,
             )

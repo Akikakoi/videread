@@ -220,8 +220,9 @@ def answer_question(
 
     selected = retrieve(units, question)
     llm = client or LlmClient(settings)
+    # 语言策略：提问语言优先，提问语言不明确时回落报告本身的语言
     raw = llm.complete(
-        system=prompts.QA_SYSTEM,
+        system=prompts.qa_system(getattr(outline, "lang", "zh") or "zh"),
         user=prompts.fill(
             prompts.QA_USER,
             question=question,

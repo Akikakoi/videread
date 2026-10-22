@@ -40,6 +40,8 @@ class Outline:
     lead: str
     profile: str
     sections: list[OutlineSection] = field(default_factory=list)
+    # 本大纲（及由它写出的正文）的自然语言；缺失视为 zh（历史产物）
+    lang: str = "zh"
 
     def to_dict(self) -> dict:
         return {
@@ -47,6 +49,7 @@ class Outline:
             "subtitle": self.subtitle,
             "lead": self.lead,
             "profile": self.profile,
+            "lang": self.lang,
             "sections": [section.to_dict() for section in self.sections],
         }
 
@@ -57,6 +60,7 @@ class Outline:
             subtitle=str(data.get("subtitle", "") or ""),
             lead=str(data.get("lead", "")),
             profile=str(data.get("profile", _DEFAULT_PROFILE)),
+            lang=str(data.get("lang", "") or "zh"),
             sections=[
                 OutlineSection(
                     id=str(raw.get("id", f"s{i + 1}")),
@@ -102,7 +106,7 @@ def meta_summary(meta: VideoMeta) -> str:
     return "\n".join(lines)
 
 
-def validate(data: dict, units: list[TranscriptUnit]) -> Outline:
+def validate(data: dict, units: list[TranscriptUnit], lang: str = "zh") -> Outline:
     """剔除非法 source_ids，重编号章节，并从转写单元回算真实 time_range。"""
     order = {unit.id: index for index, unit in enumerate(units)}
     valid_ids = set(order)
@@ -123,10 +127,15 @@ def validate(data: dict, units: list[TranscriptUnit]) -> Outline:
 
         start = min(units[order[unit_id]].start for unit_id in seen)
         end = max(units[order[unit_id]].end for unit_id in seen)
+        fallback_heading = (
+            f"第 {len(sections) + 1} 节"
+            if lang in {"", "zh", "zh-cn", "zh-hans"}
+            else f"Section {len(sections) + 1}"
+        )
         sections.append(
             OutlineSection(
                 id=f"s{len(sections) + 1}",
-                heading=str(raw.get("heading") or f"第 {len(sections) + 1} 节").strip(),
+                heading=str(raw.get("heading") or fallback_heading).strip(),
                 time_range=f"{format_time(start)}-{format_time(end)}",
                 intent=str(raw.get("intent") or "").strip(),
                 source_ids=seen,
@@ -152,6 +161,7 @@ def validate(data: dict, units: list[TranscriptUnit]) -> Outline:
         subtitle=str(data.get("subtitle") or "").strip(),
         lead=lead,
         profile=profile,
+        lang=lang or "zh",
         sections=sections,
     )
 
@@ -161,6 +171,7 @@ def plan_outline(
     units: list[TranscriptUnit],
     *,
     mode: str = "standard",
+    lang: str = "zh",
     client: LlmClient | None = None,
     settings: Settings | None = None,
     progress: Callable[[str], None] | None = None,
@@ -172,6 +183,9 @@ def plan_outline(
     client = client or LlmClient(settings)
     progress = progress or (lambda _msg: None)
 
+    outline_system = prompts.OUTLINE_SYSTEM.replace(
+        "{language_rule}", prompts.language_rule(lang)
+    )
     base_user = prompts.fill(
         prompts.OUTLINE_USER,
         meta=meta_summary(meta),
@@ -184,11 +198,11 @@ def plan_outline(
     for attempt in range(3):
         try:
             data, raw = client.complete_json(
-                system=prompts.OUTLINE_SYSTEM,
+                system=outline_system,
                 user=user,
                 model=settings.llm_model_plan,
             )
-            return validate(data, units)
+            return validate(data, units, lang)
         except LlmError as exc:
             last_error = exc
             if attempt == 2:

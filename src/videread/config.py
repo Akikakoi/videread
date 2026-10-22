@@ -55,6 +55,30 @@ TRANSCRIPT_MAX_CHARS = 160
 # 字幕优先：视频带平台字幕时直接用它构造转写稿，跳过音频下载与 ASR（§6.3）
 SUBTITLE_FIRST = True
 
+# 报告输出语言：默认 zh（简体中文，历史行为不变）。CLI --lang 或 .env 的
+# REPORT_LANG 可覆盖。语言名见 LANG_NAMES，未收录的代码按原样透传给 LLM。
+REPORT_LANG = "zh"
+
+# 报告语言 → 展示名。名字直接写进 prompt，用各语言的「自称」而非中文译名，
+# LLM 对自称的语种遵循度最好。zh 之外的语言按「词」计数篇幅。
+LANG_NAMES = {
+    "zh": "简体中文",
+    "en": "English",
+    "ja": "日本語",
+    "ko": "한국어",
+    "fr": "Français",
+    "de": "Deutsch",
+    "es": "Español",
+    "pt": "Português",
+    "ru": "Русский",
+    "it": "Italiano",
+}
+
+
+def lang_display_name(code: str) -> str:
+    """语言代码 → prompt 用的展示名；未收录的代码原样返回。"""
+    return LANG_NAMES.get((code or "").strip().lower(), (code or "").strip())
+
 # 截图（纯展示模式）：按大纲节定点拉取视频小段抽帧，以 base64 内嵌报告。
 # 默认关：--frames 显式开启，或 .env 设 FRAMES=1。
 FRAMES_ENABLED = False
@@ -99,6 +123,8 @@ class Settings:
     ffmpeg: str | None
     ffprobe: str | None
     pdf_browser: str | None
+    # 报告输出语言（结构规划 / 逐节写作 / 问答的自然语言产出；zh 之外按词计篇幅）
+    report_lang: str
 
     def require_dashscope(self) -> str:
         if not self.dashscope_api_key:
@@ -223,6 +249,7 @@ def get_settings(**overrides: object) -> Settings:
         ffmpeg=resolve_binary("FFMPEG_BIN", "ffmpeg"),
         ffprobe=resolve_binary("FFPROBE_BIN", "ffprobe"),
         pdf_browser=(os.environ.get("PDF_BROWSER_BIN", "").strip() or None),
+        report_lang=(os.environ.get("REPORT_LANG", "").strip().lower() or REPORT_LANG),
     )
     applied = {k: v for k, v in overrides.items() if v is not None}
     return replace(settings, **applied) if applied else settings

@@ -10,6 +10,7 @@ from videread.errors import RenderError
 from videread.render import (
     OPTIONAL_PLACEHOLDERS,
     REQUIRED_PLACEHOLDERS,
+    _CHROME_REQUIRED,
     check_self_contained,
     render_report,
     template_classes,
@@ -26,6 +27,9 @@ def _ctx(**overrides: str) -> dict[str, str]:
         "LEAD": "导语一段话。",
         "ATTRIBUTION": "Bilibili ·《原片》<br><a href=\"https://example.com/v\">https://example.com/v</a>",
         "VIDEO_DESCRIPTION": "视频简介",
+        "DOC_TITLE": "视频阅读报告",
+        "DESC_TITLE": "视频简介",
+        "SOURCES_TITLE": "来源与处理说明",
         "BODY": '<div data-source-units="u0001"><p>正文</p></div>',
         "SOURCES": "<p>来源与处理说明</p>",
     }
@@ -55,7 +59,9 @@ def test_render_raises_on_missing_required_placeholder(tmp_path: Path):
 
 def test_render_raises_on_leftover_placeholder(tmp_path: Path):
     template = tmp_path / "typo.html"
-    body = "".join(f"{{{{{name}}}}}" for name in REQUIRED_PLACEHOLDERS)
+    body = "".join(
+        f"{{{{{name}}}}}" for name in (*REQUIRED_PLACEHOLDERS, *_CHROME_REQUIRED)
+    )
     template.write_text(body + "{{UNKNOWN}}", encoding="utf-8")
     with pytest.raises(RenderError) as excinfo:
         render_report(template=template, ctx=_ctx(), out=tmp_path / "out.html")

@@ -6,9 +6,28 @@
 
 from __future__ import annotations
 
+from ..config import lang_display_name
+
+# --------------------------------------------------------------------- 语言 ---
+
+# 报告输出语言：写进规划 / 写作 / 问答三个 system prompt 的统一约束。
+# zh 保持历史行为（不加任何额外说明，省 token 也不引入干扰）。
+def language_rule(lang: str) -> str:
+    lang = (lang or "zh").strip().lower()
+    if lang in {"", "zh", "zh-cn", "zh-hans"}:
+        return ""
+    name = lang_display_name(lang)
+    return (
+        f"\n\n【输出语言】除代码、组件属性与 data-source-units 值外，所有自然语言"
+        f"内容（标题、导语、小标题、正文、要点）一律用{name}书写。专有名词、"
+        f"作品名与术语可保留原文，但首次出现时应给出{name}译名或注释。"
+        f"转写稿本身可能是其他语言：请忠实转述其含义，不要逐字翻译腔。"
+    )
+
+
 # --------------------------------------------------------------------- LLM #1
 
-OUTLINE_SYSTEM = """你是一名内容编辑。你的任务是把一份视频转写稿规划成阅读报告的章节结构。
+OUTLINE_SYSTEM = """你是一名内容编辑。你的任务是把一份视频转写稿规划成阅读报告的章节结构。{language_rule}
 
 规则：
 1. 先判断内容的信息结构类型，从以下五选一：
@@ -50,7 +69,7 @@ OUTLINE_REPAIR_USER = """你上一次的输出不可用，错误如下：
 
 # --------------------------------------------------------------------- LLM #2
 
-WRITER_SYSTEM = """你是一名内容编辑。你会拿到一节报告所需的全部原始转写，把它写成可直接嵌入 HTML 的正文片段。
+WRITER_SYSTEM = """你是一名内容编辑。你会拿到一节报告所需的全部原始转写，把它写成可直接嵌入 HTML 的正文片段。{language_rule}
 
 【忠实性】
 1. 只使用给定转写中的信息。不要补充转写中没有的背景、概念或数字。
@@ -101,6 +120,15 @@ BRIEF_EXTRA_RULES = """
 17. 章节编号由模板 CSS 计数器自动生成，正文不要手写编号。
 18. 正文不显示时间戳。"""
 
+# zh 之外语言的 Brief 约束：按「词」计数（英文等语言没有"字"的概念），
+# 词数阈值约为中文字数 ÷ 2，与中文版同一信息量档位
+BRIEF_EXTRA_RULES_WORDS = """
+【Brief 模式硬约束】
+15. 正文总词数 800–1100 words，上限 1200；写完由程序实际提取 HTML 文本计数，不能凭估计声明达标。
+16. 单段 1–3 句；相邻独立正文最多两段。
+17. 章节编号由模板 CSS 计数器自动生成，正文不要手写编号。
+18. 正文不显示时间戳。"""
+
 LENGTH_RULES = {
     "standard": "本节正文 300-700 字，视信息量而定；不要为了凑长度重复已说过的内容。",
     "deep": "本节正文 700-1200 字，视信息量而定；宁可深挖一两个机制讲透，也不要泛泛罗列；"
@@ -110,10 +138,24 @@ LENGTH_RULES = {
     "不要写第二句，不要展开论述，不要罗列。",
 }
 
+# zh 之外语言（词计数）：阈值约为中文字数 ÷ 2
+LENGTH_RULES_WORDS = {
+    "standard": "本节正文 150-350 词，视信息量而定；不要为了凑长度重复已说过的内容。",
+    "deep": "本节正文 350-600 词，视信息量而定；宁可深挖一两个机制讲透，也不要泛泛罗列；"
+    "各节之间不要重复铺垫。",
+    "brief": "本节正文不超过 180 词；宁可少讲一个次要例子，也不要超出。",
+    "outline": "本节只写一句话核心要点（15-30 词），放进 .keyline 组件；"
+    "不要写第二句，不要展开论述，不要罗列。",
+}
+
+
+def _lang_is_zh(lang: str) -> bool:
+    return (lang or "zh").strip().lower() in {"", "zh", "zh-cn", "zh-hans"}
+
 # --------------------------------------------------------------------- LLM #3
 
 # 报告内问答：只依据检索到的转写片段作答，答案仍以 data-source-units 绑定来源
-QA_SYSTEM = """你是一名内容编辑。读者就一份视频转写稿提问，你只依据给定的转写片段作答。
+QA_SYSTEM = """你是一名内容编辑。读者就一份视频转写稿提问，你只依据给定的转写片段作答。{language_rule}
 
 规则：
 1. 只使用下方给定转写中的信息，不要补充转写之外的背景、概念或数字。
@@ -125,6 +167,33 @@ QA_SYSTEM = """你是一名内容编辑。读者就一份视频转写稿提问�
 7. 篇幅 150–300 字；用 <p> 陈述，可用 <div class="keyline"> 归纳一句结论、<div class="callout"> 补充解释。
 
 只输出 HTML 片段，不要输出解释文字。"""
+
+# 问答的语言策略与写作不同：提问语言优先（读者用中文问英文报告，就该用中文答），
+# 提问语言不明确时才回落报告语言
+QA_LANG_FALLBACK = """8. 用提问所用的语言作答；提问语言不明确时，用{lang_name}作答。"""
+
+
+def writer_system(mode: str, lang: str = "zh") -> str:
+    """按模式填充 `{length_rule}`，Brief 模式追加硬约束；语言决定计数单位。"""
+    words = not _lang_is_zh(lang)
+    rules = LENGTH_RULES_WORDS if words else LENGTH_RULES
+    rule = rules.get(mode, rules["standard"])
+    system = (
+        WRITER_SYSTEM.replace("{length_rule}", rule)
+        .replace("{language_rule}", language_rule(lang))
+    )
+    if mode == "brief":
+        system += "\n" + (BRIEF_EXTRA_RULES_WORDS if words else BRIEF_EXTRA_RULES)
+    return system
+
+
+def qa_system(lang: str = "zh") -> str:
+    """问答 system：语言策略为「提问语言优先，回落报告语言」。"""
+    name = lang_display_name(lang)
+    return (
+        QA_SYSTEM.replace("{language_rule}", "")
+        + "\n" + QA_LANG_FALLBACK.replace("{lang_name}", name)
+    )
 
 QA_USER = """问题：
 {question}
@@ -170,15 +239,6 @@ def components_for(mode: str) -> str:
     if mode == "outline":
         return OUTLINE_COMPONENTS
     return STANDARD_COMPONENTS
-
-
-def writer_system(mode: str) -> str:
-    """按模式填充 `{length_rule}`，Brief 模式追加硬约束。"""
-    rule = LENGTH_RULES.get(mode, LENGTH_RULES["standard"])
-    system = WRITER_SYSTEM.replace("{length_rule}", rule)
-    if mode == "brief":
-        system += "\n" + BRIEF_EXTRA_RULES
-    return system
 
 
 def fill(template: str, **values: object) -> str:

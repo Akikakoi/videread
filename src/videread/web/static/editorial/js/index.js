@@ -621,10 +621,11 @@ async function submitJob(){
   renderStepper(-1, doneSet);
   try{
     const frames = $("#frames-switch") && $("#frames-switch").checked ? true : null;
+    const lang = ($("#lang-select") || {}).value || null;
     /* 投印策略固定：忽略缓存强制重跑、不留音频文件、转写引擎按 .env 配置（不传即"自动"） */
     /* 多P 视频：仅当分P 列表仍对应当前输入时才改写链接，避免过期分P 误选 */
     const target = (probePages.length && pageSelKey === url) ? withPage(url, selectedPage()) : url;
-    const job = await post("/api/jobs", {url: target, mode, frames, no_cache: true, keep_audio: false});
+    const job = await post("/api/jobs", {url: target, mode, frames, lang, no_cache: true, keep_audio: false});
     localStorage.setItem("videread.activeJob", job.job_id);
     /* 提交后留在主页：工单入口就地给出（工单页有完整的步进器与日志），不整页跳转 */
     showJobline(job.job_id);

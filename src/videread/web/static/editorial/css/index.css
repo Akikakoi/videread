@@ -270,6 +270,7 @@ section.block{padding:56px 0 0;}
 .modes{display:flex;gap:10px;margin:16px 0 0;flex-wrap:wrap;}
 .mode{font-family:var(--mono);font-size:11.5px;letter-spacing:1px;border:1px solid var(--hairline);color:var(--muted);background:transparent;padding:6px 14px;border-radius:99px;cursor:pointer;transition:color var(--t),background var(--t),border-color var(--t);}
 .mode.on{border-color:var(--accent);color:var(--accent);}
+.lang-select{appearance:none;-webkit-appearance:none;padding-right:30px;background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 16px) 55%,calc(100% - 11px) 55%;background-size:5px 5px;background-repeat:no-repeat;}
 .probeline{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:14px;min-height:1.6em;letter-spacing:.5px;}
 /* 工单入口独立成行：预检会整行重写 probeline，两者不能共用元素 */
 .jobline{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:12px;min-height:1.6em;letter-spacing:.5px;}

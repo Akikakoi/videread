@@ -51,6 +51,7 @@ class JobRequest(BaseModel):
     asr_backend: str | None = None
     frames: bool | None = None
     retry: bool = False
+    lang: str | None = None
 
 
 class ProbeRequest(BaseModel):
@@ -437,6 +438,7 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
                 asr_backend=(payload.asr_backend or "").strip() or None,
                 frames=payload.frames,
                 retry=payload.retry,
+                lang=(payload.lang or "").strip() or None,
             )
         except JobBusy as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

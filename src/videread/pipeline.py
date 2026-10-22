@@ -115,6 +115,7 @@ class _RunState:
 
     is_local: bool = False
     fresh_dir: bool = False
+    lang: str = "zh"
     run_dir: Path | None = None
     trace: TraceWriter | None = None
     meta: VideoMeta | None = None
@@ -152,6 +153,7 @@ def run(
     export_png: bool = False,
     export_md: bool = False,
     fresh_dir: bool = False,
+    report_lang: str | None = None,
     cancel_check: Callable[[], None] | None = None,
     progress: Callable[[str], None] = print,
 ) -> Path:
@@ -174,6 +176,9 @@ def run(
     url = download.normalize_source(url)
     out_root = Path(out_root)
     settings = get_settings(asr_backend=asr_backend, frames_enabled=frames)
+    # 报告语言：CLI --lang > .env 的 REPORT_LANG > zh。转写稿保持源语言不动，
+    # 语言只作用于结构规划、逐节写作与问答的自然语言产出。
+    state_lang = (report_lang or settings.report_lang or "zh").strip().lower()
     # 启动即校验 LLM 密钥：结构规划在下载与 ASR 之后，等到第 5 阶段才
     # 发现缺 key，前面的下载与转写成本就白花了。ASR 密钥不在此列：
     # 字幕优先路径不经过 ASR，其校验留在后端构造时进行。
@@ -188,6 +193,7 @@ def run(
         force_asr=force_asr,
         force_report=force_report,
         fresh_dir=fresh_dir,
+        lang=state_lang,
         settings=settings,
         progress=progress,
         cancel_check=cancel_check,
@@ -584,23 +590,34 @@ def _stage_outline(state: _RunState) -> None:
     outline_path = state.run_dir / "outline.json"
     client: LlmClient | None = None
     with state.trace.stage("outline") as stage:
+        outline: Outline | None = None
+        detail = ""
         if state.use_cache and _nonempty(outline_path):
-            outline = load_outline(outline_path)
-            stage.detail.update(
-                {
-                    "sections": len(outline.sections),
-                    "profile": outline.profile,
-                    "cached": True,
-                }
-            )
-            detail = _cached(f"{len(outline.sections)} 节  profile={outline.profile}")
-        else:
+            cached_outline = load_outline(outline_path)
+            if cached_outline.lang == state.lang:
+                outline = cached_outline
+                stage.detail.update(
+                    {
+                        "sections": len(outline.sections),
+                        "profile": outline.profile,
+                        "lang": outline.lang,
+                        "cached": True,
+                    }
+                )
+                detail = _cached(f"{len(outline.sections)} 节  profile={outline.profile}")
+            else:
+                # 语言不同即缓存未命中：大纲与正文都要按新语言重出。
+                # 转写稿与 ASR 缓存不受影响（它们保持源语言）。
+                stage.detail["lang_changed"] = f"{cached_outline.lang} -> {state.lang}"
+                state.force_report = True
+        if outline is None:
             assert state.units is not None and state.meta is not None
             client = LlmClient(state.settings)
             outline = plan_outline(
                 state.meta,
                 state.units,
                 mode=state.mode,
+                lang=state.lang,
                 client=client,
                 settings=state.settings,
                 progress=state.progress,
@@ -610,6 +627,7 @@ def _stage_outline(state: _RunState) -> None:
                 {
                     "sections": len(outline.sections),
                     "profile": outline.profile,
+                    "lang": state.lang,
                     "tokens": client.usage.total,
                 }
             )
@@ -710,6 +728,7 @@ def _stage_sections(state: _RunState) -> None:
             state.outline,
             state.units,
             mode=state.mode,
+            lang=state.lang,
             out_dir=state.run_dir,
             client=state.client,
             settings=state.settings,
@@ -784,6 +803,7 @@ def _stage_render(state: _RunState) -> Path:
                 state.settings,
                 mode=state.mode,
                 subtitle_first=state.subtitle_path is not None,
+                lang=state.lang,
             )
             render.render_report(
                 template=render.template_for(state.mode), ctx=ctx, out=report_path

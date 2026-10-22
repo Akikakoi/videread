@@ -134,6 +134,7 @@ def fake_pipeline(report_body: str = REPORT_HTML, run_id: str = RUN_ID):
         open_report: bool = False,
         frames: bool | None = None,
         fresh_dir: bool = False,
+        report_lang: str | None = None,
         cancel_check=None,
         progress=print,
     ) -> Path:

@@ -34,15 +34,34 @@ BRIEF_TARGET_MAX = 2200
 BRIEF_HARD_MAX = 2400
 BRIEF_SECTION_MAX = 350
 
+# zh 之外语言按「词」计数：阈值约为中文字数 ÷ 2，同一信息量档位
+BRIEF_TARGET_MIN_WORDS = 800
+BRIEF_TARGET_MAX_WORDS = 1100
+BRIEF_HARD_MAX_WORDS = 1200
+BRIEF_SECTION_MAX_WORDS = 180
+
+
+def _is_zh(lang: str) -> bool:
+    return (lang or "zh").strip().lower() in {"", "zh", "zh-cn", "zh-hans"}
+
+
+def _brief_limits(lang: str) -> tuple[int, int, int, int]:
+    """(target_min, target_max, hard_max, section_max)，zh 按字、其他按词。"""
+    if _is_zh(lang):
+        return BRIEF_TARGET_MIN, BRIEF_TARGET_MAX, BRIEF_HARD_MAX, BRIEF_SECTION_MAX
+    return (
+        BRIEF_TARGET_MIN_WORDS,
+        BRIEF_TARGET_MAX_WORDS,
+        BRIEF_HARD_MAX_WORDS,
+        BRIEF_SECTION_MAX_WORDS,
+    )
+
 
 @dataclass
 class BriefLengthReport:
     chars: int
     issues: list[str] = field(default_factory=list)
-
-    @property
-    def over_hard(self) -> bool:
-        return self.chars > BRIEF_HARD_MAX
+    over_hard: bool = False
 
 
 def extract_text(html: str) -> str:
@@ -55,16 +74,31 @@ def count_text_chars(html: str) -> int:
     return len(re.sub(r"\s+", "", extract_text(html)))
 
 
-def check_brief_length(html_parts: list[str]) -> BriefLengthReport:
-    total = count_text_chars("".join(html_parts))
+def count_text_words(html: str) -> int:
+    """去标签后的空白分词数（英文等按空格分词语言的篇幅计量）。
+
+    标签替换成空格而不是直接删除：<br> / </p> 一类标签本身承担分词职责，
+    删掉会把 `hello<br>world` 粘成 `helloworld` 而少计一词。
+    """
+    return len(re.sub(r"<[^>]+>", " ", html).split())
+
+
+def check_brief_length(html_parts: list[str], lang: str = "zh") -> BriefLengthReport:
+    if _is_zh(lang):
+        total = count_text_chars("".join(html_parts))
+        unit = "字"
+    else:
+        total = count_text_words("".join(html_parts))
+        unit = "词"
+    target_min, target_max, hard_max, _section = _brief_limits(lang)
     issues: list[str] = []
-    if total > BRIEF_HARD_MAX:
-        issues.append(f"Brief 正文 {total} 字，超过硬上限 {BRIEF_HARD_MAX} 字")
-    elif total > BRIEF_TARGET_MAX:
-        issues.append(f"Brief 正文 {total} 字，超出目标区间上限 {BRIEF_TARGET_MAX} 字")
-    elif total < BRIEF_TARGET_MIN:
-        issues.append(f"Brief 正文 {total} 字，低于目标区间下限 {BRIEF_TARGET_MIN} 字")
-    return BriefLengthReport(chars=total, issues=issues)
+    if total > hard_max:
+        issues.append(f"Brief 正文 {total} {unit}，超过硬上限 {hard_max} {unit}")
+    elif total > target_max:
+        issues.append(f"Brief 正文 {total} {unit}，超出目标区间上限 {target_max} {unit}")
+    elif total < target_min:
+        issues.append(f"Brief 正文 {total} {unit}，低于目标区间下限 {target_min} {unit}")
+    return BriefLengthReport(chars=total, issues=issues, over_hard=total > hard_max)
 
 
 def strip_markdown_markers(html: str) -> str:
@@ -200,6 +234,7 @@ def write_sections(
     units: list[TranscriptUnit],
     *,
     mode: str = "standard",
+    lang: str = "zh",
     out_dir: Path,
     client: LlmClient | None = None,
     settings: Settings | None = None,
@@ -235,7 +270,8 @@ def write_sections(
     directory.mkdir(parents=True, exist_ok=True)
     cached = {} if force else existing_sections(out_dir)
     unit_map = {unit.id: unit for unit in units}
-    system = prompts.writer_system(mode)
+    lang = lang or getattr(outline, "lang", "zh") or "zh"
+    system = prompts.writer_system(mode, lang)
     component_list = prompts.components_for(mode)
     total = len(outline.sections)
 
@@ -284,9 +320,12 @@ def write_sections(
         for violation in violations:
             progress(f"第 {section.id} 节：{violation}")
         if mode == "brief":
-            chars = count_text_chars(html)
-            if chars > BRIEF_SECTION_MAX * 1.2:
-                progress(f"第 {section.id} 节 {chars} 字，明显超出 Brief 单节建议上限")
+            words = not _is_zh(lang)
+            count = count_text_words(html) if words else count_text_chars(html)
+            unit = "词" if words else "字"
+            _tmin, _tmax, _hard, section_max = _brief_limits(lang)
+            if count > section_max * 1.2:
+                progress(f"第 {section.id} 节 {count} {unit}，明显超出 Brief 单节建议上限")
         return html
 
     # 单节失败不打断其他节：已成功的节照常落盘，最后统一抛出最先失败的那一节

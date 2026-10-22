@@ -55,6 +55,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="忽略平台字幕，坚持下载音频走 ASR（字幕优先的兜底开关）",
     )
     parser.add_argument(
+        "--lang",
+        dest="lang",
+        default=None,
+        metavar="LANG",
+        help="报告输出语言（zh / en / ja / ko / fr / de / es / pt / ru / it，"
+        "默认取 .env 的 REPORT_LANG，再默认 zh）；转写稿保持源语言",
+    )
+    parser.add_argument(
         "--page",
         dest="page",
         type=int,
@@ -112,6 +120,7 @@ def _run_single(args: argparse.Namespace) -> int:
             keep_audio=args.keep_audio,
             asr_backend=args.asr_backend,
             force_asr=args.force_asr,
+            report_lang=args.lang,
             open_report=args.open_report,
             frames=args.frames,
             export_pdf=args.pdf,
