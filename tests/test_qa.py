@@ -222,3 +222,54 @@ def test_load_history_without_file_returns_empty(tmp_path: Path):
     run_dir.mkdir(parents=True)
 
     assert qa.load_history(run_dir) == []
+
+
+def test_delete_history_removes_only_the_target(tmp_path: Path):
+    run_dir = write_run(tmp_path, [unit(1, 0.0, "转写正文")])
+    for question in ("第一问", "第二问", "第三问"):
+        qa.append_history(
+            run_dir,
+            question,
+            qa.Answer(answer_html=f"<p>{question}</p>", citations=[], usage_total=0),
+        )
+
+    removed = qa.delete_history(run_dir, 1)
+
+    assert removed is not None
+    assert removed["question"] == "第二问"
+    assert [item["question"] for item in qa.load_history(run_dir)] == ["第一问", "第三问"]
+    assert not (run_dir / "qa.jsonl.tmp").exists()
+
+
+def test_delete_history_counts_only_valid_records(tmp_path: Path):
+    run_dir = write_run(tmp_path, [unit(1, 0.0, "转写正文")])
+    path = run_dir / "qa.jsonl"
+    path.write_text(
+        '{"ts": "t", "question": "第一问", "answer_html": "<p>a</p>"}\n'
+        "{ 这不是 JSON\n"
+        '{"ts": "t", "question": "第二问", "answer_html": "<p>b</p>"}\n',
+        encoding="utf-8",
+    )
+
+    removed = qa.delete_history(run_dir, 1)
+
+    assert removed is not None
+    assert removed["question"] == "第二问"
+    assert "这不是 JSON" in path.read_text(encoding="utf-8"), "损坏行原样保留，不参与下标"
+    assert [item["question"] for item in qa.load_history(run_dir)] == ["第一问"]
+
+
+def test_delete_history_out_of_range_returns_none(tmp_path: Path):
+    run_dir = write_run(tmp_path, [unit(1, 0.0, "转写正文")])
+
+    assert qa.delete_history(run_dir, 0) is None, "没有 qa.jsonl 时视为不存在"
+
+    qa.append_history(
+        run_dir,
+        "唯一一问",
+        qa.Answer(answer_html="<p>a</p>", citations=[], usage_total=0),
+    )
+
+    assert qa.delete_history(run_dir, 1) is None
+    assert qa.delete_history(run_dir, -1) is None
+    assert len(qa.load_history(run_dir)) == 1

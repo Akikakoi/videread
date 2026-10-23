@@ -1280,6 +1280,41 @@ def test_qa_history_empty_without_file(tmp_path: Path):
     assert body == {"run_id": RUN_ID, "history": []}
 
 
+def test_qa_delete_removes_record_and_reindexes(tmp_path: Path):
+    make_run(tmp_path, RUN_ID)
+    with (tmp_path / RUN_ID / "qa.jsonl").open("w", encoding="utf-8") as handle:
+        for question in ("第一问", "第二问"):
+            handle.write(
+                json.dumps(
+                    {"ts": "t", "question": question, "answer_html": "<p>x</p>"},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+    with TestClient(create_app(tmp_path)) as client:
+        resp = client.delete(f"/api/runs/{RUN_ID}/qa/0")
+        history = client.get(f"/api/runs/{RUN_ID}/qa").json()["history"]
+
+    assert resp.status_code == 200
+    assert resp.json() == {"run_id": RUN_ID, "deleted": 0}
+    assert [item["question"] for item in history] == ["第二问"]
+
+
+def test_qa_delete_404_on_missing_record_or_run(tmp_path: Path):
+    make_run(tmp_path, RUN_ID)
+
+    with TestClient(create_app(tmp_path)) as client:
+        assert client.delete(f"/api/runs/{RUN_ID}/qa/0").status_code == 404, "没有 qa.jsonl"
+        assert client.delete("/api/runs/nope-00000000/qa/0").status_code == 404
+        (tmp_path / RUN_ID / "qa.jsonl").write_text(
+            json.dumps({"ts": "t", "question": "唯一一问", "answer_html": "<p>x</p>"}, ensure_ascii=False)
+            + "\n",
+            encoding="utf-8",
+        )
+        assert client.delete(f"/api/runs/{RUN_ID}/qa/9").status_code == 404
+
+
 def test_probe_surfaces_paywalled_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """付费内容：probe 返回结构化信号（前端据此禁用投递按钮），且带中文提示。"""
     snapshot = {

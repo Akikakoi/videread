@@ -71,7 +71,10 @@ a{color:inherit;}
 .dlg-btn{cursor:pointer;font-family:var(--mono);font-size:13px;letter-spacing:1.5px;transition:color var(--t),background var(--t);}
 .dlg-btn.ghost{border:0;background:none;color:var(--muted);padding:8px 2px;}
 .dlg-btn.ghost:hover{color:var(--ink);}
-.dlg-btn.solid{border:1.5px solid var(--accent);background:transparent;color:var(--accent);padding:9px 22px;border-radius:99px;}
+.dlg-btn.solid{
+  border:1.5px solid var(--accent);background:transparent;color:var(--accent);
+  padding:10px 24px;border-radius:2px;letter-spacing:2px;
+}
 .dlg-btn.solid:hover{background:var(--accent);color:var(--paper);}
 
 /* ---------- masthead ---------- */
@@ -128,7 +131,11 @@ section.block{padding:56px 0 0;}
 .chapters li{display:grid;grid-template-columns:30px 1fr;column-gap:16px;row-gap:3px;padding:16px 2px 14px;border-bottom:1px solid var(--hairline);align-items:baseline;}
 .chapters li .no{grid-row:1;font-family:var(--mono);font-size:12px;color:var(--faint);}
 .chapters li:hover .t,.chapters li:hover .no{color:var(--accent);}
-.chapters li .t,.chapters li .no{transition:color var(--t);}
+.chapters li .t{transition:color var(--t);}
+/* 悬停右移与往期目录同款；线留在 li 上，只移内容，避免下边线跟着抖动 */
+.chapters li .no{transition:color var(--t),transform var(--t) var(--ease);}
+.chapters .crow,.chapters .desc{transition:transform var(--t) var(--ease);}
+.chapters li:hover .no,.chapters li:hover .crow,.chapters li:hover .desc{transform:translateX(10px);}
 .chapters .crow{display:flex;align-items:baseline;justify-content:space-between;gap:18px;min-width:0;}
 .chapters .t{font-family:var(--serif);font-weight:500;font-size:16.5px;min-width:0;}
 .chapters .dur{font-family:var(--mono);font-size:11.5px;color:var(--muted);white-space:nowrap;flex-shrink:0;}
@@ -151,9 +158,19 @@ section.block{padding:56px 0 0;}
 .letters{margin-top:44px;border-top:2px solid var(--ink);padding-top:20px;}
 .letters h4{font-family:var(--mono);font-weight:400;font-size:12px;letter-spacing:3px;color:var(--muted);margin-bottom:6px;}
 .letter{padding:16px 0;border-bottom:1px solid var(--hairline);}
+.letter .l-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;}
+.letter .l-head .q{flex:1;min-width:0;}
+.letter .l-del{
+  flex-shrink:0;border:0;background:none;cursor:pointer;
+  color:var(--faint);font-family:var(--mono);font-size:11px;line-height:1.6;
+  padding:0 2px;transition:color var(--t-fast);
+}
+.letter .l-del:hover{color:var(--accent);}
+.letter .l-del:disabled{opacity:.4;cursor:default;}
 .letter .q{font-family:var(--serif);font-weight:500;font-size:16px;}
 .letter .q::before{content:"问 · ";font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:1px;}
 .letter .a{font-size:14.5px;color:var(--soft);margin-top:6px;}
+.letters-empty{font-size:13.5px;color:var(--faint);}
 /* 新到的来信一次性入场（历史回放不重播）：ask() 重绘后给最后一封加 .enter */
 .letter.enter{animation:letterIn var(--t) var(--ease) both;}
 @keyframes letterIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
@@ -247,7 +264,7 @@ section.block{padding:56px 0 0;}
 .pg-mid input:focus{border-color:var(--ink);}
 .pg-mid input::-webkit-outer-spin-button,.pg-mid input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
 .pg-mid input:disabled{color:var(--faint);}
-.pager button{border:1px solid var(--hairline);background:transparent;cursor:pointer;font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--ink);padding:7px 16px;border-radius:99px;transition:border-color var(--t),color var(--t);}
+.pager button{border:1px solid var(--hairline);background:transparent;cursor:pointer;font-family:var(--mono);font-size:12px;letter-spacing:1.5px;color:var(--ink);padding:7px 16px;border-radius:2px;transition:border-color var(--t),color var(--t);}
 .pager button:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
 .pager button:disabled{color:var(--faint);cursor:default;}
 .search-note{font-family:var(--mono);font-size:12px;color:var(--muted);padding:14px 2px 0;display:none;}
@@ -267,8 +284,9 @@ section.block{padding:56px 0 0;}
 .subline input::placeholder{color:var(--faint);}
 #btn-submit{
   font-family:var(--mono);font-size:13px;letter-spacing:2px;
-  background:var(--ink);color:var(--paper);border:0;border-radius:99px;
-  padding:14px 26px;cursor:pointer;white-space:nowrap;
+  background:transparent;color:var(--accent);
+  border:1.5px solid var(--accent);border-radius:2px;
+  padding:13px 25px;cursor:pointer;white-space:nowrap;
   transition:background var(--t),color var(--t);
 }
 #btn-submit:hover:not(:disabled){background:var(--accent);color:var(--paper);}
@@ -410,6 +428,8 @@ html.js .reveal.in{opacity:1;transform:none;}
   .act:hover{transform:none;}
   .toc a{transition:none;}
   .toc a:hover{transform:none;}
+  .chapters li .no,.chapters .crow,.chapters .desc{transition:none;}
+  .chapters li:hover .no,.chapters li:hover .crow,.chapters li:hover .desc{transform:none;}
   .side-nav a .dot{transition:none;}
   .side-nav a.on .dot{transform:none;}
   .theme-switch .knob,.theme-switch .track{transition:none;}

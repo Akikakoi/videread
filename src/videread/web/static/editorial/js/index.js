@@ -32,9 +32,19 @@ function toast(msg){
 
 /* ================= 确认弹窗（替代原生 confirm） ================= */
 let dlgResolve = null;
-function askDelete(runId, title){
-  /* 弹窗里只示视频标题，run_id 仅作兜底（标题缺失时才回落） */
-  $("#dlg-run").textContent = title || runId;
+let dlgKind = "run";
+/* 同一个 #veil 承担两种删除确认：整期与单封来信，文案随场景切换 */
+const DLG_COPY = {
+  run: {title: "撕掉这一期？", body: "该期的转写缓存、正文报告与问答历史将一并清除，删除后不可恢复。", cancel: "已取消删除，这一期先留着"},
+  letter: {title: "撕掉这封来信？", body: "这封来信与编辑部的回信将从本期档案中移除，删除后不可恢复。", cancel: "已取消删除，这封来信先留着"}
+};
+function askDelete(kind, subject){
+  const copy = DLG_COPY[kind] || DLG_COPY.run;
+  dlgKind = DLG_COPY[kind] ? kind : "run";
+  $("#dlg-title").textContent = copy.title;
+  $("#dlg-body").textContent = copy.body;
+  /* 弹窗里只示视频标题 / 来信问题，run_id 仅作兜底 */
+  $("#dlg-run").textContent = subject || "";
   $("#veil").classList.add("open");
   $("#veil").setAttribute("aria-hidden", "false");
   $("#dlg-confirm").focus();
@@ -46,7 +56,7 @@ function closeDlg(v){
   veil.classList.remove("open");
   veil.setAttribute("aria-hidden", "true");
   if(dlgResolve){ dlgResolve(v); dlgResolve = null; }
-  if(!v) toast("已取消删除，这一期先留着");
+  if(!v) toast((DLG_COPY[dlgKind] || DLG_COPY.run).cancel);
 }
 $("#dlg-cancel").addEventListener("click", () => closeDlg(false));
 $("#dlg-confirm").addEventListener("click", () => closeDlg(true));
@@ -233,7 +243,7 @@ async function openFeature(runId){
       '</div>' +
       '<div class="letters">' +
         '<h4>LETTERS · 致编辑部</h4>' +
-        '<div id="letters-list">' + (qa.history.length ? qa.history.map(renderLetter).join("") : '<p style="font-size:13.5px;color:var(--faint)">还没有来信。就这一期提个问题吧。</p>') + '</div>' +
+        '<div id="letters-list">' + (qa.history.length ? qa.history.map(renderLetter).join("") : LETTERS_EMPTY) + '</div>' +
         '<div class="askline"><input type="text" id="ask-input" placeholder="就本期内容提问，答案只依据转写稿…" aria-label="提问"><button id="btn-ask">寄出 →</button></div>' +
       '</div>' +
     '</article>';
@@ -248,24 +258,51 @@ async function openFeature(runId){
     li.addEventListener("click", () => openReaderPage(runId, parseInt(li.dataset.sec, 10)));
   });
   const askBtn = $("#btn-ask");
+  /* 事件委托：ask() 只重绘 #letters-list 内部，容器上的监听不会失效 */
+  $("#letters-list").addEventListener("click", e => {
+    const btn = e.target.closest(".l-del");
+    if(btn) deleteLetter(runId, btn);
+  });
   askBtn.addEventListener("click", () => ask(runId, askBtn));
   $("#ask-input").addEventListener("keydown", e => { if(e.key === "Enter") ask(runId, askBtn); });
 }
 
-function renderLetter(l){
-  const wrap = document.createElement("div");
-  wrap.className = "letter";
-  const q = document.createElement("p");
-  q.className = "q";
-  q.textContent = l.question || "";
-  wrap.appendChild(q);
-  /* 与原控制台同口径：answer_html 由服务端 sanitize_section_html 清洗后走 innerHTML */
-  const a = document.createElement("div");
-  a.className = "a";
-  a.innerHTML = l.answer_html || "";
-  wrap.appendChild(a);
+const LETTERS_EMPTY = '<p class="letters-empty">还没有来信。就这一期提个问题吧。</p>';
+
+function renderLetter(l, i){
+  /* 下标即 GET /qa 返回 history 的顺序，删除接口按同一下标定位；
+     离线演示插入的记录没有真实下标，不渲染删除钮 */
+  const del = Number.isInteger(i)
+    ? '<button class="l-del" data-letter="' + i + '" title="删除这封来信" aria-label="删除这封来信">✕</button>'
+    : "";
+  return '<div class="letter">' +
+    '<div class="l-head"><p class="q">' + esc(l.question || "") + '</p>' + del + '</div>' +
+    /* 与原控制台同口径：answer_html 由服务端 sanitize_section_html 清洗后走 innerHTML */
+    '<div class="a">' + (l.answer_html || "") + '</div>' +
+    '</div>';
   /* 引文胶囊（l.citations 的 §N 定位原文 / ▶ 时间戳）按需求暂时不渲染，需要时在此恢复 */
-  return wrap.outerHTML;
+}
+
+async function deleteLetter(runId, btn){
+  if(OFFLINE){ toast("离线演示模式，暂不支持删除"); return; }
+  const index = Number(btn.dataset.letter);
+  const letter = btn.closest(".letter");
+  const question = letter && letter.querySelector(".q") ? letter.querySelector(".q").textContent : "";
+  const ok = await askDelete("letter", question);
+  if(!ok) return;
+  btn.disabled = true;
+  try{
+    await del("/api/runs/" + encodeURIComponent(runId) + "/qa/" + index);
+    if(letter) letter.remove();
+    const list = $("#letters-list");
+    if(list && !list.querySelector(".letter")) list.innerHTML = LETTERS_EMPTY;
+    /* 服务端已重排下标；剩下的来信按 DOM 顺序回填，避免下一次删错条目 */
+    else if(list) list.querySelectorAll(".l-del").forEach((b, i) => { b.dataset.letter = i; });
+    toast("已撕掉这封来信");
+  }catch(err){
+    btn.disabled = false;
+    toast("删除失败：" + err.message);
+  }
 }
 
 async function toggleFav(runId, btn){
@@ -452,7 +489,7 @@ function bindToc(){
       const runId = b.dataset.delRun;
       const title = b.dataset.delTitle || runId;
       if(OFFLINE){ toast("离线演示模式，暂不支持删除"); return; }
-      const ok = await askDelete(runId, title);
+      const ok = await askDelete("run", title);
       if(!ok) return;
       try{
         await del("/api/runs/" + encodeURIComponent(runId));
@@ -697,6 +734,7 @@ function startRename(runId){
   const finish = save => {
     if(settled) return;
     settled = true;
+    delete h2.dataset.renaming;
     const val = input.value.trim();
     if(!save || !val || val === current){ h2.textContent = current; return; }
     h2.textContent = val; /* 乐观更新，失败回滚 */

@@ -432,6 +432,21 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="未找到该 run")
         return {"run_id": run_id, "history": qa.load_history(run_dir)}
 
+    @app.delete("/api/runs/{run_id}/qa/{index}")
+    def delete_qa_record(run_id: str, index: int) -> dict:
+        """删除一条历史问答；index 与 GET 返回的 history 下标一致（从 0 起）。
+
+        与提问共用同一把 run 锁，避免删除与追加并发时互相覆盖文件。
+        """
+        run_dir = library.safe_run_dir(out_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="未找到该 run")
+        with qa_lock(run_id):
+            removed = qa.delete_history(run_dir, index)
+        if removed is None:
+            raise HTTPException(status_code=404, detail="未找到这条提问记录")
+        return {"run_id": run_id, "deleted": index}
+
     # --------------------------------------------------------- 模型设置
 
     def _settings_payload() -> dict:

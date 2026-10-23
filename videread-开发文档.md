@@ -260,7 +260,7 @@ videread/
 {"ts": "2026-10-04 20:15:02", "question": "…", "answer_html": "…", "citations": [{"unit_id": "u0013", "seconds": 135.0, "time_text": "02:15", "snippet": "…", "section_id": "s1", "section_index": 1}], "usage_total": 1234}
 ```
 
-读取时损坏行跳过，不影响其余记录。
+读取时损坏行跳过，不影响其余记录。前端可逐条删除历史问答：按读取顺序删除第 N 条有效记录后，其余行（含损坏行）原样重写并原子替换文件。
 
 ### 5.7 `.favorites.json`
 
@@ -523,6 +523,7 @@ def retrieve(units, question, *, budget_chars=FULL_CONTEXT_BUDGET, top_k=TOP_K) 
 def answer_question(run_dir, question, *, settings=None, client=None) -> Answer
 def append_history(run_dir, question, answer) -> Path   # 追加 qa.jsonl
 def load_history(run_dir) -> list[dict]
+def delete_history(run_dir, index) -> dict | None      # 按读取顺序删一条并原子重写
 ```
 
 要点：
@@ -555,6 +556,7 @@ def load_history(run_dir) -> list[dict]
 | `POST /api/runs/{run_id}/title` | 改报告库展示标题（写 `<out>/.titles.json`，§5.8）：标题非空白即覆盖（上限 200 字，超长 400），空白恢复原标题；返回 `{run_id, title, title_original, custom}`，run 不存在返回 404 |
 | `POST /api/runs/{run_id}/qa` | 就指定报告提问，返回答案 HTML 与引用，并追加 `qa.jsonl` |
 | `GET /api/runs/{run_id}/qa` | 读取该报告的问答历史 |
+| `DELETE /api/runs/{run_id}/qa/{index}` | 删除一条历史问答；`index` 与 GET 返回的 `history` 下标一致（从 0 起），越界 / 无记录返回 404，与提问共用 run 锁 |
 
 主题偏好（浅色 / 深色 / 自动跟随系统）为纯客户端能力，无对应接口：偏好存浏览器 `localStorage`（键 `videread.theme`），`<head>` 内联脚本在首屏渲染前落地 `<html data-theme>`（防闪白），深色令牌组「深夜印刷间」（深纸底 / 暖白字 / 强调红提亮）在三个页面 CSS 的 `[data-theme="dark"]` 整组覆盖；`js/theme.js` 三页共享，负责报头按钮三档循环、系统变化跟随与切换瞬间禁用全站过渡（防颜色闪烁）。换浏览器 / 清缓存后偏好丢失，属预期。
 

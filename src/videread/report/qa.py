@@ -282,3 +282,41 @@ def load_history(run_dir: Path) -> list[dict]:
         if isinstance(item, dict):
             items.append(item)
     return items
+
+
+def delete_history(run_dir: Path, index: int) -> dict | None:
+    """删除 `load_history` 顺序里的第 `index` 条问答并原子重写文件。
+
+    损坏行原样保留（读取时本就跳过）；越界、文件缺失或不可读返回 None。
+    """
+    path = Path(run_dir) / "qa.jsonl"
+    if not path.is_file():
+        return None
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    valid = 0
+    for line_no, line in enumerate(lines):
+        raw = line.strip()
+        if not raw:
+            continue
+        try:
+            item = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(item, dict):
+            continue
+        if valid == index:
+            _write_history(path, lines[:line_no] + lines[line_no + 1 :])
+            return item
+        valid += 1
+    return None
+
+
+def _write_history(path: Path, lines: list[str]) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+        for line in lines:
+            handle.write(line + "\n")
+    tmp.replace(path)
