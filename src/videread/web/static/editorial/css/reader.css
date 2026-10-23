@@ -1,28 +1,4 @@
-:root{
-  --paper:#FAF7F1; --paper-deep:#F3EEE3;
-  --ink:#17140E; --muted:#6E675A; --faint:#A39B8A;
-  --lead:#2E2A20; --body:#26221A;
-  --hairline:#D9D2C2; --accent:#A6331E;
-  --serif:"Fraunces","Noto Serif SC","Source Han Serif SC","Songti SC","STZhongsong","SimSun",serif;
-  --sans:"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
-  --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Consolas,monospace;
-  --ease:cubic-bezier(.22,.61,.36,1);--t-fast:.18s;--t:.28s;--t-slow:.8s;
-}
-
-/* ── 深夜印刷间：深色主题令牌 ── */
-html[data-theme="dark"]{
-  --paper:#14120E; --paper-deep:#1C1914;
-  --ink:#EDE6D6; --muted:#A89F8C; --faint:#6E675A;
-  --lead:#E2D9C4; --body:#DCD3BE;
-  --hairline:#3A352B; --accent:#D0563C;
-}
-html.theme-switching *,html.theme-switching *::before,html.theme-switching *::after{transition:none!important;}
-
-*{margin:0;padding:0;box-sizing:border-box;}
-html{scroll-behavior:smooth;}
-body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.75;-webkit-font-smoothing:antialiased;}
-::selection{background:var(--accent);color:var(--paper);}
-#progress{position:fixed;top:0;left:0;height:2px;width:0;background:var(--accent);z-index:9;}
+#progress{z-index:9;}
 
 .bar{
   position:sticky;top:0;z-index:5;background:var(--paper);border-bottom:1px solid var(--hairline);
@@ -32,13 +8,6 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 }
 .bar .back{border:0;background:none;cursor:pointer;font-family:var(--mono);font-size:13px;letter-spacing:2px;color:var(--ink);padding:0;text-decoration:none;transition:color var(--t) var(--ease);}
 .bar .back:hover{color:var(--accent);}
-/* 主题开关：滑块跟随实际外观（浅左深右），右侧文字显示三档状态名；点击仍按 浅→深→自动 循环 */
-.theme-switch{display:inline-flex;align-items:center;gap:8px;border:0;background:none;cursor:pointer;font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--ink);padding:0;}
-.theme-switch .track{flex:none;width:34px;height:18px;border:1px solid var(--muted);border-radius:99px;position:relative;transition:background var(--t),border-color var(--t);}
-.theme-switch .knob{position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--muted);transition:transform var(--t),background var(--t);}
-.theme-switch[data-appearance="dark"] .track{background:var(--ink);border-color:var(--ink);}
-.theme-switch[data-appearance="dark"] .knob{transform:translateX(16px);background:var(--paper);}
-.theme-switch:hover .theme-label{color:var(--accent);}
 .bar .rp{flex:1;font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
 .page{max-width:760px;margin:0 auto;padding:56px 32px 120px;}
@@ -116,7 +85,6 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
 .report-nav-link.is-active{color:var(--accent);font-weight:500;border-left-color:var(--accent);}
 @media (max-width:1180px){ .report-nav{display:none;} }
 
-@media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto;} .theme-switch .knob,.theme-switch .track{transition:none;} }
 /* ---------- B3 跨列规则的窄屏分档：列数变化时同步换算 ----------
    ≤700px 两列：先重置 3 列档的跨列，再按余 1（2n+1）跨满；
    ≤520px 单列：全部重置，单列下无需跨列。 */
@@ -133,25 +101,6 @@ body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:
    无头浏览器整页截图：隐藏纯交互件（进度条 / 主题钮 / 悬浮导航），
    报头与页脚是版式的一部分，保留。 */
 html.png-mode #progress{display:none;}
-html.png-mode .bar .theme-btn{display:none;}
+html.png-mode .bar .theme-switch{display:none;}
 html.png-mode .report-nav{display:none;}
 @media (max-width:640px){ .page{padding:40px 20px 96px;} .bar{padding:12px 20px;} }
-
-/* ---------- 页面级滚动条：装订线打孔 + 红色游标 ----------
-   轨道 = 一列打孔圆点（骑马钉装订边），滑块 = 红色游标（上下留隙） ---------- */
-::-webkit-scrollbar{width:9px;height:9px;}
-::-webkit-scrollbar-track{
-  background-image:radial-gradient(circle, var(--hairline) 1.6px, transparent 2.2px);
-  background-size:9px 28px;background-repeat:repeat-y;background-position:center;
-}
-::-webkit-scrollbar:horizontal{
-  background-image:radial-gradient(circle, var(--hairline) 1.6px, transparent 2.2px);
-  background-size:28px 9px;background-repeat:repeat-x;background-position:center;
-}
-::-webkit-scrollbar-thumb{
-  background:var(--accent);
-  border-top:3px solid transparent;border-bottom:3px solid transparent;
-  background-clip:padding-box;
-}
-::-webkit-scrollbar-thumb:hover{background:var(--ink);background-clip:padding-box;}
-html{scrollbar-width:thin;scrollbar-color:var(--accent) transparent;}

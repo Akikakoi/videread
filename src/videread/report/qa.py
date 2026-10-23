@@ -124,15 +124,6 @@ def retrieve(
 # ------------------------------------------------------------------ 读取
 
 
-def _read_json(path: Path) -> dict | None:
-    if not path.is_file():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-
-
 def _load_units(run_dir: Path) -> list[TranscriptUnit]:
     path = run_dir / "transcript.jsonl"
     if not path.is_file():

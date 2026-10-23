@@ -22,7 +22,7 @@ from ..config import (
 )
 from ..errors import AsrError, CancelledError
 from ..retry import retry_call
-from .base import AsrSegment, offset_segments, sort_segments, write_raw_jsonl
+from .base import AsrSegment, PartCacheMixin, offset_segments, sort_segments
 
 _UPLOAD_POLICY_PATH = "/uploads"
 _TRANSCRIPTION_PATH = "/services/audio/asr/transcription"
@@ -31,7 +31,7 @@ _POLL_INTERVAL = 2.0
 _POLL_MAX_INTERVAL = 10.0
 
 
-class DashScopeAsr:
+class DashScopeAsr(PartCacheMixin):
     """通义 Paraformer 实现。"""
 
     name = "dashscope"
@@ -159,33 +159,6 @@ class DashScopeAsr:
         directory = (self.cache_dir or audio.parent) / "asr_chunks"
         directory.mkdir(parents=True, exist_ok=True)
         return directory
-
-    def _part_path(self, index: int, start: float, end: float) -> Path | None:
-        if self.cache_dir is None:
-            return None
-        # 文件名带切段边界：静音点漂移导致切段点变化后，旧缓存自动失效，
-        # 不会把上一个音频的段错位拼进新结果
-        return self.cache_dir / f"asr.part.{index:03d}.{start:.0f}-{end:.0f}.jsonl"
-
-    def _read_part(self, index: int, start: float, end: float) -> list[AsrSegment] | None:
-        path = self._part_path(index, start, end)
-        if path is None or not path.is_file():
-            return None
-        from .base import load_raw_jsonl
-
-        try:
-            segments = load_raw_jsonl(path)
-        except AsrError:
-            return None
-        return segments or None
-
-    def _write_part(
-        self, index: int, segments: list[AsrSegment], start: float, end: float
-    ) -> None:
-        path = self._part_path(index, start, end)
-        if path is None:
-            return
-        write_raw_jsonl(segments, path)
 
     # ------------------------------------------------------------------ HTTP
 

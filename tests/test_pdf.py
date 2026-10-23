@@ -138,7 +138,7 @@ def test_export_pdf_reports_missing_browser(tmp_path: Path, monkeypatch: pytest.
 
 
 def test_web_pdf_endpoint_uses_cached_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    from tests.test_web import make_run, RUN_ID, REPORT_HTML
+    from tests.test_web import make_run, RUN_ID
 
     make_run(tmp_path, RUN_ID)
     generated: list = []

@@ -1,0 +1,78 @@
+/* 编辑部三页共用基础层：主题令牌、重置、主题开关、toast 与滚动条。
+   页面级版式（报头、正文、栏宽等）留在各自的 css 里。 */
+:root{
+  --paper:#FAF7F1; --paper-deep:#F3EEE3;
+  --ink:#17140E; --muted:#6E675A; --faint:#A39B8A;
+  --lead:#2E2A20; --soft:#3A352A; --body:#26221A;
+  --hairline:#D9D2C2; --accent:#A6331E;
+  --serif:"Fraunces","Noto Serif SC","Source Han Serif SC","Songti SC","STZhongsong","SimSun",serif;
+  --sans:"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Consolas,monospace;
+  --ease:cubic-bezier(.22,.61,.36,1);--t-fast:.18s;--t:.28s;--t-slow:.8s;
+  --ok:#2E6B4F;
+}
+
+/* ── 深夜印刷间：深色主题令牌（浅色配方整体翻转，强调红提亮保对比）── */
+html[data-theme="dark"]{
+  --paper:#14120E; --paper-deep:#1C1914;
+  --ink:#EDE6D6; --muted:#A89F8C; --faint:#6E675A;
+  --lead:#E2D9C4; --soft:#B8AF9C; --body:#DCD3BE;
+  --hairline:#3A352B; --accent:#D0563C; --ok:#6FB98C;
+}
+html.theme-switching *,html.theme-switching *::before,html.theme-switching *::after{transition:none!important;}
+
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  background:var(--paper);color:var(--ink);
+  font-family:var(--sans);font-size:16px;line-height:1.75;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent);color:var(--paper);}
+#progress{position:fixed;top:0;left:0;height:2px;width:0;background:var(--accent);}
+
+/* 主题开关：滑块跟随实际外观（浅左深右），右侧文字显示档位名 */
+.theme-switch{display:inline-flex;align-items:center;gap:8px;border:0;background:none;cursor:pointer;font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--ink);padding:0;}
+.theme-switch .track{flex:none;width:34px;height:18px;border:1px solid var(--muted);border-radius:99px;position:relative;transition:background var(--t),border-color var(--t);}
+.theme-switch .knob{position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--muted);transition:transform var(--t),background var(--t);}
+.theme-switch[data-appearance="dark"] .track{background:var(--ink);border-color:var(--ink);}
+.theme-switch[data-appearance="dark"] .knob{transform:translateX(16px);background:var(--paper);}
+.theme-switch:hover .theme-label{color:var(--accent);}
+
+/* ---------- toast（主页 / 工单页） ---------- */
+#toast{
+  position:fixed;right:24px;bottom:24px;z-index:98;
+  background:var(--ink);color:var(--paper);
+  font-family:var(--mono);font-size:12.5px;letter-spacing:.5px;
+  padding:12px 18px;max-width:360px;display:none;
+  border-left:3px solid var(--accent);
+  animation:toastIn var(--t) var(--ease) both;
+}
+#toast.out{animation:toastOut .28s var(--ease) both;}
+@keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes toastOut{from{opacity:1;transform:none}to{opacity:0;transform:translateY(-8px)}}
+
+@media (prefers-reduced-motion: reduce){
+  html{scroll-behavior:auto;}
+  .theme-switch .knob,.theme-switch .track{transition:none;}
+  #toast,#toast.out{animation:none;}
+}
+
+/* ---------- 页面级滚动条：装订线打孔 + 红色游标 ----------
+   轨道 = 一列打孔圆点（骑马钉装订边），滑块 = 红色游标（上下留隙） ---------- */
+::-webkit-scrollbar{width:9px;height:9px;}
+::-webkit-scrollbar-track{
+  background-image:radial-gradient(circle, var(--hairline) 1.6px, transparent 2.2px);
+  background-size:9px 28px;background-repeat:repeat-y;background-position:center;
+}
+::-webkit-scrollbar:horizontal{
+  background-image:radial-gradient(circle, var(--hairline) 1.6px, transparent 2.2px);
+  background-size:28px 9px;background-repeat:repeat-x;background-position:center;
+}
+::-webkit-scrollbar-thumb{
+  background:var(--accent);
+  border-top:3px solid transparent;border-bottom:3px solid transparent;
+  background-clip:padding-box;
+}
+::-webkit-scrollbar-thumb:hover{background:var(--ink);background-clip:padding-box;}
+html{scrollbar-width:thin;scrollbar-color:var(--accent) transparent;}

@@ -34,7 +34,7 @@ from ..audio import cut_segment, detect_silence, plan_chunks, probe_duration
 from ..config import ASR_REALTIME_SEGMENT_SECONDS, Settings
 from ..errors import AsrError, CancelledError
 from ..retry import retry_call
-from .base import AsrSegment, offset_segments, sort_segments, write_raw_jsonl
+from .base import AsrSegment, PartCacheMixin, offset_segments, sort_segments
 
 # 实时接口与异步接口不在同一个路径下：/api/v1 → /api-ws/v1/inference
 _ASYNC_PATH_SUFFIX = "/api/v1"
@@ -73,7 +73,7 @@ def realtime_url(base_url: str) -> str:
     return f"{base}{_WS_PATH_SUFFIX}"
 
 
-class DashScopeRealtimeAsr:
+class DashScopeRealtimeAsr(PartCacheMixin):
     """通义 Paraformer 实时（WebSocket）实现。"""
 
     name = "dashscope-realtime"
@@ -399,34 +399,6 @@ class DashScopeRealtimeAsr:
         if failure:
             raise AsrError(f"实时 ASR 任务失败：{failure[0]}")
         return collected + tail
-
-    # ------------------------------------------------------------------ 缓存
-
-    def _part_path(self, index: int, start: float, end: float) -> Path | None:
-        if self.cache_dir is None:
-            return None
-        # 文件名带切段边界：静音点漂移导致切段点变化后，旧缓存自动失效
-        return self.cache_dir / f"asr.part.{index:03d}.{start:.0f}-{end:.0f}.jsonl"
-
-    def _read_part(self, index: int, start: float, end: float) -> list[AsrSegment] | None:
-        path = self._part_path(index, start, end)
-        if path is None or not path.is_file():
-            return None
-        from .base import load_raw_jsonl
-
-        try:
-            segments = load_raw_jsonl(path)
-        except AsrError:
-            return None
-        return segments or None
-
-    def _write_part(
-        self, index: int, segments: list[AsrSegment], start: float, end: float
-    ) -> None:
-        path = self._part_path(index, start, end)
-        if path is not None:
-            write_raw_jsonl(segments, path)
-
 
 def _seconds(value: float | int | str | None) -> float:
     """服务端时间戳（毫秒）→ 秒；中间结果里可能是 None，此时返回 0.0。"""

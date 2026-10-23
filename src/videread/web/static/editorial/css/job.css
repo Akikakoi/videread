@@ -1,29 +1,4 @@
-:root{
-  --paper:#FAF7F1; --paper-deep:#F3EEE3;
-  --ink:#17140E; --muted:#6E675A; --faint:#A39B8A;
-  --hairline:#D9D2C2; --accent:#A6331E;
-  --serif:"Fraunces","Noto Serif SC","Source Han Serif SC","Songti SC","STZhongsong","SimSun",serif;
-  --sans:"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
-  --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Consolas,monospace;
-  --ease:cubic-bezier(.22,.61,.36,1);--t-fast:.18s;--t:.28s;--t-slow:.8s;
-  --ok:#2E6B4F;
-}
-
-/* ── 深夜印刷间：深色主题令牌（浅色配方整体翻转，强调红提亮保对比）── */
-html[data-theme="dark"]{
-  --paper:#14120E; --paper-deep:#1C1914;
-  --ink:#EDE6D6; --muted:#A89F8C; --faint:#6E675A;
-  --hairline:#3A352B; --accent:#D0563C; --ok:#6FB98C;
-}
-html.theme-switching *,html.theme-switching *::before,html.theme-switching *::after{transition:none!important;}
-
-*{box-sizing:border-box;}
-html{scroll-behavior:smooth;}
-body{
-  margin:0;background:var(--paper);color:var(--ink);
-  font-family:var(--sans);font-size:15px;line-height:1.7;
-  -webkit-font-smoothing:antialiased;
-}
+body{font-size:15px;line-height:1.7;}
 .wrap{max-width:1016px;margin:0 auto;padding:0 32px;}
 
 /* ---------- 报头（工单页精简版） ----------
@@ -36,13 +11,6 @@ header{padding:34px 0 0;}
 .masthead nav{display:flex;align-items:center;gap:20px;}
 .masthead nav a{font-size:13px;color:var(--muted);text-decoration:none;letter-spacing:1px;transition:color var(--t);}
 .masthead nav a:hover{color:var(--accent);}
-/* 主题开关：滑块跟随实际外观（浅左深右），右侧文字显示三档状态名；点击仍按 浅→深→自动 循环 */
-.theme-switch{display:inline-flex;align-items:center;gap:8px;border:0;background:none;cursor:pointer;font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--ink);padding:0;}
-.theme-switch .track{flex:none;width:34px;height:18px;border:1px solid var(--muted);border-radius:99px;position:relative;transition:background var(--t),border-color var(--t);}
-.theme-switch .knob{position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--muted);transition:transform var(--t),background var(--t);}
-.theme-switch[data-appearance="dark"] .track{background:var(--ink);border-color:var(--ink);}
-.theme-switch[data-appearance="dark"] .knob{transform:translateX(16px);background:var(--paper);}
-.theme-switch:hover .theme-label{color:var(--accent);}
 
 /* ---------- 工单主体 ---------- */
 .rubric{font-family:var(--mono);font-size:11px;letter-spacing:3px;color:var(--faint);text-transform:uppercase;}
@@ -96,29 +64,13 @@ h1{
 .act.danger:hover{color:var(--accent);}
 .job-err{color:var(--accent);font-size:14px;}
 
-/* ---------- toast ---------- */
-#toast{
-  position:fixed;right:24px;bottom:24px;z-index:98;
-  background:var(--ink);color:var(--paper);
-  font-family:var(--mono);font-size:12.5px;letter-spacing:.5px;
-  padding:12px 18px;max-width:360px;display:none;
-  border-left:3px solid var(--accent);
-  animation:toastIn var(--t) var(--ease) both;
-}
-#toast.out{animation:toastOut .28s var(--ease) both;}
-@keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-@keyframes toastOut{from{opacity:1;transform:none}to{opacity:0;transform:translateY(-8px)}}
-
 @media (max-width:860px){
   h1{font-size:30px;}
   .wrap{padding:0 20px;}
 }
 @media (prefers-reduced-motion: reduce){
-  html{scroll-behavior:auto;}
   .act:hover{transform:none;}
   .stepper li.pop .mark{animation:none;}
-  #toast,#toast.out{animation:none;}
-  .theme-switch .knob,.theme-switch .track{transition:none;}
 }
 
 /* ---------- 细滚条（编辑风） ---------- */
@@ -127,22 +79,3 @@ h1{
 .proof::-webkit-scrollbar-thumb{background:var(--hairline);border-radius:4px;}
 .proof::-webkit-scrollbar-thumb:hover{background:var(--muted);}
 .proof{scrollbar-width:thin;scrollbar-color:var(--hairline) transparent;}
-
-/* ---------- 页面级滚动条：装订线打孔 + 红色游标 ----------
-   轨道 = 一列打孔圆点（骑马钉装订边），滑块 = 红色游标（上下留隙） ---------- */
-::-webkit-scrollbar{width:9px;height:9px;}
-::-webkit-scrollbar-track{
-  background-image:radial-gradient(circle, var(--hairline) 1.6px, transparent 2.2px);
-  background-size:9px 28px;background-repeat:repeat-y;background-position:center;
-}
-::-webkit-scrollbar:horizontal{
-  background-image:radial-gradient(circle, var(--hairline) 1.6px, transparent 2.2px);
-  background-size:28px 9px;background-repeat:repeat-x;background-position:center;
-}
-::-webkit-scrollbar-thumb{
-  background:var(--accent);
-  border-top:3px solid transparent;border-bottom:3px solid transparent;
-  background-clip:padding-box;
-}
-::-webkit-scrollbar-thumb:hover{background:var(--ink);background-clip:padding-box;}
-html{scrollbar-width:thin;scrollbar-color:var(--accent) transparent;}

@@ -25,7 +25,6 @@ DEFAULT_OUT_ROOT = PROJECT_ROOT / "runs"
 # --- 超时与上限（§12 Windows 落地清单）---
 LLM_TIMEOUT_SEC = 180.0
 ASR_SEGMENT_TIMEOUT_SEC = 600.0
-PIPELINE_TIMEOUT_SEC = 20 * 60
 MAX_VIDEO_DURATION_SEC = 2 * 3600
 
 # 单次提交云 ASR 的音频时长上限；超过则按静音点切段并行提交（§6.5）
@@ -78,7 +77,6 @@ def lang_display_name(code: str) -> str:
 FRAMES_ENABLED = False
 FRAME_MAX_TOTAL = 16      # 全片截图上限，超出按节顺序截断
 FRAME_CLIP_SECONDS = 5.0  # 每个截图点定点拉取的视频时长
-FRAME_SOURCE_HEIGHT = 720  # 拉取的视频轨最大高度（抽帧后缩到 FRAME_WIDTH 需要 ≥960 源宽）
 FRAME_WIDTH = 960          # 输出图片宽度（等比缩放）
 FRAME_JPEG_QUALITY = 4     # ffmpeg mjpeg -q:v（2 最优、数值越大越差，4 ≈ JPEG 80）
 FRAME_LEAD_IN = 1.0        # 定点片段向前多取的秒数，用于抵消关键帧对齐误差

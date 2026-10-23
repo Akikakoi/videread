@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -41,6 +42,94 @@ def _inject_measure_script(html: str) -> str:
     return html[:idx] + script + html[idx:]
 
 
+def _require_browser(settings: Settings | None) -> str:
+    browser = find_browser(settings)
+    if browser is None:
+        raise PngError(
+            "未找到 Edge / Chrome，无法导出长图。"
+            "请安装 Microsoft Edge，或用 PDF_BROWSER_BIN 指定浏览器路径"
+        )
+    return browser
+
+
+def _run_browser(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    return execution.run_command(
+        cmd,
+        timeout=PDF_TIMEOUT_SEC,
+        error_cls=PngError,
+        missing_message=lambda program: f"浏览器启动失败（{program} 已不存在）",
+        timeout_message=lambda seconds, _program: f"长图导出超时（{seconds:.0f}s）",
+    )
+
+
+def _browser_cmd(browser: str, profile: str, *extra: str) -> list[str]:
+    return [
+        browser,
+        "--headless",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--hide-scrollbars",
+        f"--user-data-dir={profile}",
+        *extra,
+    ]
+
+
+def _parse_height(stdout: str) -> int:
+    """从 dump 出的 DOM 标题里读测高标记；缺失时退回兜底高度而不是失败。"""
+    match = re.search(_MEASURE_MARK + r"(\d+)", stdout)
+    if not match:
+        return _FALLBACK_HEIGHT
+    return min(max(int(match.group(1)), 400), _MAX_HEIGHT)
+
+
+def _dump_height(
+    target: str, width: int, browser: str, profile: str, *, extra: tuple[str, ...] = ()
+) -> int:
+    """第一趟：同宽视口下让页面把内容高度写进标题，再 dump 出来读。"""
+    result = _run_browser(
+        _browser_cmd(
+            browser,
+            profile,
+            *extra,
+            f"--window-size={width},800",
+            "--dump-dom",
+            target,
+        )
+    )
+    return _parse_height(result.stdout or "")
+
+
+def _screenshot(
+    target: str,
+    out_png: Path,
+    width: int,
+    height: int,
+    browser: str,
+    profile: str,
+    *,
+    extra: tuple[str, ...] = (),
+) -> None:
+    """第二趟：按测得高度开窗截图，并校验产物确为 PNG。"""
+    result = _run_browser(
+        _browser_cmd(
+            browser,
+            profile,
+            *extra,
+            f"--screenshot={out_png}",
+            f"--window-size={width},{height}",
+            target,
+        )
+    )
+    if result.returncode not in (0, None) and not _valid_png(out_png):
+        raise PngError(
+            f"长图导出失败（退出码 {result.returncode}）："
+            f"{result.stderr.strip()[-500:]}"
+        )
+    if not _valid_png(out_png):
+        raise PngError(f"长图导出失败：浏览器未产出有效文件 {out_png}")
+
+
 def _measure_height(html_path: Path, width: int, browser: str, profile: str) -> int:
     """第一趟：同宽视口下测出报告内容的实际像素高度。"""
     temp_dir = Path(tempfile.mkdtemp(prefix="videread-png-"))
@@ -50,31 +139,9 @@ def _measure_height(html_path: Path, width: int, browser: str, profile: str) -> 
             expand_details(_inject_measure_script(html_path.read_text(encoding="utf-8"))),
             encoding="utf-8",
         )
-        result = execution.run_command(
-            [
-                browser,
-                "--headless",
-                "--disable-gpu",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--hide-scrollbars",
-                f"--user-data-dir={profile}",
-                f"--window-size={width},800",
-                "--dump-dom",
-                copy.resolve().as_uri(),
-            ],
-            timeout=PDF_TIMEOUT_SEC,
-            error_cls=PngError,
-            missing_message=lambda program: f"浏览器启动失败（{program} 已不存在）",
-            timeout_message=lambda seconds, _program: f"长图导出超时（{seconds:.0f}s）",
-        )
-        match = re.search(_MEASURE_MARK + r"(\d+)", result.stdout or "")
-        if match:
-            return min(max(int(match.group(1)), 400), _MAX_HEIGHT)
+        return _dump_height(copy.resolve().as_uri(), width, browser, profile)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
-    # 注入被模板结构破坏、浏览器过老不支持等：退回兜底高度而不是失败
-    return _FALLBACK_HEIGHT
 
 
 def export_png(html_path: Path, out_png: Path, settings: Settings | None = None, width: int = PNG_WIDTH) -> Path:
@@ -86,12 +153,7 @@ def export_png(html_path: Path, out_png: Path, settings: Settings | None = None,
     if out_png.is_file() and out_png.stat().st_mtime >= html_path.stat().st_mtime:
         return out_png
 
-    browser = find_browser(settings)
-    if browser is None:
-        raise PngError(
-            "未找到 Edge / Chrome，无法导出长图。"
-            "请安装 Microsoft Edge，或用 PDF_BROWSER_BIN 指定浏览器路径"
-        )
+    browser = _require_browser(settings)
 
     # 两趟共用一个独立临时用户数据目录，避免与正在运行的浏览器冲突
     profile = tempfile.mkdtemp(prefix="videread-png-")
@@ -103,36 +165,12 @@ def export_png(html_path: Path, out_png: Path, settings: Settings | None = None,
     )
     try:
         height = _measure_height(html_path, width, browser, profile)
-        cmd = [
-            browser,
-            "--headless",
-            "--disable-gpu",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--hide-scrollbars",
-            f"--user-data-dir={profile}",
-            f"--screenshot={out_png}",
-            f"--window-size={width},{height}",
-            shot_html.resolve().as_uri(),
-        ]
-        result = execution.run_command(
-            cmd,
-            timeout=PDF_TIMEOUT_SEC,
-            error_cls=PngError,
-            missing_message=lambda program: f"浏览器启动失败（{program} 已不存在）",
-            timeout_message=lambda seconds, _program: f"长图导出超时（{seconds:.0f}s）",
+        _screenshot(
+            shot_html.resolve().as_uri(), out_png, width, height, browser, profile
         )
-        if result.returncode not in (0, None) and not _valid_png(out_png):
-            raise PngError(
-                f"长图导出失败（退出码 {result.returncode}）："
-                f"{result.stderr.strip()[-500:]}"
-            )
     finally:
         shutil.rmtree(profile, ignore_errors=True)
         shutil.rmtree(temp_dir, ignore_errors=True)
-
-    if not _valid_png(out_png):
-        raise PngError(f"长图导出失败：浏览器未产出有效文件 {out_png}")
     return out_png
 
 
@@ -160,56 +198,17 @@ def export_reader_png(
     ):
         return out_png
 
-    browser = find_browser(settings)
-    if browser is None:
-        raise PngError(
-            "未找到 Edge / Chrome，无法导出长图。"
-            "请安装 Microsoft Edge，或用 PDF_BROWSER_BIN 指定浏览器路径"
-        )
+    browser = _require_browser(settings)
 
     profile = tempfile.mkdtemp(prefix="videread-png-reader-")
-    base_flags = [
-        browser,
-        "--headless",
-        "--disable-gpu",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--hide-scrollbars",
-        f"--user-data-dir={profile}",
-        f"--virtual-time-budget={_READER_BUDGET_MS}",
-    ]
+    extra = (f"--virtual-time-budget={_READER_BUDGET_MS}",)
     try:
         # 第一趟：同宽视口下等拼版完成，从 dump 出的 <title> 里读测高标记
-        result = execution.run_command(
-            base_flags + [f"--window-size={width},800", "--dump-dom", page_url],
-            timeout=PDF_TIMEOUT_SEC,
-            error_cls=PngError,
-            missing_message=lambda program: f"浏览器启动失败（{program} 已不存在）",
-            timeout_message=lambda seconds, _program: f"长图导出超时（{seconds:.0f}s）",
-        )
-        match = re.search(_MEASURE_MARK + r"(\d+)", result.stdout or "")
-        height = _FALLBACK_HEIGHT
-        if match:
-            height = min(max(int(match.group(1)), 400), _MAX_HEIGHT)
-
+        height = _dump_height(page_url, width, browser, profile, extra=extra)
         # 第二趟：按测得高度开窗整页截图
-        result = execution.run_command(
-            base_flags + [f"--screenshot={out_png}", f"--window-size={width},{height}", page_url],
-            timeout=PDF_TIMEOUT_SEC,
-            error_cls=PngError,
-            missing_message=lambda program: f"浏览器启动失败（{program} 已不存在）",
-            timeout_message=lambda seconds, _program: f"长图导出超时（{seconds:.0f}s）",
-        )
-        if result.returncode not in (0, None) and not _valid_png(out_png):
-            raise PngError(
-                f"长图导出失败（退出码 {result.returncode}）："
-                f"{result.stderr.strip()[-500:]}"
-            )
+        _screenshot(page_url, out_png, width, height, browser, profile, extra=extra)
     finally:
         shutil.rmtree(profile, ignore_errors=True)
-
-    if not _valid_png(out_png):
-        raise PngError(f"长图导出失败：浏览器未产出有效文件 {out_png}")
     return out_png
 
 

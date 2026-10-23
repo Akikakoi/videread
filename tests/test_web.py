@@ -1128,55 +1128,6 @@ def test_probe_reports_existing_run(tmp_path: Path):
     assert "existing_run" not in response.json()
 
 
-def test_probe_reports_existing_run(tmp_path: Path):
-    """已解析过的视频：probe 带上 existing_run（含最新一份的报告入口）。"""
-    from videread import download as dl
-
-    run_dir = tmp_path / dl.make_run_id(URL, "BV1xx411c7mD")
-    run_dir.mkdir(parents=True)
-    (run_dir / "meta.json").write_text(
-        json.dumps(
-            {
-                "bvid": "BV1xx411c7mD",
-                "title": "示例视频",
-                "uploader": "某UP主",
-                "duration": 1234.0,
-                "url": URL,
-                "cover": "",
-                "description": "",
-                "subtitles": [],
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    (run_dir / "report.html").write_text("<html><body>r</body></html>", encoding="utf-8")
-
-    monkeypatch = pytest.MonkeyPatch()
-    try:
-        monkeypatch.setattr(probe.download, "fetch_video_info", lambda *_a, **_k: None)
-        with TestClient(create_app(tmp_path)) as client:
-            response = client.post("/api/probe", json={"url": URL})
-    finally:
-        monkeypatch.undo()
-
-    body = response.json()
-    assert body["existing_run"]["run_id"] == run_dir.name
-    assert body["existing_run"]["report_url"] == f"/report/{run_dir.name}"
-    assert body["existing_run"]["generated_at"]
-
-    # 没有报告产物（只跑了一半）不算已解析
-    (run_dir / "report.html").unlink()
-    monkeypatch = pytest.MonkeyPatch()
-    try:
-        monkeypatch.setattr(probe.download, "fetch_video_info", lambda *_a, **_k: None)
-        with TestClient(create_app(tmp_path)) as client:
-            response = client.post("/api/probe", json={"url": URL})
-    finally:
-        monkeypatch.undo()
-    assert "existing_run" not in response.json()
-
-
 
 # ----------------------------------------------------------------- 报告内问答
 
@@ -1313,39 +1264,6 @@ def test_qa_delete_404_on_missing_record_or_run(tmp_path: Path):
             encoding="utf-8",
         )
         assert client.delete(f"/api/runs/{RUN_ID}/qa/9").status_code == 404
-
-
-def test_probe_surfaces_paywalled_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """付费内容：probe 返回结构化信号（前端据此禁用投递按钮），且带中文提示。"""
-    snapshot = {
-        "paywalled": True,
-        "kind": "cheese",
-        "title": "剪辑课",
-        "full_duration": 306,
-    }
-    monkeypatch.setattr(download, "paywall_snapshot", lambda *_a, **_k: snapshot)
-    with TestClient(create_app(tmp_path)) as client:
-        r = client.post("/api/probe", json={"url": "https://www.bilibili.com/cheese/play/ep2564130"})
-
-    assert r.status_code == 200
-    body = r.json()
-    assert body["paywalled"] is True
-    assert body["kind"] == "cheese"
-    assert "暂不支持" in body["message"]
-    assert "剪辑课" in body["message"]
-
-
-def test_probe_paywalled_overrides_cached_meta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """即使本地有旧缓存（meta.json），付费判定依然生效。"""
-    make_run(tmp_path, RUN_ID)
-    snapshot = {"paywalled": True, "kind": "charging", "title": "充电课", "full_duration": 3000}
-    monkeypatch.setattr(download, "paywall_snapshot", lambda *_a, **_k: snapshot)
-    with TestClient(create_app(tmp_path)) as client:
-        r = client.post("/api/probe", json={"url": URL})
-
-    assert r.status_code == 200
-    body = r.json()
-    assert body["paywalled"] is True and "暂不支持" in body["message"]
 
 
 def test_probe_surfaces_paywalled_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

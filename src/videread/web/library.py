@@ -223,12 +223,8 @@ def _now_text() -> str:
     return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def load_favorites(out_root: Path) -> dict[str, str]:
-    """读取收藏表：`run_id → 收藏时间`（时间形如 `YYYY-MM-DD HH:MM:SS`，可直接字典序比较）。
-
-    文件缺失或损坏时一律视为「没有任何收藏」，坏数据不拖垮整份列表。
-    """
-    path = Path(out_root) / FAVORITES_FILE
+def _read_map(path: Path) -> dict[str, str]:
+    """读取 `run_id → 字符串` 表；文件缺失、损坏或条目非法一律视为空表。"""
     if not path.is_file():
         return {}
     try:
@@ -240,10 +236,24 @@ def load_favorites(out_root: Path) -> dict[str, str]:
     return {
         key: value
         for key, value in data.items()
-        if isinstance(key, str)
-        and isinstance(value, str)
-        and _RUN_ID_RE.match(key)
+        if isinstance(key, str) and _RUN_ID_RE.match(key) and isinstance(value, str)
     }
+
+
+def _write_map(path: Path, data: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def load_favorites(out_root: Path) -> dict[str, str]:
+    """读取收藏表：`run_id → 收藏时间`（时间形如 `YYYY-MM-DD HH:MM:SS`，可直接字典序比较）。
+
+    文件缺失或损坏时一律视为「没有任何收藏」，坏数据不拖垮整份列表。
+    """
+    return _read_map(Path(out_root) / FAVORITES_FILE)
 
 
 def set_favorite(out_root: Path, run_id: str, favorite: bool) -> bool:
@@ -254,12 +264,7 @@ def set_favorite(out_root: Path, run_id: str, favorite: bool) -> bool:
             favorites.setdefault(run_id, _now_text())  # 重复收藏保留最初的先后次序
         else:
             favorites.pop(run_id, None)
-        path = Path(out_root) / FAVORITES_FILE
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(favorites, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        _write_map(Path(out_root) / FAVORITES_FILE, favorites)
     return favorite
 
 
@@ -278,22 +283,10 @@ def load_titles(out_root: Path) -> dict[str, str]:
     文件缺失 / 损坏 / 条目非法一律按「没有改名」处理——改名只是展示层
     的偏好，坏数据不值得拖垮整份报告库。
     """
-    path = Path(out_root) / TITLES_FILE
-    if not path.is_file():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
     return {
         key: value.strip()
-        for key, value in data.items()
-        if isinstance(key, str)
-        and _RUN_ID_RE.match(key)
-        and isinstance(value, str)
-        and value.strip()
+        for key, value in _read_map(Path(out_root) / TITLES_FILE).items()
+        if value.strip()
     }
 
 
@@ -321,12 +314,7 @@ def set_title(out_root: Path, run_id: str, title: str) -> dict | None:
             titles[run_id] = cleaned[:TITLE_MAX_CHARS]
         else:
             titles.pop(run_id, None)
-        path = Path(out_root) / TITLES_FILE
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(titles, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        _write_map(Path(out_root) / TITLES_FILE, titles)
     return {
         "run_id": run_id,
         "title": titles.get(run_id, original),
@@ -409,21 +397,13 @@ def delete_run(out_root: Path, run_id: str) -> bool:
     with _FAVORITES_LOCK:
         favorites = load_favorites(out_root)
         if favorites.pop(run_id, None) is not None:
-            path = Path(out_root) / FAVORITES_FILE
-            path.write_text(
-                json.dumps(favorites, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
+            _write_map(Path(out_root) / FAVORITES_FILE, favorites)
     # 改名记录一并清掉：删除的语义是「这条记录从报告库彻底消失」，
     # 留着悬空标题会让重新生成的同名 run 意外继承旧名字
     with _TITLES_LOCK:
         titles = load_titles(out_root)
         if titles.pop(run_id, None) is not None:
-            path = Path(out_root) / TITLES_FILE
-            path.write_text(
-                json.dumps(titles, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
+            _write_map(Path(out_root) / TITLES_FILE, titles)
     return True
 
 

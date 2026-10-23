@@ -1,9 +1,5 @@
 "use strict";
-const $ = s => document.querySelector(s);
-const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const STAGES = ["下载","音频处理","转写","规范化","结构规划","截图","逐节写作","渲染"];
 const STATE_ZH = {queued:"排队中",running:"印制中",done:"印毕",cancelled:"已取消",failed:"失败",error:"失败"};
-const TERMINAL = new Set(["done","cancelled","failed","error"]);
 const job_id = decodeURIComponent(location.pathname.split("/").pop() || "");
 
 /* ---------- toast ---------- */
@@ -102,7 +98,7 @@ function renderActions(job){
 }
 
 function renderJob(job){
-  if(TERMINAL.has(job.state) && localStorage.getItem("videread.activeJob") === job.id){
+  if(JOB_TERMINAL.has(job.state) && localStorage.getItem("videread.activeJob") === job.id){
     localStorage.removeItem("videread.activeJob"); /* 终态：清掉主页的进行中标记 */
   }
   $("#job-state").textContent = stateZh(job.state);
@@ -180,7 +176,7 @@ function startPolling(){
     try{
       const job = await getSnapshot();
       renderJob(job);
-      if(TERMINAL.has(job.state)){ clearInterval(pollTimer); pollTimer = null; }
+      if(JOB_TERMINAL.has(job.state)){ clearInterval(pollTimer); pollTimer = null; }
     }catch(e){ /* 服务暂不可达：下个周期再试 */ }
   }, 2500);
 }
@@ -200,6 +196,6 @@ function startPolling(){
   }
   renderJob(job);
   /* 终态任务只渲染快照；进行中的才订阅事件流 */
-  if(!TERMINAL.has(job.state) && job.state !== "queued") subscribe();
+  if(!JOB_TERMINAL.has(job.state) && job.state !== "queued") subscribe();
   else if(job.state === "queued") subscribe(); /* 排队中也要等 running/done 事件 */
 })();

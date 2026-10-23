@@ -33,8 +33,8 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 #: 编辑风正式版页面目录（随包分发；原 demos/ 实验页已随 P4 退役删除，历史在 git）
 EDITORIAL_DIR = STATIC_DIR / "editorial"
 EDITORIAL_ASSETS = (
-    "css/index.css", "css/reader.css", "css/job.css",
-    "js/index.js", "js/reader.js", "js/job.js", "js/theme.js",
+    "css/base.css", "css/index.css", "css/reader.css", "css/job.css",
+    "js/common.js", "js/index.js", "js/reader.js", "js/job.js", "js/theme.js",
 )
 HEARTBEAT_SEC = 15.0
 _SSE_HEADERS = {

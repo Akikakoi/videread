@@ -242,35 +242,6 @@ def test_write_sections_keeps_successes_when_one_section_fails(
     assert (tmp_path / "sections" / "s3.html").is_file()
     assert not (tmp_path / "sections" / "s2.html").exists()
 
-# ------------------------------------------------------------ 新阅读模式
-
-
-def test_writer_system_deep_and_outline_length_rules():
-    """deep / outline 的字数规则要真正注入 system prompt。"""
-    deep = writer.prompts.writer_system("deep")
-    assert "700-1200" in deep
-    outline = writer.prompts.writer_system("outline")
-    assert "一句话核心要点" in outline
-    assert "30-60 字" in outline
-
-
-def test_components_for_outline_is_keyline_only():
-    from videread.report import prompts
-
-    assert ".keyline" in prompts.components_for("outline")
-    assert "brief-timeline" not in prompts.components_for("outline")
-    assert "callout" not in prompts.components_for("outline")
-
-
-def test_assemble_section_outline_has_plain_h2():
-    outline_section = OutlineSection(
-        id="s1", heading="预热的作用", time_range="00:00-00:12",
-        intent="讲清机制", source_ids=["u0001"],
-    )
-    html = assemble_section(outline_section, 1, "", mode="outline")
-    assert html.startswith("<h2>预热的作用</h2>")
-    assert "num" not in html and "section-time" not in html
-
 
 # ------------------------------------------------------------ 新阅读模式
 

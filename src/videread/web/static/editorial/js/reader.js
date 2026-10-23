@@ -1,8 +1,5 @@
 "use strict";
 const API = (location.protocol === "file:") ? "http://127.0.0.1:8765" : "";
-const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-/* JS 触发的滚动不受 CSS scroll-behavior:auto 管，reduce 下须显式降级为瞬间跳转 */
-const scrollBehavior = () => matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
 
 const params = new URLSearchParams(location.search);
 let runId = params.get("run_id") || "";

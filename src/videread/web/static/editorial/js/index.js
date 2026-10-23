@@ -2,16 +2,10 @@
 
 /* ================= 环境 ================= */
 const API = (location.protocol === "file:") ? "http://127.0.0.1:8765" : "";
-const STAGES = ["下载","音频处理","转写","规范化","结构规划","截图","逐节写作","渲染"];
-/* JS 触发的滚动不受 CSS scroll-behavior:auto 管，reduce 下须显式降级为瞬间跳转 */
-const scrollBehavior = () => matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
 /* outline.profile 是结构规划选出的信息结构（机器字段），五种合法值见 report/outline.py */
 const STRUCTURE_ZH = {mechanism:"机理拆解",procedure:"步骤流程",evidence:"论据实证",argument:"观点论述",narrative:"叙事纪事"};
 const structureZh = p => STRUCTURE_ZH[p] || (p ? p : "—");
 let OFFLINE = false;
-
-const $ = s => document.querySelector(s);
-const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 function toast(msg){
   const t = $("#toast");
@@ -509,7 +503,6 @@ function bindToc(){
 
 /* ================= 投印（提交任务） ================= */
 let mode = "standard";
-let jobSource = null;
 
 document.querySelectorAll("#modes .mode[data-mode]").forEach(b => {
   /* 只绑模式钮：语言下拉钮同为 .mode 但无 data-mode，误绑会覆盖提交模式 */
@@ -949,7 +942,6 @@ function updateConfFootnote(){
 }
 
 /* 有进行中的工单时，在投印区给一个进入工单页的入口（终态/不存在则清标记） */
-const JOB_TERMINAL = new Set(["done", "cancelled", "failed", "error"]);
 function showJobline(id){
   $("#jobline").innerHTML = '投印中 · 工单 <b>' + esc(id) + '</b> · <a href="/editorial/job/' + encodeURIComponent(id) + '" target="_blank" rel="noopener">进入工单页盯进度 →</a>';
 }

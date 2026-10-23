@@ -8,7 +8,6 @@ from videread import pipeline as pipeline_mod
 from videread import render
 from videread.config import lang_display_name
 from videread.download import VideoMeta
-from videread.errors import UsageError
 from videread.report import load as load_outline
 from videread.report import write as write_outline
 from videread.report import prompts

@@ -23,6 +23,14 @@ OPTIONAL_PLACEHOLDERS = ("SUBTITLE", "VIDEO_DESCRIPTION", "TIMEMAP")
 
 _PLACEHOLDER = re.compile(r"\{\{([A-Z0-9_]+)\}\}")
 
+#: 模板共享片段：用例化注释引用，渲染前展开，产物仍是自包含 HTML
+_INCLUDES = {
+    "SHARED_BASE_CSS": "_shared/base.css",
+    "SHARED_EXTERNAL_LINKS": "_shared/external-links.html",
+    "SHARED_TS_JUMP": "_shared/ts-jump.html",
+}
+_INCLUDE = re.compile(r"<!--#include:([A-Z0-9_]+)-->")
+
 # 可选占位符为空时整块删除（§8.1：空则整行 / 整块删除）
 _OPTIONAL_BLOCKS = {
     "SUBTITLE": re.compile(r"[ \t]*<p class=\"subtitle\">\{\{SUBTITLE\}\}</p>[ \t]*\n?"),
@@ -62,6 +70,20 @@ _CSS_URL = re.compile(r"url\(\s*[\"']?\s*https?://", re.IGNORECASE)
 _FONT_FACE = re.compile(r"@font-face", re.IGNORECASE)
 
 
+def _expand_includes(text: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        name = _INCLUDES.get(match.group(1))
+        if name is None:
+            raise RenderError(f"未知模板片段：{match.group(1)}")
+        path = TEMPLATE_DIR / name
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise RenderError(f"读取模板片段失败：{path}（{exc}）") from exc
+
+    return _INCLUDE.sub(_replace, text)
+
+
 def template_for(mode: str) -> Path:
     """按阅读模式定位模板文件。"""
     name = _TEMPLATES.get((mode or "").strip().lower())
@@ -78,7 +100,7 @@ def template_for(mode: str) -> Path:
 def render_report(*, template: Path, ctx: dict[str, str], out: Path) -> None:
     """把 ctx 填入模板并写盘；必需占位符缺失时抛 RenderError（提示具体名称）。"""
     try:
-        html = template.read_text(encoding="utf-8")
+        html = _expand_includes(template.read_text(encoding="utf-8"))
     except OSError as exc:
         raise RenderError(f"读取模板失败：{template}（{exc}）") from exc
 
@@ -126,7 +148,7 @@ def template_classes(template: Path) -> set[str]:
     留着只会让人误以为生效。
     """
     try:
-        text = template.read_text(encoding="utf-8")
+        text = _expand_includes(template.read_text(encoding="utf-8"))
     except OSError as exc:
         raise RenderError(f"读取模板失败：{template}（{exc}）") from exc
 

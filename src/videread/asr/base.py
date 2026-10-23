@@ -76,3 +76,33 @@ def load_raw_jsonl(path: Path) -> list[AsrSegment]:
             except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
                 raise AsrError(f"{path} 第 {lineno} 行不是合法 ASR 分段：{exc}") from exc
     return segments
+
+
+class PartCacheMixin:
+    """按段缓存转写结果，重跑时命中即跳过付费调用（§6.5）。"""
+
+    cache_dir: Path | None
+
+    def _part_path(self, index: int, start: float, end: float) -> Path | None:
+        if self.cache_dir is None:
+            return None
+        # 文件名带切段边界：静音点漂移导致切段点变化后，旧缓存自动失效，
+        # 不会把上一个音频的段错位拼进新结果
+        return self.cache_dir / f"asr.part.{index:03d}.{start:.0f}-{end:.0f}.jsonl"
+
+    def _read_part(self, index: int, start: float, end: float) -> list[AsrSegment] | None:
+        path = self._part_path(index, start, end)
+        if path is None or not path.is_file():
+            return None
+        try:
+            segments = load_raw_jsonl(path)
+        except AsrError:
+            return None
+        return segments or None
+
+    def _write_part(
+        self, index: int, segments: list[AsrSegment], start: float, end: float
+    ) -> None:
+        path = self._part_path(index, start, end)
+        if path is not None:
+            write_raw_jsonl(segments, path)

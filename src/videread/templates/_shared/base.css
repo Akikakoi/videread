@@ -1,0 +1,87 @@
+/* 三个报告模板共用的基础样式：色板、折叠块与段落时间戳胶囊。 */
+*, *::before, *::after { box-sizing: border-box; }
+
+:root {
+  --ink: #23292e;
+  --ink-soft: #4b555d;
+  --ink-mute: #7a848c;
+  --line: #e3e7ea;
+  --line-strong: #d3d9dd;
+  --paper: #ffffff;
+  --page: #f2f4f6;
+  --accent: #0f6f8c;
+  --accent-soft: #eef6f8;
+  --accent-line: #cfe4ea;
+}
+
+html { -webkit-text-size-adjust: 100%; }
+
+.attribution a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent-line);
+  word-break: break-all;
+}
+.attribution a:hover { border-bottom-color: var(--accent); }
+
+/* ── 折叠块（视频简介 / 来源说明）── */
+.meta-fold > summary,
+.sources > summary {
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;
+}
+.meta-fold > summary::-webkit-details-marker,
+.sources > summary::-webkit-details-marker { display: none; }
+.meta-fold > summary::before,
+.sources > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 8px;
+  color: var(--ink-mute);
+  transition: transform .16s ease;
+}
+.meta-fold[open] > summary::before,
+.sources[open] > summary::before { transform: rotate(90deg); }
+.meta-fold-body {
+  padding: 2px 16px 16px;
+  font-size: 15px;
+  line-height: 1.8;
+  color: var(--ink-soft);
+}
+.meta-fold-body > :first-child { margin-top: 0; }
+.meta-fold-body > :last-child { margin-bottom: 0; }
+
+/* ── 段落时间戳跳转胶囊（程序注入，非 LLM 输出）── */
+.ts-jump {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  text-decoration: none;
+  vertical-align: middle;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  /* 胶囊可能被注入成 grid/flex 子项（如容器自身带 data-source-units），
+     显式禁止两个方向被拉伸，否则 border-radius:999px 会放大成椭圆 */
+  justify-self: start;
+  align-self: start;
+  flex: 0 0 auto;
+  width: auto;
+  height: auto;
+}
+.ts-jump:hover { background: #ffffff; border-color: var(--accent); }
+
+/* ── 动效偏好：减少动态时保留状态切换、去掉位移 ── */
+@media (prefers-reduced-motion: reduce) {
+  .meta-fold > summary::before,
+  .sources > summary::before { transition: none; }
+}
