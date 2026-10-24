@@ -17,12 +17,38 @@
 </header>
 
 <main class="wrap">
-  <section>
+  <section class="job-sheet">
     <div class="rubric">JOB · 投印工单</div>
     <h1 id="job-state">读取中…</h1>
+    <div class="seal" id="seal" aria-hidden="true"><span>印</span><span>毕</span></div>
+    <div class="press" id="press" aria-hidden="true">
+      <svg viewBox="0 0 104 84" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+          <path d="M10 12h84M14 12v52M90 12v52M4 64h96"/>
+        </g>
+        <g class="press-roller" stroke="currentColor" stroke-linecap="round">
+          <circle cx="52" cy="32" r="12" stroke-width="1.4"/>
+          <path d="M52 20v24M40 32h24" stroke-width="1" opacity=".5"/>
+          <circle cx="52" cy="32" r="2" fill="currentColor" stroke="none"/>
+        </g>
+        <path class="press-paper" d="M20 56h64" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="7 6"/>
+        <g class="press-ink" fill="currentColor">
+          <circle class="i1" cx="40" cy="47" r="1.7"/>
+          <circle class="i2" cx="52" cy="47" r="1.7"/>
+          <circle class="i3" cx="64" cy="47" r="1.7"/>
+        </g>
+      </svg>
+    </div>
     <p class="job-url" id="job-url">—</p>
     <div class="meta" id="job-meta"></div>
-    <ol class="stepper" id="stepper"></ol>
+    <div id="batch-wrap" hidden>
+      <div class="proof-h">BATCH · 篇目</div>
+      <ul class="batch-list" id="batch-list"></ul>
+    </div>
+    <div class="stepper-wrap">
+      <span class="stepper-fill" id="stepper-fill" aria-hidden="true"></span>
+      <ol class="stepper" id="stepper"></ol>
+    </div>
     <div class="proof-h">LOG · 排印日志</div>
     <div class="proof" id="log"></div>
     <div class="actions" id="job-actions"></div>

@@ -13,11 +13,20 @@ header{padding:34px 0 0;}
 .masthead nav a:hover{color:var(--accent);}
 
 /* ---------- 工单主体 ---------- */
+.job-sheet{position:relative;}
 .rubric{font-family:var(--mono);font-size:11px;letter-spacing:3px;color:var(--faint);text-transform:uppercase;}
 h1{
   font-family:var(--serif);font-weight:600;font-size:40px;line-height:1.15;
   margin:14px 0 6px;letter-spacing:.5px;
 }
+/* “印制中”后的闪烁省略号：三点依次亮起 */
+.state-dots{display:inline-flex;align-items:center;gap:5px;margin-left:8px;vertical-align:middle;}
+.state-dots i{width:6px;height:6px;border-radius:50%;background:var(--accent);opacity:.2;animation:dotBlink 1.2s var(--ease) infinite;}
+.state-dots i:nth-child(2){animation-delay:.18s;}
+.state-dots i:nth-child(3){animation-delay:.36s;}
+/* 状态文字切换时淡入（不碰字距，避免触发布局） */
+#job-state.state-in{animation:stateIn .3s var(--ease) both;}
+@keyframes stateIn{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
 .job-url{
   font-family:var(--mono);font-size:12.5px;color:var(--muted);letter-spacing:.3px;
   overflow-wrap:anywhere;margin:0 0 20px;
@@ -27,19 +36,63 @@ h1{
 .meta span b{color:var(--ink);font-weight:400;}
 .meta span .q{color:var(--accent);}
 
+/* ---------- 批次篇目（收藏夹批量投印） ---------- */
+.batch-list{
+  list-style:none;margin:0 0 26px;padding:0;border-top:2px solid var(--ink);
+  max-height:300px;overflow-y:auto;
+}
+.batch-item{
+  display:grid;grid-template-columns:26px 1fr auto;column-gap:14px;row-gap:3px;
+  align-items:baseline;padding:9px 2px;border-bottom:1px solid var(--hairline);
+}
+.bi-no{font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:.5px;}
+.bi-t{font-size:14px;line-height:1.55;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.bi-st{font-family:var(--mono);font-size:10.5px;letter-spacing:1px;color:var(--muted);white-space:nowrap;}
+.bi-x{grid-column:2 / -1;display:flex;flex-wrap:wrap;gap:4px 12px;font-family:var(--mono);font-size:10.5px;color:var(--faint);}
+.bi-x:empty{display:none;}
+.bi-x a{color:var(--accent);text-decoration:none;}
+.bi-x a:hover{text-decoration:underline;}
+.bi-x .warn{color:var(--accent);}
+.batch-item.pending .bi-st{color:var(--faint);}
+.batch-item.running .bi-st{color:var(--accent);}
+.batch-item.done .bi-st{color:var(--ok);}
+.batch-item.error .bi-st{color:var(--accent);}
+.batch-item.cancelled .bi-t,.batch-item.skipped .bi-t{color:var(--faint);}
+
 /* ---------- 八阶段步进器（与主页同款） ---------- */
-.stepper{list-style:none;border-top:2px solid var(--ink);margin:0 0 30px;padding:0;}
+.stepper-wrap{position:relative;}
+/* 进度墨线：覆盖在步进器上边框上，随阶段推进 */
+.stepper-fill{
+  position:absolute;left:0;top:0;height:2px;width:0;background:var(--accent);
+  z-index:1;transition:width .7s var(--ease);
+}
+.stepper{list-style:none;border-top:2px solid var(--ink);margin:0 0 30px;padding:0;position:relative;}
 .stepper li{display:flex;align-items:baseline;gap:14px;padding:11px 2px;border-bottom:1px solid var(--hairline);color:var(--faint);transition:color var(--t);}
 .stepper .no{font-family:var(--mono);font-size:12px;min-width:26px;}
-.stepper .t{font-size:14.5px;font-family:var(--serif);}
-.stepper .mark{margin-left:auto;font-family:var(--mono);font-size:12px;display:inline-block;}
+.stepper .t{display:inline-block;font-size:14.5px;font-family:var(--serif);}
+.stepper .mark{margin-left:auto;font-family:var(--mono);font-size:12px;display:inline-block;position:relative;}
 .stepper li.cur{color:var(--ink);}
 .stepper li.cur .mark{color:var(--accent);}
-.stepper li.cur .t::after{content:" …";}
+.stepper li.cur .t{animation:rowIn .32s var(--ease) both;}
 .stepper li.done{color:var(--muted);}
 .stepper li.done .mark{color:var(--ok);}
 .stepper li.pop .mark{animation:markPop .3s var(--ease) 1;}
+.stepper li.pop .t{animation:rowIn .32s var(--ease) both;}
+/* 已完成勾号落下的墨圈 */
+.stepper li.pop .mark::after{
+  content:"";position:absolute;left:50%;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;
+  border:1px solid var(--ok);border-radius:50%;opacity:0;
+  animation:inkRipple .6s var(--ease) .05s 1;
+}
+/* 运行中阶段：三点依次呼吸 */
+.stepper .mark.dots{display:inline-flex;align-items:center;gap:4px;}
+.stepper .mark.dots i{width:4px;height:4px;border-radius:50%;background:var(--accent);opacity:.2;animation:dotBlink 1.2s var(--ease) infinite;}
+.stepper .mark.dots i:nth-child(2){animation-delay:.18s;}
+.stepper .mark.dots i:nth-child(3){animation-delay:.36s;}
 @keyframes markPop{from{transform:scale(.5);opacity:0}to{transform:scale(1);opacity:1}}
+@keyframes inkRipple{0%{opacity:.65;transform:scale(.4)}100%{opacity:0;transform:scale(2.2)}}
+@keyframes rowIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes dotBlink{0%,70%,100%{opacity:.2;transform:translateY(0)}35%{opacity:1;transform:translateY(-2px)}}
 
 /* ---------- 排印日志：铅字校样 ---------- */
 .proof-h{font-family:var(--mono);font-size:10px;letter-spacing:3px;color:var(--faint);margin-bottom:8px;}
@@ -51,6 +104,59 @@ h1{
 }
 .proof .line{display:block;}
 .proof .line.err{color:var(--accent);}
+/* 新日志：下滑淡入；逐字打印时末端闪一个光标 */
+.proof .line.new{animation:lineIn .28s var(--ease) both;}
+.proof .line.typing::after{content:"▌";margin-left:1px;color:var(--accent);animation:cursorBlink .9s steps(1) infinite;}
+.proof .line.idle{color:var(--faint);}
+.proof .idle .ell{display:inline-flex;gap:4px;margin-left:6px;vertical-align:middle;}
+.proof .idle .ell i{width:3px;height:3px;border-radius:50%;background:var(--faint);animation:dotBlink 1.2s var(--ease) infinite;}
+.proof .idle .ell i:nth-child(2){animation-delay:.18s;}
+.proof .idle .ell i:nth-child(3){animation-delay:.36s;}
+@keyframes lineIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes cursorBlink{0%,49%{opacity:1}50%,100%{opacity:0}}
+
+/* ---------- 印毕：红色骑缝章 ----------
+   两字竖排：显式两行网格 + line-height:1，字号与内边距按 74px 框高反推，
+   否则继承正文 1.75 行高会把“毕”顶到框外 */
+.seal{
+  position:absolute;top:16px;right:0;width:74px;height:74px;display:none;
+  grid-template-rows:1fr 1fr;place-items:center;padding:7px;
+  pointer-events:none;user-select:none;border:2px solid var(--accent);border-radius:2px;
+  color:var(--accent);font-family:var(--serif);font-weight:600;font-size:21px;
+  line-height:1;
+}
+.seal::before{content:"";position:absolute;inset:4px;border:1px solid var(--accent);border-radius:1px;opacity:.65;}
+body.job-done .seal{display:grid;animation:sealDrop .6s var(--ease) both;}
+/* 章落下时向外洇开的一圈墨 */
+body.job-done .seal::after{
+  content:"";position:absolute;inset:-6px;border:1px solid var(--accent);border-radius:50%;
+  opacity:0;animation:sealInk .9s var(--ease) .15s 1;
+}
+@keyframes sealDrop{
+  0%{opacity:0;transform:scale(1.35) rotate(-16deg);}
+  55%{opacity:1;transform:scale(.94) rotate(-7deg);}
+  75%{transform:scale(1.03) rotate(-9deg);}
+  100%{opacity:1;transform:scale(1) rotate(-8deg);}
+}
+@keyframes sealInk{0%{opacity:.5;transform:scale(.9)}100%{opacity:0;transform:scale(1.35)}}
+
+/* ---------- 运行中：小型印刷机（与印章同一位置，终态由印章取代） ---------- */
+.press{position:absolute;top:6px;right:0;width:92px;color:var(--faint);display:none;pointer-events:none;user-select:none;}
+.press svg{display:block;width:100%;height:auto;}
+body.job-running .press{display:block;}
+.press-roller{transform-box:view-box;transform-origin:52px 32px;animation:pressRoll 2.6s linear infinite;}
+.press-paper{animation:pressPaper 1.15s linear infinite;}
+.press-ink circle{opacity:0;animation:pressInk 1.9s var(--ease) infinite;}
+.press-ink .i2{animation-delay:.62s;}
+.press-ink .i3{animation-delay:1.24s;}
+@keyframes pressRoll{to{transform:rotate(360deg)}}
+@keyframes pressPaper{to{stroke-dashoffset:-26}}
+@keyframes pressInk{
+  0%{opacity:0;transform:translateY(-5px)}
+  25%{opacity:.9;transform:translateY(0)}
+  70%{opacity:.5;transform:translateY(3px)}
+  100%{opacity:0;transform:translateY(5px)}
+}
 
 /* ---------- 操作行 ---------- */
 .actions{display:flex;gap:14px;flex-wrap:wrap;margin-top:26px;}
@@ -67,10 +173,25 @@ h1{
 @media (max-width:860px){
   h1{font-size:30px;}
   .wrap{padding:0 20px;}
+  .seal{top:12px;width:56px;height:56px;font-size:17px;padding:5px;}
+  body.job-running .press{display:none;}
 }
 @media (prefers-reduced-motion: reduce){
   .act:hover{transform:none;}
+  .stepper-fill{transition:none;}
+  .stepper li.cur .t,.stepper li.pop .t{animation:none;}
   .stepper li.pop .mark{animation:none;}
+  .stepper li.pop .mark::after{animation:none;display:none;}
+  .stepper .mark.dots i{animation:none;opacity:.8;}
+  .state-dots i{animation:none;opacity:.8;}
+  .proof .line.new{animation:none;}
+  .proof .line.typing::after{animation:none;}
+  .proof .idle .ell i{animation:none;opacity:.7;}
+  body.job-done .seal{animation:none;transform:rotate(-8deg);}
+  body.job-done .seal::after{animation:none;display:none;}
+  #job-state.state-in{animation:none;}
+  .press-roller,.press-paper{animation:none;}
+  .press-ink circle{animation:none;opacity:.45;}
 }
 
 /* ---------- 细滚条（编辑风） ---------- */

@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import queue
+import re
 import threading
 from pathlib import Path
 from urllib.parse import quote
@@ -22,7 +23,8 @@ from .. import markdown
 from .. import pdf as pdf_mod
 from .. import png as png_mod
 from .. import frames as frames_mod
-from ..config import get_settings
+from .. import download
+from ..config import MAX_VIDEO_DURATION_SEC, get_settings
 from ..errors import UsageError, VidereadError
 from ..report import qa
 from .. import usersettings
@@ -37,6 +39,7 @@ EDITORIAL_ASSETS = (
     "js/common.js", "js/index.js", "js/reader.js", "js/job.js", "js/theme.js",
 )
 HEARTBEAT_SEC = 15.0
+_BATCH_ID_RE = re.compile(r"^[a-f0-9]{12}$")
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
     "Connection": "keep-alive",
@@ -57,6 +60,23 @@ class JobRequest(BaseModel):
 
 class ProbeRequest(BaseModel):
     url: str
+
+
+class FavoriteResolveRequest(BaseModel):
+    url: str
+
+
+class BatchRequest(BaseModel):
+    """收藏夹批量投递：items 为空表示全选，否则按 bvid/链接筛选。"""
+
+    url: str
+    items: list[str] | None = None
+    mode: str = "standard"
+    lang: str | None = None
+    frames: bool | None = None
+    skip_existing: bool = True
+    limit: int = 0
+    no_cache: bool = False
 
 
 class QaRequest(BaseModel):
@@ -568,6 +588,128 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
             return probe.probe_source(payload.url, out_root=out_root)
         except VidereadError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # ------------------------------------------------------------- 收藏夹批次
+
+    @app.post("/api/favorites/resolve")
+    def api_resolve_favorites(payload: FavoriteResolveRequest) -> dict:
+        """读取收藏夹清单（不下载），并标出哪些视频已有报告。"""
+        try:
+            favorites = download.resolve_favorites(payload.url)
+        except VidereadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        for item in favorites["items"]:
+            item["existing_report"] = library.existing_report(
+                out_root, item["url"], item["bvid"]
+            )
+        return favorites
+
+    @app.post("/api/batches")
+    def api_create_batch(payload: BatchRequest) -> dict:
+        """把收藏夹（或其中勾选的部分）一次性投递成一个批次。
+
+        已生成报告 / 超长 / 失效的条目不会进入流水线，而是以 skipped 状态
+        留在批次里，页面上仍能看到原因与已有报告入口。
+        """
+        try:
+            favorites = download.resolve_favorites(payload.url)
+        except VidereadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        wanted = {value.strip() for value in (payload.items or []) if value.strip()}
+        chosen = (
+            favorites["items"]
+            if not wanted
+            else [
+                item
+                for item in favorites["items"]
+                if item["bvid"] in wanted or item["url"] in wanted
+            ]
+        )
+        unique: list[dict] = []
+        seen: set[str] = set()
+        for item in chosen:
+            if item["bvid"] in seen:
+                continue
+            seen.add(item["bvid"])
+            unique.append(item)
+        if payload.limit and payload.limit > 0:
+            unique = unique[: payload.limit]
+
+        items: list[dict] = []
+        for item in unique:
+            entry = {
+                "url": item["url"],
+                "bvid": item["bvid"],
+                "title": item["title"],
+                "duration": item["duration"],
+                "duration_text": item["duration_text"],
+                "state": "pending",
+            }
+            existing = library.existing_report(out_root, item["url"], item["bvid"])
+            if not item["available"]:
+                entry.update(state="skipped", reason="视频已失效或不可用")
+            elif item["too_long"]:
+                entry.update(
+                    state="skipped",
+                    reason=f"超过 {MAX_VIDEO_DURATION_SEC // 3600} 小时上限",
+                )
+            elif payload.skip_existing and existing:
+                entry.update(
+                    state="skipped",
+                    reason="已有报告",
+                    run_id=existing["run_id"],
+                    report_url=existing["report_url"],
+                )
+            items.append(entry)
+
+        runnable = sum(1 for item in items if item["state"] == "pending")
+        if runnable == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="选中项里没有需要新解析的视频（已有报告、超长或失效的都已跳过）",
+            )
+
+        try:
+            job = manager.submit_batch(
+                items=items,
+                url=payload.url,
+                batch_title=favorites["title"],
+                mode=payload.mode,
+                no_cache=payload.no_cache,
+                asr_backend=None,
+                frames=payload.frames,
+                lang=(payload.lang or "").strip() or None,
+            )
+        except JobBusy as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except VidereadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "job_id": job.id,
+            "state": job.state,
+            "batch_title": favorites["title"],
+            "total": len(items),
+            "runnable": runnable,
+            "skipped": len(items) - runnable,
+        }
+
+    @app.get("/api/batches/{batch_id}")
+    def api_batch_manifest(batch_id: str) -> dict:
+        """读取落盘的批次清单：服务重启后工单页仍能看到上一批的篇目与结果。"""
+        if not _BATCH_ID_RE.match(batch_id):
+            raise HTTPException(status_code=404, detail="未找到该批次")
+        path = out_root / "_batches" / f"{batch_id}.json"
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="未找到该批次")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail="批次清单已损坏") from exc
+        data.setdefault("logs", [])
+        data.setdefault("batch", True)
+        data.setdefault("stage_index", 0)
+        return data
 
     # ------------------------------------------------------------------ 任务
 

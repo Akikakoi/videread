@@ -36,6 +36,37 @@
   </div>
 </div>
 
+<div class="veil" id="fav-veil" aria-hidden="true">
+  <div class="dialog fav-dialog" role="dialog" aria-modal="true" aria-labelledby="fav-title">
+    <div class="dlg-kicker">FAVORITES · 收藏夹批量投印</div>
+    <h3 class="dlg-title" id="fav-title">整夹投印</h3>
+    <p class="dlg-body">粘贴 B 站收藏夹链接，先读取清单再勾选要总结的视频。解析仍按流水线逐条进行，同一时刻只跑一条。</p>
+    <div class="fav-row">
+      <input type="text" id="fav-url" autocomplete="off" spellcheck="false" placeholder="https://space.bilibili.com/…/favlist?fid=…">
+      <button type="button" class="dlg-btn solid" id="fav-resolve">读取清单</button>
+    </div>
+    <p class="fav-note" id="fav-note"></p>
+    <div class="fav-list-wrap" id="fav-list-wrap" hidden>
+      <div class="fav-list-head">
+        <span id="fav-count">—</span>
+        <span class="fav-bulk">
+          <button type="button" id="fav-all">全选</button>
+          <button type="button" id="fav-none">全不选</button>
+        </span>
+      </div>
+      <ul class="fav-list" id="fav-list"></ul>
+    </div>
+    <div class="fav-opts">
+      <label><input type="checkbox" id="fav-skip" checked> 跳过已生成的报告</label>
+      <label>只跑前 <input type="number" id="fav-limit" min="0" value="0"> 个 <span class="hint">0 = 全部</span></label>
+    </div>
+    <div class="dlg-actions">
+      <button class="dlg-btn ghost" id="fav-cancel">先不投</button>
+      <button class="dlg-btn solid" id="fav-submit" disabled>开始批量投印</button>
+    </div>
+  </div>
+</div>
+
 <div class="veil" id="settings-veil" aria-hidden="true">
   <div class="dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="st-title">
     <div class="dlg-kicker">PRESSROOM · 模型设置</div>
@@ -132,6 +163,7 @@
       <div>
         <div class="subline">
           <input type="text" id="url" autocomplete="off" placeholder="B 站链接或 BV 号，如 BV1xx411c7mD" aria-label="视频链接">
+          <button id="btn-fav" type="button">收藏夹</button>
           <button id="btn-submit">投印 →</button>
         </div>
         <div class="modes" id="modes">

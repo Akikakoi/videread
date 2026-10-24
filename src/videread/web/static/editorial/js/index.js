@@ -1218,6 +1218,168 @@ $("#st-reset").addEventListener("click", async () => {
   }
 });
 
+/* ================= 收藏夹批量投印 ================= */
+/* 一个收藏夹 = 一个批次工单：整批只占一个队列位，内部仍逐条串行跑流水线 */
+let favData = null;            /* 最近一次解析结果 */
+const favChecked = new Set();  /* 已勾选的 bvid */
+let favBusy = false;
+
+function favSelectable(it){
+  if(!it.available || it.too_long) return false;
+  /* 勾着「跳过已有报告」时，有报告的条目不可选，避免白跑一遍 */
+  if($("#fav-skip").checked && it.existing_report) return false;
+  return true;
+}
+
+function favSyncNote(){
+  const items = favData ? favData.items : [];
+  const runnable = items.filter(favSelectable).length;
+  const limit = Math.max(0, parseInt($("#fav-limit").value, 10) || 0);
+  const selected = items.filter(it => favSelectable(it) && favChecked.has(it.bvid)).length;
+  const planned = limit > 0 ? Math.min(limit, selected) : selected;
+  $("#fav-count").textContent = "已选 " + selected + " / 可投 " + runnable + " / 共 " + items.length +
+    (limit > 0 ? " · 本次投印 " + planned + " 条" : "");
+  $("#fav-submit").disabled = favBusy || planned === 0;
+}
+
+function renderFavList(){
+  const items = favData ? favData.items : [];
+  $("#fav-list").innerHTML = items.map((it, i) => {
+    const ok = favSelectable(it);
+    const checked = ok && favChecked.has(it.bvid);
+    const badges = [];
+    if(it.existing_report){
+      badges.push('<span><a href="' + esc(it.existing_report.report_url) + '" target="_blank" rel="noopener">已有报告 · ' + esc(it.existing_report.generated_at) + '</a></span>');
+    }
+    if(it.too_long) badges.push('<span class="warn">超过 2 小时上限</span>');
+    if(!it.available) badges.push('<span class="warn">视频已失效</span>');
+    return '<li class="fav-item' + (ok ? "" : " off") + '">' +
+      '<label><input type="checkbox" data-i="' + i + '"' + (checked ? " checked" : "") + (ok ? "" : " disabled") + '>' +
+      '<span class="fav-t">' + esc(it.title) + '</span></label>' +
+      '<span class="fav-meta">' + esc(it.duration_text) + (it.uploader ? " · " + esc(it.uploader) : "") + '</span>' +
+      (badges.length ? '<div class="fav-badges">' + badges.join("") + '</div>' : "") +
+      '</li>';
+  }).join("");
+  $("#fav-list-wrap").hidden = items.length === 0;
+  favSyncNote();
+}
+
+function favReset(){
+  favData = null;
+  favChecked.clear();
+  $("#fav-list").innerHTML = "";
+  $("#fav-list-wrap").hidden = true;
+  $("#fav-note").textContent = "";
+  $("#fav-count").textContent = "—";
+  $("#fav-submit").disabled = true;
+}
+
+function openFav(){
+  if(OFFLINE){ toast("离线演示模式，暂不支持批量投印"); return; }
+  $("#fav-veil").classList.add("open");
+  $("#fav-veil").setAttribute("aria-hidden", "false");
+  $("#fav-url").focus();
+}
+
+function closeFav(){
+  const veil = $("#fav-veil");
+  if(!veil.classList.contains("open")) return;
+  veil.classList.remove("open");
+  veil.setAttribute("aria-hidden", "true");
+}
+
+async function resolveFavorites(){
+  const url = $("#fav-url").value.trim();
+  if(!url){ toast("先粘贴收藏夹链接"); return; }
+  const btn = $("#fav-resolve");
+  btn.disabled = true; btn.textContent = "读取中…";
+  $("#fav-note").textContent = "正在读取收藏夹清单…";
+  $("#fav-submit").disabled = true;
+  try{
+    const data = await post("/api/favorites/resolve", {url});
+    favData = data;
+    favChecked.clear();
+    data.items.forEach(it => { if(favSelectable(it)) favChecked.add(it.bvid); });
+    if(!data.items.length){
+      $("#fav-note").innerHTML = '<span class="warn">这个收藏夹里没有可读取的视频</span>';
+      renderFavList();
+      return;
+    }
+    const skipped = data.items.filter(it => !favSelectable(it)).length;
+    $("#fav-note").textContent = "《" + data.title + "》共 " + data.items.length + " 条" +
+      (skipped ? "，其中 " + skipped + " 条默认不投（已有报告 / 超长 / 失效）" : "") +
+      (data.truncated ? "；清单过长，只读取了前 1000 条" : "");
+    renderFavList();
+  }catch(e){
+    favReset();
+    $("#fav-note").innerHTML = '<span class="warn">读取失败：' + esc(e.message) + '</span>';
+    toast("读取失败：" + e.message);
+  }finally{
+    btn.disabled = false; btn.textContent = "读取清单";
+  }
+}
+
+async function submitBatch(){
+  if(favBusy || !favData) return;
+  const chosen = favData.items.filter(it => favSelectable(it) && favChecked.has(it.bvid));
+  if(!chosen.length){ toast("先勾选要总结的视频"); return; }
+  const btn = $("#fav-submit");
+  favBusy = true; btn.disabled = true; btn.textContent = "投递中…";
+  try{
+    const frames = $("#frames-switch") && $("#frames-switch").checked ? true : null;
+    const lang = ($("#lang-btn") || {}).dataset ? ($("#lang-btn").dataset.lang || null) : null;
+    const limit = Math.max(0, parseInt($("#fav-limit").value, 10) || 0);
+    const job = await post("/api/batches", {
+      url: $("#fav-url").value.trim(),
+      items: chosen.map(it => it.bvid),
+      mode, frames, lang,
+      skip_existing: $("#fav-skip").checked,
+      limit,
+      no_cache: true
+    });
+    localStorage.setItem("videread.activeJob", job.job_id);
+    closeFav();
+    location.href = "/editorial/job/" + encodeURIComponent(job.job_id);
+  }catch(e){
+    toast("投递失败：" + e.message);
+    btn.disabled = false; btn.textContent = "开始批量投印";
+  }finally{
+    favBusy = false;
+  }
+}
+
+$("#btn-fav").addEventListener("click", openFav);
+$("#fav-cancel").addEventListener("click", closeFav);
+$("#fav-resolve").addEventListener("click", resolveFavorites);
+$("#fav-url").addEventListener("keydown", e => { if(e.key === "Enter") resolveFavorites(); });
+$("#fav-submit").addEventListener("click", submitBatch);
+$("#fav-all").addEventListener("click", () => {
+  (favData ? favData.items : []).forEach(it => { if(favSelectable(it)) favChecked.add(it.bvid); });
+  renderFavList();
+});
+$("#fav-none").addEventListener("click", () => { favChecked.clear(); renderFavList(); });
+$("#fav-skip").addEventListener("change", () => {
+  /* 关掉「跳过已有」时可投范围变大，但不擅自替用户勾上已有报告的条目 */
+  (favData ? favData.items : []).forEach(it => { if(!favSelectable(it)) favChecked.delete(it.bvid); });
+  renderFavList();
+});
+$("#fav-limit").addEventListener("input", favSyncNote);
+$("#fav-list").addEventListener("change", e => {
+  const box = e.target.closest('input[type="checkbox"]');
+  if(!box || !favData) return;
+  const item = favData.items[Number(box.dataset.i)];
+  if(!item) return;
+  if(box.checked) favChecked.add(item.bvid); else favChecked.delete(item.bvid);
+  favSyncNote();
+});
+let favVeilPressed = false;
+$("#fav-veil").addEventListener("mousedown", e => { favVeilPressed = (e.target === e.currentTarget); });
+$("#fav-veil").addEventListener("click", e => {
+  if(e.target.id === "fav-veil" && favVeilPressed) closeFav();
+  favVeilPressed = false;
+});
+addEventListener("keydown", e => { if(e.key === "Escape") closeFav(); });
+
 refreshAll();
 checkActiveJob();
 jfetch("/api/runs?page=1&page_size=1").then(r => {
