@@ -12,7 +12,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from ..download import VideoMeta, read_meta
+from ..download import VideoMeta, make_run_id, read_meta
 from ..errors import VidereadError
 from ..frames import has_frames
 from ..report import Outline
@@ -176,6 +176,37 @@ def _entry(run_dir: Path) -> dict | None:
             _ENTRY_CACHE.clear()
         _ENTRY_CACHE[key] = entry
     return entry
+
+
+def existing_report(out_root: Path, url: str, bvid: str) -> dict | None:
+    """该视频是否已有报告：返回最新一份 `-rN` 分身的信息，供批量投递跳过。
+
+    与 probe 的判据一致：只认 `report.html` 存在的目录，且同一视频的重新解析
+    分身（`<base>-rN`）也算。
+    """
+    if not bvid:
+        return None
+    base_id = make_run_id(url, bvid)
+    root = Path(out_root)
+    if not root.is_dir():
+        return None
+    candidates: list[Path] = []
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        if child.name != base_id and not re.fullmatch(rf"{re.escape(base_id)}-r\d+", child.name):
+            continue
+        if (child / "report.html").is_file():
+            candidates.append(child)
+    if not candidates:
+        return None
+    latest = max(candidates, key=lambda d: d.stat().st_mtime)
+    generated = datetime.fromtimestamp(latest.stat().st_mtime).astimezone()
+    return {
+        "run_id": latest.name,
+        "generated_at": generated.strftime("%m-%d %H:%M"),
+        "report_url": f"/report/{latest.name}",
+    }
 
 
 def list_runs(out_root: Path) -> list[dict]:
