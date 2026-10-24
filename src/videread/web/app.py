@@ -37,6 +37,9 @@ EDITORIAL_DIR = STATIC_DIR / "editorial"
 EDITORIAL_ASSETS = (
     "css/base.css", "css/index.css", "css/reader.css", "css/job.css",
     "js/common.js", "js/index.js", "js/reader.js", "js/job.js", "js/theme.js",
+    "fonts/fraunces/index.css", "fonts/fraunces/500.css", "fonts/fraunces/600-italic.css",
+    "fonts/noto-serif-sc/index.css", "fonts/noto-serif-sc/500.css", "fonts/noto-serif-sc/600.css",
+    "fonts/ibm-plex-mono/index.css",
 )
 HEARTBEAT_SEC = 15.0
 _BATCH_ID_RE = re.compile(r"^[a-f0-9]{12}$")
