@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<script>(function(){var t;try{t=localStorage.getItem("videread.theme")}catch(e){}if(t!=="light"&&t!=="dark"){t=window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";try{localStorage.setItem("videread.theme",t)}catch(e){}}document.documentElement.dataset.theme=t==="dark"?"dark":"light";})();</script>
+<script>(function(){var t;try{t=localStorage.getItem("videread.theme")}catch(e){}if(t!=="light"&&t!=="dark"&&t!=="auto"){t="auto";try{localStorage.setItem("videread.theme",t)}catch(e){}}var sys=t==="auto"&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches;document.documentElement.dataset.theme=(t==="dark"||sys)?"dark":"light";})();</script>
 <script>if("scrollRestoration" in history)history.scrollRestoration="manual";</script>
 <title>投印工单 · VIDEREAD 视读</title>
 <link rel="stylesheet" href="/static/editorial/css/base.css">
@@ -42,10 +42,6 @@
     </div>
     <p class="job-url" id="job-url">—</p>
     <div class="meta" id="job-meta"></div>
-    <div id="batch-wrap" hidden>
-      <div class="proof-h">BATCH · 篇目</div>
-      <ul class="batch-list" id="batch-list"></ul>
-    </div>
     <div class="stepper-wrap">
       <span class="stepper-fill" id="stepper-fill" aria-hidden="true"></span>
       <ol class="stepper" id="stepper"></ol>

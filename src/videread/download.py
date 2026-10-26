@@ -13,13 +13,13 @@ import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
 from . import execution
 from .config import MAX_VIDEO_DURATION_SEC, Settings, get_settings
-from .errors import DownloadError, UsageError
+from .errors import DownloadError
 from .transcript import format_time
 
 _BVID_RE = re.compile(r"(BV[0-9A-Za-z]{10})")
@@ -47,12 +47,6 @@ _SUBTITLE_LANGS = "zh-CN,zh-Hans,zh,zh-Hant,ai-zh,ai-en,en"
 # B 站分P探测用的公开 view 接口：无需登录，一次请求带回全部分P 的标题与时长
 _VIEW_API = "https://api.bilibili.com/x/web-interface/view"
 _VIEW_TIMEOUT_SEC = 8.0
-
-# 收藏夹：公开接口一次 20 条，带 has_more 翻页。登录 Cookie 只用于读取
-# 私密收藏夹；没有 Cookie 时公开收藏夹仍可读。
-_FAV_API = "https://api.bilibili.com/x/v3/fav/resource/list"
-_FAV_TIMEOUT_SEC = 15.0
-_FAV_MAX_PAGES = 50  # 兜底：最多 1000 条，避免异常响应导致无限翻页
 
 # player wbi/v2 接口：字幕权威来源。必须带 wbi 签名——未签名（yt-dlp 现状）
 # 恒返回空；老版非签名 /x/player/v2 虽有返回但内容会与视频错乱（实测会把
@@ -199,141 +193,6 @@ def normalize_source(text: str) -> str:
     if _BVID_RE.fullmatch(value):
         return f"https://www.bilibili.com/video/{value}"
     return value
-
-
-def favlist_id(text: str) -> str:
-    """收藏夹链接 → media_id；不是收藏夹链接返回空串。
-
-    支持 `space.bilibili.com/<mid>/favlist?fid=<id>` 与
-    `www.bilibili.com/medialist/{detail,play}/ml<id>` 两种常见形态。
-    """
-    value = (text or "").strip()
-    if not value:
-        return ""
-    if re.search(r"space\.bilibili\.com/\d+/favlist", value):
-        query = parse_qs(urlsplit(value).query)
-        fid = (query.get("fid") or [""])[0].strip()
-        return fid if fid.isdigit() else ""
-    match = re.search(r"bilibili\.com/medialist/(?:detail|play)/ml(\d+)", value)
-    return match.group(1) if match else ""
-
-
-def is_favlist_url(text: str) -> bool:
-    return bool(favlist_id(text))
-
-
-def _favorite_item(media: dict) -> dict | None:
-    """把收藏夹接口的一条 media 规范成批次条目；非视频/失效条目返回 None。"""
-    if not isinstance(media, dict):
-        return None
-    # type=2 是普通视频；音频、番剧等其它类型当前流水线不支持
-    if media.get("type") not in (None, 2):
-        return None
-    bvid = str(media.get("bvid") or "").strip()
-    if not bvid:
-        return None
-    try:
-        duration = float(media.get("duration") or 0.0)
-    except (TypeError, ValueError):
-        duration = 0.0
-    upper = media.get("upper") if isinstance(media.get("upper"), dict) else {}
-    title = str(media.get("title") or "").strip() or bvid
-    return {
-        "bvid": bvid,
-        "url": f"https://www.bilibili.com/video/{bvid}",
-        "title": title,
-        "uploader": str(upper.get("name") or "").strip(),
-        "cover": str(media.get("cover") or "").strip(),
-        "duration": duration,
-        "duration_text": format_time(duration) if duration > 0 else "—",
-        "too_long": duration > MAX_VIDEO_DURATION_SEC,
-        # attr 非 0 或标题为空通常意味着稿件已失效；前端据此标灰并禁止勾选
-        "available": bool(title and title != bvid and not media.get("attr")),
-    }
-
-
-def resolve_favorites(source: str, settings: Settings | None = None) -> dict:
-    """读取 B 站收藏夹并返回可投递的视频清单。
-
-    只读取清单，不下载、不转写；时长取自收藏夹接口，因此无需逐条 probe。
-    私密收藏夹需要配置登录 Cookie，否则接口返回 -403。
-    """
-    fid = favlist_id(source)
-    if not fid:
-        raise UsageError("这不是 B 站收藏夹链接（支持 space.bilibili.com/…/favlist?fid=…）")
-
-    settings = settings or get_settings()
-    items: list[dict] = []
-    info: dict = {}
-    page = 1
-    truncated = False
-    headers = {
-        "User-Agent": "Mozilla/5.0 (videread)",
-        "Referer": "https://space.bilibili.com/",
-    }
-
-    try:
-        with httpx.Client(
-            timeout=httpx.Timeout(_FAV_TIMEOUT_SEC),
-            proxy=settings.proxy,
-            follow_redirects=True,
-            headers=headers,
-            cookies=_cookies_dict(settings),
-        ) as client:
-            while page <= _FAV_MAX_PAGES:
-                response = client.get(
-                    _FAV_API,
-                    params={
-                        "media_id": fid,
-                        "pn": page,
-                        "ps": 20,
-                        "platform": "web",
-                    },
-                )
-                payload = response.json()
-                if not isinstance(payload, dict):
-                    raise DownloadError("收藏夹接口返回了无法识别的内容")
-                code = payload.get("code")
-                if code == -403:
-                    raise DownloadError(
-                        "这个收藏夹是私密的，需要登录 B 站账号才能读取。"
-                        "请按 README 配置 cookies.txt 后重试。"
-                    )
-                if code == -404:
-                    raise DownloadError("收藏夹不存在，或已被删除")
-                if code != 0:
-                    raise DownloadError(
-                        f"读取收藏夹失败：{payload.get('message') or f'错误码 {code}'}"
-                    )
-
-                data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-                if isinstance(data.get("info"), dict):
-                    info = data["info"]
-                medias = data.get("medias") or []
-                for media in medias:
-                    item = _favorite_item(media)
-                    if item is not None:
-                        items.append(item)
-                if not data.get("has_more") or not medias:
-                    break
-                page += 1
-    except httpx.HTTPError as exc:
-        raise DownloadError(f"读取收藏夹失败：{exc}") from exc
-    except ValueError as exc:
-        raise DownloadError(f"收藏夹接口返回了非法 JSON：{exc}") from exc
-
-    if page > _FAV_MAX_PAGES:
-        truncated = True
-
-    return {
-        "fid": fid,
-        "title": str(info.get("title") or f"收藏夹 {fid}").strip(),
-        "uploader": str((info.get("upper") or {}).get("name") or "").strip(),
-        "cover": str(info.get("cover") or "").strip(),
-        "count": int(info.get("media_count") or len(items)),
-        "items": items,
-        "truncated": truncated,
-    }
 
 
 def local_path(text: str) -> Path | None:
@@ -1051,6 +910,45 @@ def cookies_have_login(cookies_file: str | None) -> bool:
     except OSError:
         return False
     return False
+
+
+def login_state(settings: Settings) -> bool | None:
+    """实时校验 cookies 登录态：True 已登录 / False 未登录 / None 查询失败。
+
+    cookies 文件里有 SESSDATA 只代表「导出那一刻」是登录态；B 站服务端可以
+    随时让会话失效（重新登录、改密码、风控踢下线），此时文件里的名义有效期
+    还远没到。字幕抓取空手而归时用它区分「没配置登录」与「登录已失效」，
+    给用户准确的修复指引。nav 接口未登录时 code=-101 且 data.isLogin 缺失。
+    """
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(_PLAYER_TIMEOUT_SEC),
+            proxy=settings.proxy,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (videread)"},
+        ) as client:
+            payload = client.get(_NAV_API, cookies=_cookies_dict(settings)).json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return bool((payload.get("data") or {}).get("isLogin"))
+
+
+def sessdata_expired_hint(settings: Settings) -> str | None:
+    """cookies 里明明有 SESSDATA、B 站却判定未登录时的修复提示。
+
+    只在实时校验确认失效时返回文案；网络失败或登录正常返回 None，
+    不在流水线里多念叨。
+    """
+    if login_state(settings) is not False:
+        return None
+    return (
+        "cookies 文件里有 SESSDATA，但 B 站已判定登录态失效（重新登录、"
+        "改密码或风控下线都会让旧会话作废，文件里的有效期不代表还能用）。"
+        "请用已登录的浏览器重新导出 cookies.txt 覆盖原文件后重跑——"
+        "登录态恢复后，带字幕的视频可直接由字幕建稿，省去音频下载与 ASR 费用。"
+    )
 
 
 def subtitle_login_hint(settings: Settings) -> str | None:

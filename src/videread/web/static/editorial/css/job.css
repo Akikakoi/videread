@@ -36,29 +36,6 @@ h1{
 .meta span b{color:var(--ink);font-weight:400;}
 .meta span .q{color:var(--accent);}
 
-/* ---------- 批次篇目（收藏夹批量投印） ---------- */
-.batch-list{
-  list-style:none;margin:0 0 26px;padding:0;border-top:2px solid var(--ink);
-  max-height:300px;overflow-y:auto;
-}
-.batch-item{
-  display:grid;grid-template-columns:26px 1fr auto;column-gap:14px;row-gap:3px;
-  align-items:baseline;padding:9px 2px;border-bottom:1px solid var(--hairline);
-}
-.bi-no{font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:.5px;}
-.bi-t{font-size:14px;line-height:1.55;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.bi-st{font-family:var(--mono);font-size:10.5px;letter-spacing:1px;color:var(--muted);white-space:nowrap;}
-.bi-x{grid-column:2 / -1;display:flex;flex-wrap:wrap;gap:4px 12px;font-family:var(--mono);font-size:10.5px;color:var(--faint);}
-.bi-x:empty{display:none;}
-.bi-x a{color:var(--accent);text-decoration:none;}
-.bi-x a:hover{text-decoration:underline;}
-.bi-x .warn{color:var(--accent);}
-.batch-item.pending .bi-st{color:var(--faint);}
-.batch-item.running .bi-st{color:var(--accent);}
-.batch-item.done .bi-st{color:var(--ok);}
-.batch-item.error .bi-st{color:var(--accent);}
-.batch-item.cancelled .bi-t,.batch-item.skipped .bi-t{color:var(--faint);}
-
 /* ---------- 八阶段步进器（与主页同款） ---------- */
 .stepper-wrap{position:relative;}
 /* 进度墨线：覆盖在步进器上边框上，随阶段推进 */

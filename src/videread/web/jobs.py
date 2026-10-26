@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import json
 import queue
 import re
 import threading
@@ -57,9 +56,6 @@ class Job:
         frames: bool | None = None,
         retry: bool = False,
         lang: str | None = None,
-        items: list[dict] | None = None,
-        batch_title: str = "",
-        manifest_path: Path | None = None,
     ) -> None:
         self.id = uuid.uuid4().hex[:12]
         self.url = url
@@ -72,9 +68,6 @@ class Job:
         self.out_root = Path(out_root)
         self.frames = frames
         self.lang = (lang or "").strip().lower() or None
-        self.items = [dict(item) for item in (items or [])]
-        self.batch_title = batch_title
-        self.manifest_path = Path(manifest_path) if manifest_path else None
         self.state = "queued"
         self.stage_index = 0
         self.logs: list[str] = []
@@ -154,110 +147,6 @@ class Job:
         if self._cancel_event.is_set():
             raise CancelledError("用户取消了任务")
 
-    # ------------------------------------------------------------------ 批次
-
-    def _write_manifest(self) -> None:
-        """把批次清单落盘；写盘失败不影响任务本身（清单只是可观测副本）。"""
-        if self.manifest_path is None:
-            return
-        payload = {
-            "id": self.id,
-            "url": self.url,
-            "mode": self.mode,
-            "batch_title": self.batch_title,
-            "state": self.state,
-            "created_at": self.created_at,
-            "finished_at": self.finished_at,
-            "item_done": sum(1 for item in self.items if item.get("state") == "done"),
-            "item_error": sum(1 for item in self.items if item.get("state") == "error"),
-            "item_skipped": sum(1 for item in self.items if item.get("state") == "skipped"),
-            "items": [dict(item) for item in self.items],
-        }
-        try:
-            self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.manifest_path.with_name(self.manifest_path.name + ".tmp")
-            temporary.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            temporary.replace(self.manifest_path)
-        except OSError:
-            return
-
-    def run_batch(self) -> None:
-        """逐条执行批次；单条失败不中断，全部失败才让整个批次失败。"""
-        total = len(self.items)
-        runnable = sum(1 for item in self.items if item.get("state") == "pending")
-        done = 0
-        failed = 0
-        for index, item in enumerate(self.items):
-            if item.get("state") != "pending":
-                continue
-            self.cancel_check()
-            self.stage_index = 0
-            self.emit("stage", index=0)
-            item["state"] = "running"
-            item.pop("error", None)
-            item.pop("error_hint", None)
-            self.emit("item", index=index, total=total, state="running", item=dict(item))
-            self._write_manifest()
-            label = item.get("title") or item.get("url") or f"第 {index + 1} 条"
-            self.progress(f"[批次 {index + 1}/{total}] {label}")
-            try:
-                report = pipeline_run(
-                    item["url"],
-                    mode=self.mode,
-                    out_root=self.out_root,
-                    use_cache=not self.no_cache,
-                    keep_audio=self.keep_audio,
-                    asr_backend=self.asr_backend,
-                    open_report=False,
-                    frames=self.frames,
-                    fresh_dir=self.retry,
-                    report_lang=self.lang,
-                    cancel_check=self.cancel_check,
-                    progress=self.progress,
-                )
-            except CancelledError:
-                item["state"] = "cancelled"
-                self._write_manifest()
-                self.emit("item", index=index, total=total, state="cancelled", item=dict(item))
-                raise
-            except VidereadError as exc:
-                item["state"] = "error"
-                item["error"] = str(exc)
-                item["error_hint"] = failures.hint(int(exc.exit_code))
-                failed += 1
-                self.emit("log", line=f"[失败] {label}：{exc}")
-            except BaseException as exc:  # 兜底：单条未归类异常不影响后续篇目
-                item["state"] = "error"
-                item["error"] = f"{type(exc).__name__}: {exc}"
-                failed += 1
-                self.emit("log", line=f"[失败] {label}：{item['error']}")
-            else:
-                item["state"] = "done"
-                item["run_id"] = report.parent.name
-                item["report_url"] = f"/report/{report.parent.name}"
-                done += 1
-            self._write_manifest()
-            self.emit("item", index=index, total=total, state=item["state"], item=dict(item))
-
-        if runnable and failed == runnable:
-            raise VidereadError(f"{runnable} 个视频全部失败，请查看篇目里的失败原因")
-        self.exit_code = EXIT_OK
-        self.state = "done"
-        self.finished_at = _now()
-        self._write_manifest()
-        self.emit(
-            "done",
-            state="done",
-            run_id=None,
-            report_url=None,
-            batch=True,
-            done=done,
-            failed=failed,
-        )
-
     # -------------------------------------------------------------------- 快照
 
     @property
@@ -265,9 +154,6 @@ class Job:
         return self.state in _TERMINAL
 
     def snapshot(self) -> dict:
-        done = sum(1 for item in self.items if item.get("state") == "done")
-        failed = sum(1 for item in self.items if item.get("state") == "error")
-        skipped = sum(1 for item in self.items if item.get("state") == "skipped")
         return {
             "id": self.id,
             "url": self.url,
@@ -283,12 +169,6 @@ class Job:
             "cancel_requested": self.cancel_requested,
             "created_at": self.created_at,
             "finished_at": self.finished_at,
-            "batch": bool(self.items),
-            "batch_title": self.batch_title,
-            "items": [dict(item) for item in self.items],
-            "item_done": done,
-            "item_error": failed,
-            "item_skipped": skipped,
         }
 
 
@@ -388,61 +268,6 @@ class JobManager:
             )
         return job
 
-    def submit_batch(
-        self,
-        *,
-        items: list[dict],
-        url: str,
-        batch_title: str = "",
-        mode: str = "standard",
-        no_cache: bool = False,
-        keep_audio: bool = False,
-        asr_backend: str | None = None,
-        frames: bool | None = None,
-        retry: bool = False,
-        lang: str | None = None,
-    ) -> Job:
-        """提交一个批次：批次整体占一个队列位，内部逐条串行执行。"""
-        url = (url or "").strip()
-        mode = (mode or "standard").strip().lower()
-        if not items:
-            raise VidereadError("批次里没有可执行的视频")
-        if mode not in _MODES:
-            raise VidereadError(f"未知模式：{mode!r}（可选 standard / deep / brief / outline）")
-
-        with self._lock:
-            busy = self._active is not None and not self._active.terminal
-            if busy and len(self._queue) >= self.MAX_QUEUE:
-                raise JobBusy(f"队列已满（{self.MAX_QUEUE} 个），请等前面的任务消化完")
-            job = Job(
-                url=url,
-                mode=mode,
-                no_cache=no_cache,
-                keep_audio=keep_audio,
-                asr_backend=asr_backend,
-                out_root=self.out_root,
-                frames=frames,
-                retry=retry,
-                lang=lang,
-                items=items,
-                batch_title=batch_title,
-            )
-            job.manifest_path = self.out_root / "_batches" / f"{job.id}.json"
-            self._jobs[job.id] = job
-            self._prune_jobs_locked()
-            self._queue.append(job)
-            queue_position = len(self._queue) if busy else 0
-            if not busy:
-                self._start_next_locked()
-        job._write_manifest()
-        if queue_position:
-            job.emit(
-                "log",
-                line=f"[排队] 批次已加入队列，当前排在第 {queue_position} 位"
-                f"（共 {queue_position} 个等待）",
-            )
-        return job
-
     def _prune_jobs_locked(self) -> None:
         """会话记录兜底：只保留最近 _MAX_JOBS 个，优先清最早的已终态任务。"""
         if len(self._jobs) <= self._MAX_JOBS:
@@ -481,9 +306,6 @@ class JobManager:
         job.state = "running"
         job.emit("status", state="running")
         try:
-            if job.items:
-                job.run_batch()
-                return
             report = pipeline_run(
                 job.url,
                 mode=job.mode,
@@ -523,7 +345,6 @@ class JobManager:
             job.emit("log", line=traceback.format_exc(limit=3).strip())
             self._fail(job, EXIT_USAGE, error, hint="未归类异常，请查看运行日志")
         finally:
-            job._write_manifest()
             # 无论成败都立即放行下一个排队任务
             self._start_next()
 

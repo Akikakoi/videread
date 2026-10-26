@@ -492,6 +492,112 @@ def test_subtitle_login_hint_suggests_configuring_cookies():
     assert hint is not None and "YTDLP_COOKIES_FILE" in hint
 
 
+# ------------------------------------------------- 实时登录态校验（nav 接口）
+
+
+def _nav_client(payload: object) -> type:
+    """构造恒定返回 payload 的 httpx.Client 假件（login_state 的离线替身）。"""
+
+    class _FakeResponse:
+        def json(self) -> object:
+            return payload
+
+    class _FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "_FakeClient":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def get(self, *_args, **_kwargs) -> _FakeResponse:
+            return _FakeResponse()
+
+    return _FakeClient
+
+
+def test_login_state_true_when_nav_reports_login(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        download.httpx,
+        "Client",
+        _nav_client({"code": 0, "data": {"isLogin": True}}),
+    )
+    assert download.login_state(_settings()) is True
+
+
+def test_login_state_false_when_session_revoked(monkeypatch: pytest.MonkeyPatch):
+    # SESSDATA 还在文件里、名义有效期未到，但服务端已让会话作废
+    monkeypatch.setattr(
+        download.httpx,
+        "Client",
+        _nav_client({"code": -101, "message": "账号未登录", "data": {}}),
+    )
+    assert download.login_state(_settings()) is False
+
+
+def test_login_state_none_on_network_or_payload_failure(monkeypatch: pytest.MonkeyPatch):
+    class _BrokenClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "_BrokenClient":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def get(self, *_args, **_kwargs) -> object:
+            raise download.httpx.ConnectError("network down")
+
+    monkeypatch.setattr(download.httpx, "Client", _BrokenClient)
+    assert download.login_state(_settings()) is None
+    monkeypatch.setattr(
+        download.httpx, "Client", _nav_client("not even a dict")
+    )
+    assert download.login_state(_settings()) is None
+
+
+def test_sessdata_expired_hint_only_when_confirmed_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        download.httpx, "Client", _nav_client({"code": -101, "data": {}})
+    )
+    hint = download.sessdata_expired_hint(_settings())
+    assert hint is not None and "失效" in hint
+
+    # 登录正常 / 网络失败都不打扰
+    monkeypatch.setattr(
+        download.httpx, "Client", _nav_client({"code": 0, "data": {"isLogin": True}})
+    )
+    assert download.sessdata_expired_hint(_settings()) is None
+    # code=-101 且无 data 也是「未登录」签名 → 照样提示
+    monkeypatch.setattr(download.httpx, "Client", _nav_client({"code": -101}))
+    assert download.sessdata_expired_hint(_settings()) is not None
+
+
+def test_sessdata_expired_hint_silent_when_query_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class _BrokenClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "_BrokenClient":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def get(self, *_args, **_kwargs) -> object:
+            raise download.httpx.ConnectError("network down")
+
+    monkeypatch.setattr(download.httpx, "Client", _BrokenClient)
+    assert download.sessdata_expired_hint(_settings()) is None
+
+
 # ------------------------------------------ 直连接口字幕：JSON→SRT 与错乱防御
 
 

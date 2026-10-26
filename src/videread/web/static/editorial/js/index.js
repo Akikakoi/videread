@@ -189,6 +189,8 @@ async function openFeature(runId){
   currentRunId = runId;
   const body = $("#feature-body");
   body.innerHTML = '<p class="skeleton">正在装订这一期…</p>';
+  const fhint = $("#feature-hint");
+  if(fhint) fhint.textContent = "";
   let d;
   try{
     d = await jfetch("/api/runs/" + encodeURIComponent(runId));
@@ -259,6 +261,13 @@ async function openFeature(runId){
   });
   askBtn.addEventListener("click", () => ask(runId, askBtn));
   $("#ask-input").addEventListener("keydown", e => { if(e.key === "Enter") ask(runId, askBtn); });
+  /* 板块标题旁标注正在展示的是哪一期；目录里同步「本期特稿」标记 */
+  const hint = $("#feature-hint");
+  if(hint){
+    hint.textContent = "正在展示 · " + (d.title_full || d.title || "");
+    hint.title = hint.textContent;
+  }
+  syncFeatureMarks();
 }
 
 const LETTERS_EMPTY = '<p class="letters-empty">还没有来信。就这一期提个问题吧。</p>';
@@ -440,15 +449,85 @@ async function loadRuns(page, silent){
 function rowOf(item, i){
   /* 期号跨页连续：第 N 页从 (N-1)*10+1 续编，而不是每页都从 01 重来 */
   const no = (state.page - 1) * 10 + i + 1;
-  return '<li><a href="#" data-run="' + esc(item.run_id) + '">' +
+  /* 正在作为「本期特稿」展示的那一期：行加标记类 + 实心徽标，方便一眼定位 */
+  const isFeature = item.run_id === currentRunId;
+  return '<li' + (isFeature ? ' class="feature-now"' : "") + '><a href="#" data-run="' + esc(item.run_id) + '">' +
     '<span class="no">' + String(no).padStart(2, "0") + '</span>' +
     '<span class="t">' + esc(item.title) + '<small>' + esc(item.uploader || "—") + ' · ' + esc(item.generated_at || "") + '</small></span>' +
     '<span class="dots"></span>' +
     '<span class="dur">' + esc(item.duration_text || "—") + '</span>' +
+    (isFeature ? '<span class="tag hot" title="这一期正在下方特稿区展示">本期特稿</span>' : "") +
     tagOf(item) +
     '<button class="fav' + (item.favorite ? " on" : "") + '" data-fav-run="' + esc(item.run_id) + '" data-on="' + (item.favorite ? 1 : 0) + '" title="收藏">' + (item.favorite ? "★" : "☆") + '</button>' +
     '<button class="del" data-del-run="' + esc(item.run_id) + '" data-del-title="' + esc(item.title || item.run_id) + '" title="删除这一期">✕</button>' +
     '</a></li>';
+}
+
+/* 特稿切换后同步目录标记：只动现有 DOM（行类与徽标），不重新拉列表。
+   openFeature 初次渲染时 loadRuns 可能尚未完成或已用旧 currentRunId 画过，
+   统一在这里收口，保证目录里「本期特稿」永远指向当前展示的那一期。 */
+function syncFeatureMarks(){
+  document.querySelectorAll("#toc-list a[data-run]").forEach(a => {
+    const isFeature = a.dataset.run === currentRunId;
+    const li = a.closest("li");
+    if(li) li.classList.toggle("feature-now", isFeature);
+    const tag = a.querySelector(".tag.hot");
+    if(isFeature && !tag){
+      const fresh = document.createElement("span");
+      fresh.className = "tag hot";
+      fresh.title = "这一期正在下方特稿区展示";
+      fresh.textContent = "本期特稿";
+      const dots = a.querySelector(".dots");
+      if(dots) dots.insertAdjacentElement("afterend", fresh);
+      else a.appendChild(fresh);
+    }else if(!isFeature && tag){
+      tag.remove();
+    }
+  });
+}
+
+/* 删除退场动画，对应确认弹窗的文案「撕掉这一期？」，两条 WAAPI 串行（约 1.1s）：
+   1) 0–0.40s  CSS .removing 类：3px 朱红横线从左向右划掉整行（勾销感），
+               同时 fade 拍把整行褪成 35% 弱化态；
+   2) 0.42–0.78s 撕落：整行逆时针倾斜 1.8°、向下脱落 8px、淡出——纸页被撕掉；
+   3) 0.80–1.10s 收拢：行高与底线收到 0，后续行自然上移补位。
+   拆成两条动画是因为单条多关键帧会把 transform/height 的插值摊满全时段
+   （实测倾斜从 0.2s 就开始爬），串行执行每拍边界才干净。
+   遵守 prefers-reduced-motion：命中时返回 null，调用方走瞬时重绘。 */
+function collapseRow(row){
+  if(!row || !row.animate || matchMedia("(prefers-reduced-motion: reduce)").matches) return null;
+  row.style.overflow = "hidden";
+  const link = row.querySelector("a");
+  const ease = "cubic-bezier(.22,.61,.36,1)";
+  const fade = row.animate(
+    [{opacity: 1}, {opacity: .35}],
+    {duration: 400, easing: ease, fill: "forwards"}
+  );
+  const tear = row.animate(
+    [{opacity: .35, transform: "none"}, {opacity: 0, transform: "rotate(-1.8deg) translateY(8px)"}],
+    {duration: 360, delay: 420, easing: ease, fill: "forwards"}
+  );
+  const collapse = row.animate(
+    [
+      {height: row.offsetHeight + "px", borderBottomColor: getComputedStyle(row).borderBottomColor},
+      {height: "0px", borderBottomColor: "transparent"}
+    ],
+    {duration: 320, delay: 800, easing: ease, fill: "forwards"}
+  );
+  if(link){
+    link.classList.add("removing");
+    const unstyle = () => link.classList.remove("removing");
+    fade.oncancel = unstyle;
+    tear.oncancel = unstyle;
+    collapse.oncancel = unstyle;
+  }
+  /* 返回带 finished/cancel 的薄封装：调用方 await finished、失败时 cancel 全部 */
+  return {
+    finished: Promise.all([fade.finished, tear.finished, collapse.finished]).then(() => {}),
+    cancel(){
+      for(const a of [fade, tear, collapse]) a.cancel();
+    },
+  };
 }
 
 function bindToc(){
@@ -485,8 +564,10 @@ function bindToc(){
       if(OFFLINE){ toast("离线演示模式，暂不支持删除"); return; }
       const ok = await askDelete("run", title);
       if(!ok) return;
+      const fade = collapseRow(b.closest("li"));
       try{
-        await del("/api/runs/" + encodeURIComponent(runId));
+        /* 接口与退场动画并行：网络再快动画也完整走完，慢了也不额外等待 */
+        await Promise.all([del("/api/runs/" + encodeURIComponent(runId)), fade ? fade.finished : Promise.resolve()]);
         toast("已删除：" + title);
         if(currentRunId === runId){
           currentRunId = null;
@@ -496,7 +577,11 @@ function bindToc(){
           }catch(err2){}
         }
         loadRuns(null, true);
-      }catch(err){ toast("删除失败：" + err.message); }
+      }catch(err){
+        /* 删除失败：撤销动画，行原样恢复 */
+        if(fade) fade.cancel();
+        toast("删除失败：" + err.message);
+      }
     });
   });
 }
@@ -995,10 +1080,11 @@ const LLM_PRESETS = {
 };
 
 function openSettings(){
-  if(OFFLINE){ toast("离线演示模式，暂不支持模型设置"); return; }
+  if(OFFLINE){ toast("离线演示模式，暂不支持设置"); return; }
   $("#settings-veil").classList.add("open");
   $("#settings-veil").setAttribute("aria-hidden", "false");
   setStNote("");
+  syncGeneralPane(); /* 通用页签：主题与投印默认值随开随显 */
   jfetch("/api/settings").then(s => {
     stEffectiveBaseUrl = s.base_url || "";
     $("#st-base-url").value = s.base_url || "";
@@ -1218,167 +1304,95 @@ $("#st-reset").addEventListener("click", async () => {
   }
 });
 
-/* ================= 收藏夹批量投印 ================= */
-/* 一个收藏夹 = 一个批次工单：整批只占一个队列位，内部仍逐条串行跑流水线 */
-let favData = null;            /* 最近一次解析结果 */
-const favChecked = new Set();  /* 已勾选的 bvid */
-let favBusy = false;
+/* ================= 设置弹窗：页签 ================= */
+document.querySelectorAll(".st-tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".st-tab").forEach(x => x.classList.toggle("on", x === tab));
+    document.querySelectorAll(".st-pane").forEach(p => p.classList.toggle("on", p.id === "st-pane-" + tab.dataset.tab));
+  });
+});
 
-function favSelectable(it){
-  if(!it.available || it.too_long) return false;
-  /* 勾着「跳过已有报告」时，有报告的条目不可选，避免白跑一遍 */
-  if($("#fav-skip").checked && it.existing_report) return false;
-  return true;
+/* ================= 设置 · 通用页签（主题 + 投印默认值） ================= */
+/* 投印默认值存 localStorage，打开页面时套用到投印表单；表单里仍可按次覆盖 */
+function storedDefaults(){
+  try{ return JSON.parse(localStorage.getItem("videread.defaults") || "{}") || {}; }
+  catch(e){ return {}; }
 }
 
-function favSyncNote(){
-  const items = favData ? favData.items : [];
-  const runnable = items.filter(favSelectable).length;
-  const limit = Math.max(0, parseInt($("#fav-limit").value, 10) || 0);
-  const selected = items.filter(it => favSelectable(it) && favChecked.has(it.bvid)).length;
-  const planned = limit > 0 ? Math.min(limit, selected) : selected;
-  $("#fav-count").textContent = "已选 " + selected + " / 可投 " + runnable + " / 共 " + items.length +
-    (limit > 0 ? " · 本次投印 " + planned + " 条" : "");
-  $("#fav-submit").disabled = favBusy || planned === 0;
-}
-
-function renderFavList(){
-  const items = favData ? favData.items : [];
-  $("#fav-list").innerHTML = items.map((it, i) => {
-    const ok = favSelectable(it);
-    const checked = ok && favChecked.has(it.bvid);
-    const badges = [];
-    if(it.existing_report){
-      badges.push('<span><a href="' + esc(it.existing_report.report_url) + '" target="_blank" rel="noopener">已有报告 · ' + esc(it.existing_report.generated_at) + '</a></span>');
+function applyDefaultsToForm(){
+  const d = storedDefaults();
+  if(d.mode && document.querySelector('#modes .mode[data-mode="' + d.mode + '"]')){
+    document.querySelectorAll("#modes .mode").forEach(x => x.classList.remove("on"));
+    document.querySelector('#modes .mode[data-mode="' + d.mode + '"]').classList.add("on");
+    mode = d.mode;
+  }
+  if(typeof d.lang === "string"){
+    const btn = $("#lang-btn"), pick = $("#lang-pick");
+    /* 历史默认值里的空串（旧「跟随配置」）统一视作中文 */
+    const item = pick ? pick.querySelector('.lang-item[data-lang="' + (d.lang || "zh") + '"]') : null;
+    if(btn && item){
+      pick.querySelectorAll(".lang-item").forEach(x => x.classList.toggle("on", x === item));
+      btn.dataset.lang = item.dataset.lang;
+      btn.dataset.label = item.dataset.label;
+      btn.textContent = "语言 · " + item.dataset.label;
     }
-    if(it.too_long) badges.push('<span class="warn">超过 2 小时上限</span>');
-    if(!it.available) badges.push('<span class="warn">视频已失效</span>');
-    return '<li class="fav-item' + (ok ? "" : " off") + '">' +
-      '<label><input type="checkbox" data-i="' + i + '"' + (checked ? " checked" : "") + (ok ? "" : " disabled") + '>' +
-      '<span class="fav-t">' + esc(it.title) + '</span></label>' +
-      '<span class="fav-meta">' + esc(it.duration_text) + (it.uploader ? " · " + esc(it.uploader) : "") + '</span>' +
-      (badges.length ? '<div class="fav-badges">' + badges.join("") + '</div>' : "") +
-      '</li>';
-  }).join("");
-  $("#fav-list-wrap").hidden = items.length === 0;
-  favSyncNote();
-}
-
-function favReset(){
-  favData = null;
-  favChecked.clear();
-  $("#fav-list").innerHTML = "";
-  $("#fav-list-wrap").hidden = true;
-  $("#fav-note").textContent = "";
-  $("#fav-count").textContent = "—";
-  $("#fav-submit").disabled = true;
-}
-
-function openFav(){
-  if(OFFLINE){ toast("离线演示模式，暂不支持批量投印"); return; }
-  $("#fav-veil").classList.add("open");
-  $("#fav-veil").setAttribute("aria-hidden", "false");
-  $("#fav-url").focus();
-}
-
-function closeFav(){
-  const veil = $("#fav-veil");
-  if(!veil.classList.contains("open")) return;
-  veil.classList.remove("open");
-  veil.setAttribute("aria-hidden", "true");
-}
-
-async function resolveFavorites(){
-  const url = $("#fav-url").value.trim();
-  if(!url){ toast("先粘贴收藏夹链接"); return; }
-  const btn = $("#fav-resolve");
-  btn.disabled = true; btn.textContent = "读取中…";
-  $("#fav-note").textContent = "正在读取收藏夹清单…";
-  $("#fav-submit").disabled = true;
-  try{
-    const data = await post("/api/favorites/resolve", {url});
-    favData = data;
-    favChecked.clear();
-    data.items.forEach(it => { if(favSelectable(it)) favChecked.add(it.bvid); });
-    if(!data.items.length){
-      $("#fav-note").innerHTML = '<span class="warn">这个收藏夹里没有可读取的视频</span>';
-      renderFavList();
-      return;
-    }
-    const skipped = data.items.filter(it => !favSelectable(it)).length;
-    $("#fav-note").textContent = "《" + data.title + "》共 " + data.items.length + " 条" +
-      (skipped ? "，其中 " + skipped + " 条默认不投（已有报告 / 超长 / 失效）" : "") +
-      (data.truncated ? "；清单过长，只读取了前 1000 条" : "");
-    renderFavList();
-  }catch(e){
-    favReset();
-    $("#fav-note").innerHTML = '<span class="warn">读取失败：' + esc(e.message) + '</span>';
-    toast("读取失败：" + e.message);
-  }finally{
-    btn.disabled = false; btn.textContent = "读取清单";
+  }
+  if(typeof d.frames === "boolean"){
+    const fs = $("#frames-switch");
+    if(fs) fs.checked = d.frames;
   }
 }
 
-async function submitBatch(){
-  if(favBusy || !favData) return;
-  const chosen = favData.items.filter(it => favSelectable(it) && favChecked.has(it.bvid));
-  if(!chosen.length){ toast("先勾选要总结的视频"); return; }
-  const btn = $("#fav-submit");
-  favBusy = true; btn.disabled = true; btn.textContent = "投递中…";
-  try{
-    const frames = $("#frames-switch") && $("#frames-switch").checked ? true : null;
-    const lang = ($("#lang-btn") || {}).dataset ? ($("#lang-btn").dataset.lang || null) : null;
-    const limit = Math.max(0, parseInt($("#fav-limit").value, 10) || 0);
-    const job = await post("/api/batches", {
-      url: $("#fav-url").value.trim(),
-      items: chosen.map(it => it.bvid),
-      mode, frames, lang,
-      skip_existing: $("#fav-skip").checked,
-      limit,
-      no_cache: true
+function syncThemeSeg(){
+  const t = (window.videreadTheme ? window.videreadTheme.get() : document.documentElement.dataset.theme) || "light";
+  document.querySelectorAll("#st-theme-seg .mode").forEach(x => x.classList.toggle("on", x.dataset.theme === t));
+}
+
+function syncGeneralPane(){
+  syncThemeSeg();
+  const d = storedDefaults();
+  document.querySelectorAll("#st-mode-seg .mode").forEach(x => x.classList.toggle("on", (x.dataset.dmode || "") === (d.mode || "standard")));
+  document.querySelectorAll("#st-lang-seg .mode").forEach(x => x.classList.toggle("on", (x.dataset.dlang || "") === (d.lang || "zh")));
+  const fs = $("#st-def-frames");
+  if(fs) fs.checked = !!d.frames;
+  const note = $("#st-gen-note");
+  if(note){ note.textContent = ""; note.className = "st-note"; }
+}
+
+/* 主题分段钮：点击立即生效并持久化（与旧页头滑块同语义），不用等保存 */
+document.querySelectorAll("#st-theme-seg .mode").forEach(b => {
+  b.addEventListener("click", () => {
+    if(window.videreadTheme) window.videreadTheme.set(b.dataset.theme);
+    syncThemeSeg();
+  });
+});
+
+/* 默认模式 / 默认语言分段钮：组内单选，点选后待保存 */
+document.querySelectorAll("#st-mode-seg, #st-lang-seg").forEach(seg => {
+  seg.querySelectorAll(".mode").forEach(b => {
+    b.addEventListener("click", () => {
+      seg.querySelectorAll(".mode").forEach(x => x.classList.toggle("on", x === b));
     });
-    localStorage.setItem("videread.activeJob", job.job_id);
-    closeFav();
-    location.href = "/editorial/job/" + encodeURIComponent(job.job_id);
-  }catch(e){
-    toast("投递失败：" + e.message);
-    btn.disabled = false; btn.textContent = "开始批量投印";
-  }finally{
-    favBusy = false;
-  }
-}
+  });
+});
 
-$("#btn-fav").addEventListener("click", openFav);
-$("#fav-cancel").addEventListener("click", closeFav);
-$("#fav-resolve").addEventListener("click", resolveFavorites);
-$("#fav-url").addEventListener("keydown", e => { if(e.key === "Enter") resolveFavorites(); });
-$("#fav-submit").addEventListener("click", submitBatch);
-$("#fav-all").addEventListener("click", () => {
-  (favData ? favData.items : []).forEach(it => { if(favSelectable(it)) favChecked.add(it.bvid); });
-  renderFavList();
+$("#st-gen-save").addEventListener("click", () => {
+  const mb = document.querySelector("#st-mode-seg .mode.on");
+  const lb = document.querySelector("#st-lang-seg .mode.on");
+  const d = {
+    mode: mb ? mb.dataset.dmode : "standard",
+    lang: lb ? lb.dataset.dlang : "zh",
+    label: lb ? (lb.dataset.dlabel || "中文") : "中文",
+    frames: !!($("#st-def-frames") && $("#st-def-frames").checked),
+  };
+  try{ localStorage.setItem("videread.defaults", JSON.stringify(d)); }catch(e){}
+  applyDefaultsToForm();
+  const note = $("#st-gen-note");
+  if(note){ note.textContent = "已保存，投印表单已套用这些默认值"; note.className = "st-note ok"; }
+  toast("设置已保存");
 });
-$("#fav-none").addEventListener("click", () => { favChecked.clear(); renderFavList(); });
-$("#fav-skip").addEventListener("change", () => {
-  /* 关掉「跳过已有」时可投范围变大，但不擅自替用户勾上已有报告的条目 */
-  (favData ? favData.items : []).forEach(it => { if(!favSelectable(it)) favChecked.delete(it.bvid); });
-  renderFavList();
-});
-$("#fav-limit").addEventListener("input", favSyncNote);
-$("#fav-list").addEventListener("change", e => {
-  const box = e.target.closest('input[type="checkbox"]');
-  if(!box || !favData) return;
-  const item = favData.items[Number(box.dataset.i)];
-  if(!item) return;
-  if(box.checked) favChecked.add(item.bvid); else favChecked.delete(item.bvid);
-  favSyncNote();
-});
-let favVeilPressed = false;
-$("#fav-veil").addEventListener("mousedown", e => { favVeilPressed = (e.target === e.currentTarget); });
-$("#fav-veil").addEventListener("click", e => {
-  if(e.target.id === "fav-veil" && favVeilPressed) closeFav();
-  favVeilPressed = false;
-});
-addEventListener("keydown", e => { if(e.key === "Escape") closeFav(); });
+
+applyDefaultsToForm(); /* 打开页面即套用保存的默认值 */
 
 refreshAll();
 checkActiveJob();

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<script>(function(){var t;try{t=localStorage.getItem("videread.theme")}catch(e){}if(t!=="light"&&t!=="dark"){t=window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";try{localStorage.setItem("videread.theme",t)}catch(e){}}document.documentElement.dataset.theme=t==="dark"?"dark":"light";})();</script>
+<script>(function(){var t;try{t=localStorage.getItem("videread.theme")}catch(e){}if(t!=="light"&&t!=="dark"&&t!=="auto"){t="auto";try{localStorage.setItem("videread.theme",t)}catch(e){}}var sys=t==="auto"&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches;document.documentElement.dataset.theme=(t==="dark"||sys)?"dark":"light";})();</script>
 <script>document.documentElement.classList.add("js");</script>
 <script>if("scrollRestoration" in history)history.scrollRestoration="manual";</script>
 <title>VIDEREAD · 视读 — 编辑部</title>
@@ -36,41 +36,54 @@
   </div>
 </div>
 
-<div class="veil" id="fav-veil" aria-hidden="true">
-  <div class="dialog fav-dialog" role="dialog" aria-modal="true" aria-labelledby="fav-title">
-    <div class="dlg-kicker">FAVORITES · 收藏夹批量投印</div>
-    <h3 class="dlg-title" id="fav-title">整夹投印</h3>
-    <p class="dlg-body">粘贴 B 站收藏夹链接，先读取清单再勾选要总结的视频。解析仍按流水线逐条进行，同一时刻只跑一条。</p>
-    <div class="fav-row">
-      <input type="text" id="fav-url" autocomplete="off" spellcheck="false" placeholder="https://space.bilibili.com/…/favlist?fid=…">
-      <button type="button" class="dlg-btn solid" id="fav-resolve">读取清单</button>
-    </div>
-    <p class="fav-note" id="fav-note"></p>
-    <div class="fav-list-wrap" id="fav-list-wrap" hidden>
-      <div class="fav-list-head">
-        <span id="fav-count">—</span>
-        <span class="fav-bulk">
-          <button type="button" id="fav-all">全选</button>
-          <button type="button" id="fav-none">全不选</button>
-        </span>
-      </div>
-      <ul class="fav-list" id="fav-list"></ul>
-    </div>
-    <div class="fav-opts">
-      <label><input type="checkbox" id="fav-skip" checked> 跳过已生成的报告</label>
-      <label>只跑前 <input type="number" id="fav-limit" min="0" value="0"> 个 <span class="hint">0 = 全部</span></label>
-    </div>
-    <div class="dlg-actions">
-      <button class="dlg-btn ghost" id="fav-cancel">先不投</button>
-      <button class="dlg-btn solid" id="fav-submit" disabled>开始批量投印</button>
-    </div>
-  </div>
-</div>
-
 <div class="veil" id="settings-veil" aria-hidden="true">
   <div class="dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="st-title">
-    <div class="dlg-kicker">PRESSROOM · 模型设置</div>
-    <h3 class="dlg-title" id="st-title">换成你自己的模型</h3>
+    <div class="dlg-kicker">PRESSROOM · 设置</div>
+    <h3 class="dlg-title" id="st-title">编辑部设置</h3>
+    <div class="st-tabs" role="tablist">
+      <button type="button" class="st-tab on" data-tab="general">通用</button>
+      <button type="button" class="st-tab" data-tab="model">模型</button>
+    </div>
+
+    <div class="st-pane on" id="st-pane-general">
+      <div class="st-form">
+        <div class="st-field">
+          <span>主题</span>
+          <div class="st-seg" id="st-theme-seg">
+            <button type="button" class="mode" data-theme="auto">自动</button>
+            <button type="button" class="mode" data-theme="light">浅色</button>
+            <button type="button" class="mode" data-theme="dark">深色</button>
+          </div>
+        </div>
+        <div class="st-field">
+          <span>默认解析模式</span>
+          <div class="st-seg" id="st-mode-seg">
+            <button type="button" class="mode" data-dmode="standard">详细讲解</button>
+            <button type="button" class="mode" data-dmode="deep">深度精读</button>
+            <button type="button" class="mode" data-dmode="brief">快速概览</button>
+            <button type="button" class="mode" data-dmode="outline">极简大纲</button>
+          </div>
+        </div>
+        <div class="st-field">
+          <span>默认报告语言</span>
+          <div class="st-seg" id="st-lang-seg">
+            <button type="button" class="mode on" data-dlang="zh" data-dlabel="中文">中文</button>
+            <button type="button" class="mode" data-dlang="en" data-dlabel="English">English</button>
+            <button type="button" class="mode" data-dlang="ja" data-dlabel="日本語">日本語</button>
+          </div>
+        </div>
+        <div class="st-field">
+          <span>默认带视频截图</span>
+          <label class="switch"><input type="checkbox" id="st-def-frames"><span class="knob"></span>默认开启</label>
+        </div>
+      </div>
+      <p class="st-note" id="st-gen-note"></p>
+      <div class="dlg-actions">
+        <button class="dlg-btn solid" id="st-gen-save">保存</button>
+      </div>
+    </div>
+
+    <div class="st-pane" id="st-pane-model">
     <p class="dlg-body">填写任意 OpenAI 兼容服务的 API Key，报告规划、逐节写作与问答都会改用它。配置保存在本机 <code>.llm-settings.json</code>，完整 Key 不会回传到页面。</p>
     <div class="st-form">
       <label class="st-field">
@@ -120,6 +133,7 @@
       <button class="dlg-btn ghost" id="st-test">测试连接</button>
       <button class="dlg-btn solid" id="st-save">保存</button>
     </div>
+    </div><!-- /st-pane-model -->
   </div>
 </div>
 
@@ -128,12 +142,7 @@
     <div class="wordmark">VIDEREAD <em>视读</em></div>
     <div class="vol" id="vol">LIVE — 编辑部</div>
     <nav>
-      <button class="theme-switch" id="theme-toggle" type="button" aria-label="主题：浅色" data-appearance="light"><span class="track"><span class="knob"></span></span><span class="theme-label">浅色</span></button>
-      <a href="#" id="nav-settings">模型设置</a>
-      <a href="#submit">投印新篇</a>
-      <a href="#feature">本期特稿</a>
-      <a href="#toc">往期目录</a>
-      <a href="#stats">印务统计</a>
+      <a href="#" id="nav-settings">设置</a>
     </nav>
   </div>
 </header>
@@ -163,7 +172,6 @@
       <div>
         <div class="subline">
           <input type="text" id="url" autocomplete="off" placeholder="B 站链接或 BV 号，如 BV1xx411c7mD" aria-label="视频链接">
-          <button id="btn-fav" type="button">收藏夹</button>
           <button id="btn-submit">投印 →</button>
         </div>
         <div class="modes" id="modes">
@@ -172,10 +180,9 @@
           <button class="mode" data-mode="brief">快速概览</button>
           <button class="mode" data-mode="outline">极简大纲</button>
           <span class="lang-wrap">
-            <button type="button" id="lang-btn" class="mode" aria-haspopup="listbox" aria-expanded="false" data-lang="" data-label="跟随配置">语言 · 跟随配置</button>
+            <button type="button" id="lang-btn" class="mode" aria-haspopup="listbox" aria-expanded="false" data-lang="zh" data-label="中文">语言 · 中文</button>
             <span class="lang-pick" id="lang-pick" role="listbox">
-              <button type="button" class="lang-item on" data-lang="" data-label="跟随配置">跟随配置</button>
-              <button type="button" class="lang-item" data-lang="zh" data-label="中文">中文</button>
+              <button type="button" class="lang-item on" data-lang="zh" data-label="中文">中文</button>
               <button type="button" class="lang-item" data-lang="en" data-label="English">English</button>
               <button type="button" class="lang-item" data-lang="ja" data-label="日本語">日本語</button>
             </span>
@@ -196,6 +203,7 @@
   <section class="block reveal" id="feature">
     <div class="section-head">
       <h3>FEATURE · 本期特稿</h3>
+      <span class="hint" id="feature-hint"></span>
     </div>
     <div class="spread" id="feature-body">
       <p class="skeleton">正在装订最新一期…</p>

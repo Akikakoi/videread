@@ -388,10 +388,16 @@ def _download_remote(state: _RunState) -> str:
             stage.detail["subtitles"] = len(meta.subtitles)
             if not meta.subtitles:
                 # 静默空字幕最伤「字幕优先」：用户不知道这条省 ASR 的路被堵了。
-                # 只在本次真实抓取时提示（缓存命中重跑不再念叨）
+                # 只在本次真实抓取时提示（缓存命中重跑不再念叨）。
+                # 静态提示覆盖「没配置/没导出登录态」；cookies 看似齐全但服务端
+                # 会话已失效的情况靠实时校验兜住（nav 接口一次请求，失败即静默）。
                 hint = download.subtitle_login_hint(state.settings)
                 if hint:
                     state.progress(f"提示：{hint}")
+                elif download.extract_bvid(url_text):
+                    expired = download.sessdata_expired_hint(state.settings)
+                    if expired:
+                        state.progress(f"提示：{expired}")
         else:
             stage.detail["cached"] = True
 

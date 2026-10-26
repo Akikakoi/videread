@@ -1,5 +1,5 @@
 "use strict";
-const STATE_ZH = {queued:"排队中",running:"印制中",done:"印毕",cancelled:"已取消",failed:"失败",error:"失败",pending:"待印",skipped:"已跳过"};
+const STATE_ZH = {queued:"排队中",running:"印制中",done:"印毕",cancelled:"已取消",failed:"失败",error:"失败"};
 const job_id = decodeURIComponent(location.pathname.split("/").pop() || "");
 
 /* ---------- toast ---------- */
@@ -30,20 +30,7 @@ async function fetchJson(path){
   return await r.json();
 }
 async function getSnapshot(){
-  try{
-    return await fetchJson("/api/jobs/" + encodeURIComponent(job_id));
-  }catch(err){
-    if(err.status !== 404) throw err;
-    /* 服务重启后内存里的工单没了：退回落盘的批次清单，篇目与结果仍可查看 */
-    const data = await fetchJson("/api/batches/" + encodeURIComponent(job_id));
-    if(!JOB_TERMINAL.has(data.state)){
-      data.state = "error";
-      data.error = "服务已重启，这一批没有继续执行";
-      data.error_hint = "篇目清单仍保留，可回到编辑部重新投递";
-    }
-    data.logs = data.logs || [];
-    return data;
-  }
+  return await fetchJson("/api/jobs/" + encodeURIComponent(job_id));
 }
 async function postCancel(){
   const r = await fetch("/api/jobs/" + encodeURIComponent(job_id) + "/cancel", {method: "POST"});
@@ -176,7 +163,14 @@ function renderActions(job){
     return a;
   };
   if(job.state === "done" && job.run_id){
-    box.appendChild(mk("翻开全文 →", "/read/" + encodeURIComponent(job.run_id)));
+    /* 与编辑部同款行为：新标签页翻开全文，工单页随后自动回到编辑部 */
+    const read = mk("翻开全文 →", "/read/" + encodeURIComponent(job.run_id));
+    read.addEventListener("click", e => {
+      e.preventDefault();
+      window.open(read.href, "_blank");
+      location.href = "/editorial";
+    });
+    box.appendChild(read);
     box.appendChild(mk("原样打开", "/report/" + encodeURIComponent(job.run_id)));
   }
   if(job.state === "queued" || job.state === "running"){
@@ -199,50 +193,18 @@ function renderActions(job){
   box.appendChild(mk("回到编辑部", "/editorial"));
 }
 
-/* 批次篇目：每条视频的状态、跳过原因与已完成报告入口 */
-function renderBatch(job){
-  const wrap = $("#batch-wrap");
-  if(!job || !job.batch){ wrap.hidden = true; return; }
-  wrap.hidden = false;
-  $("#batch-list").innerHTML = (job.items || []).map((it, i) => {
-    const st = it.state || "pending";
-    const tail = [];
-    if(st === "skipped" && it.reason) tail.push('<span>' + esc(it.reason) + '</span>');
-    if(st === "error" && it.error) tail.push('<span class="warn">' + esc(it.error) + '</span>');
-    if(it.report_url) tail.push('<a href="' + esc(it.report_url) + '" target="_blank" rel="noopener">翻开 →</a>');
-    return '<li class="batch-item ' + esc(st) + '">' +
-      '<span class="bi-no">' + String(i + 1).padStart(2, "0") + '</span>' +
-      '<span class="bi-t">' + esc(it.title || it.url || "") + '</span>' +
-      '<span class="bi-st">' + esc(stateZh(st)) + '</span>' +
-      '<span class="bi-x">' + tail.join("") + '</span>' +
-      '</li>';
-  }).join("");
-}
-
 function renderMeta(job){
   const meta = [];
   meta.push("工单号 <b>" + esc(job.id) + "</b>");
   if(job.mode) meta.push("模式 <b>" + esc(job.mode) + "</b>");
-  if(job.batch_title) meta.push("收藏夹 <b>" + esc(job.batch_title) + "</b>");
   if(job.created_at) meta.push("提交 <b>" + esc(job.created_at) + "</b>");
   if(job.state === "queued" && typeof job.queue_position === "number" && job.queue_position > 0)
     meta.push('<span class="q">队列第 ' + (job.queue_position + 1) + " 位</span>");
-  if(job.batch){
-    const items = job.items || [];
-    const d = items.filter(it => it.state === "done").length;
-    const e = items.filter(it => it.state === "error").length;
-    const s = items.filter(it => it.state === "skipped").length;
-    meta.push("篇目 <b>" + d + "/" + items.length + "</b> 完成" +
-      (e ? " · 失败 " + e : "") + (s ? " · 跳过 " + s : ""));
-  }
   if(job.finished_at) meta.push("结束 <b>" + esc(job.finished_at) + "</b>");
   $("#job-meta").innerHTML = meta.map(s => "<span>" + s + "</span>").join("");
 }
 
-let lastJob = null;
-
 function renderJob(job){
-  lastJob = job;
   currentState = job.state;
   document.body.classList.toggle("job-done", job.state === "done");
   document.body.classList.toggle("job-running", job.state === "running");
@@ -252,7 +214,6 @@ function renderJob(job){
   setStateLabel(job.state);
   $("#job-url").textContent = job.url || "—";
   renderMeta(job);
-  renderBatch(job);
 
   const idx = Math.min(Math.max(0, job.stage_index || 0), STAGES.length);
   const doneSet = new Set();
@@ -296,24 +257,10 @@ function subscribe(){
     setProgress(d.index / STAGES.length);
   });
   es.addEventListener("log", ev => pushLog(JSON.parse(ev.data).line || "", false, true));
-  es.addEventListener("item", ev => {
-    const d = JSON.parse(ev.data);
-    /* 只重绘篇目区，不打断日志的打字机与步进器 */
-    if(lastJob && lastJob.items && lastJob.items[d.index]){
-      lastJob.items[d.index] = d.item;
-      renderBatch(lastJob);
-      renderMeta(lastJob);
-    }
-  });
   es.addEventListener("done", async ev => {
     const d = JSON.parse(ev.data);
-    if(d.batch){
-      pushLog("[批次完成] 成功 " + (d.done || 0) + " 条" + (d.failed ? "，失败 " + d.failed + " 条" : ""));
-      toast("这一批印好了");
-    }else{
-      pushLog("[完成] " + (d.run_id || ""));
-      toast("新的一期印好了");
-    }
+    pushLog("[完成] " + (d.run_id || ""));
+    toast("新的一期印好了");
     es.close(); es = null;
     renderJob(await getSnapshot()); /* 终态以快照为准，一次渲染收敛 */
   });
