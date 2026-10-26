@@ -262,7 +262,10 @@ def attribution(meta: VideoMeta, lang: str = "zh") -> str:
     if meta.title:
         bits.append(f"《{escape(meta.title)}》")
     url_text = escape(meta.url)
-    return f"{' · '.join(bits)}<br><a href=\"{url_text}\">{url_text}</a>"
+    return (
+        f"{' · '.join(bits)}<br>"
+        f"<a href=\"{url_text}\" target=\"_blank\" rel=\"noopener\">{url_text}</a>"
+    )
 
 
 def sources(
@@ -289,7 +292,7 @@ def sources(
     generated_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
     url_text = escape(meta.url)
     rows = [
-        f"{chrome['source_video']}：<a href=\"{url_text}\">{url_text}</a>",
+        f"{chrome['source_video']}：<a href=\"{url_text}\" target=\"_blank\" rel=\"noopener\">{url_text}</a>",
         f"{chrome['mode']}：{_MODE_LABELS.get(mode, 'Standard')}；"
         f"{chrome['structure']}：{outline.profile}",
         f"{chrome['transcript']}：{asr_label}；{chrome['units']} {len(units)}"
