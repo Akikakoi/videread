@@ -77,12 +77,12 @@
 .foot .c1{font-family:var(--serif);font-weight:600;font-size:15px;}
 .foot .c1 em{font-style:italic;color:var(--accent);}
 .foot .c2{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;color:var(--faint);}
-/* ---------- 左侧悬浮章节导航（与原版报告同款交互，走主题令牌） ---------- */
-.report-nav{position:fixed;top:96px;left:22px;width:176px;max-height:calc(100vh - 140px);overflow-y:auto;z-index:4;font-size:13px;line-height:1.5;}
-.report-nav-list{margin:0;padding:0;list-style:none;border-left:2px solid var(--hairline);}
-.report-nav-link{display:block;margin-left:-2px;padding:6px 10px 6px 12px;color:var(--muted);text-decoration:none;border-left:2px solid transparent;transition:color var(--t) var(--ease),border-color var(--t) var(--ease);}
+/* ---------- 右侧悬浮章节导航（与原版报告同款交互，走主题令牌） ---------- */
+.report-nav{position:fixed;top:96px;right:22px;width:176px;max-height:calc(100vh - 140px);overflow-y:auto;z-index:4;font-size:13px;line-height:1.5;}
+.report-nav-list{margin:0;padding:0;list-style:none;border-right:2px solid var(--hairline);}
+.report-nav-link{display:block;margin-right:-2px;padding:6px 12px 6px 10px;color:var(--muted);text-decoration:none;border-right:2px solid transparent;transition:color var(--t) var(--ease),border-color var(--t) var(--ease);}
 .report-nav-link:hover{color:var(--ink);}
-.report-nav-link.is-active{color:var(--accent);font-weight:500;border-left-color:var(--accent);}
+.report-nav-link.is-active{color:var(--accent);font-weight:500;border-right-color:var(--accent);}
 @media (max-width:1180px){ .report-nav{display:none;} }
 
 /* ---------- B3 跨列规则的窄屏分档：列数变化时同步换算 ----------
