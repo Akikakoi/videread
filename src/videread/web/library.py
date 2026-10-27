@@ -12,7 +12,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from ..download import VideoMeta, make_run_id, read_meta
+from ..download import VideoMeta, read_meta
 from ..errors import VidereadError
 from ..frames import has_frames
 from ..report import Outline
@@ -71,8 +71,24 @@ def _read_outline(path: Path) -> Outline | None:
         return None
 
 
+# trace 摘要缓存：key 含 run.trace.jsonl 的 mtime_ns，文件一变即换 key，
+# 与 _ENTRY_CACHE 同一策略；/api/stats 每次要汇总全部 run 的 trace，
+# 不缓存的话首页每开一次就读一遍所有 trace 文件。
+_TRACE_CACHE: dict[tuple[str, int], dict] = {}
+_TRACE_CACHE_MAX_ENTRIES = 512
+
+
 def trace_summary(path: Path) -> dict:
-    """汇总 `run.trace.jsonl`：逐阶段耗时 / token 用量 / 错误。"""
+    """汇总 `run.trace.jsonl`：逐阶段耗时 / token 用量 / 错误（带 mtime 缓存）。
+
+    返回的 dict 是缓存条目，调用方只读不写——需要改请先 `dict(result)` 拷贝。
+    """
+    key = (str(path), _mtime_ns(path))
+    with _CACHE_LOCK:
+        cached = _TRACE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
     try:
         rows = TraceWriter(path).read()
     except (OSError, ValueError):
@@ -113,7 +129,12 @@ def trace_summary(path: Path) -> dict:
         if isinstance(stage_tokens, int):
             tokens += stage_tokens
 
-    return {"stages": stages, "total_ms": total_ms, "tokens": tokens, "errors": errors}
+    result = {"stages": stages, "total_ms": total_ms, "tokens": tokens, "errors": errors}
+    with _CACHE_LOCK:
+        if len(_TRACE_CACHE) >= _TRACE_CACHE_MAX_ENTRIES:
+            _TRACE_CACHE.clear()
+        _TRACE_CACHE[key] = result
+    return result
 
 
 def _mtime_ns(path: Path) -> int:
@@ -176,37 +197,6 @@ def _entry(run_dir: Path) -> dict | None:
             _ENTRY_CACHE.clear()
         _ENTRY_CACHE[key] = entry
     return entry
-
-
-def existing_report(out_root: Path, url: str, bvid: str) -> dict | None:
-    """该视频是否已有报告：返回最新一份 `-rN` 分身的信息，供批量投递跳过。
-
-    与 probe 的判据一致：只认 `report.html` 存在的目录，且同一视频的重新解析
-    分身（`<base>-rN`）也算。
-    """
-    if not bvid:
-        return None
-    base_id = make_run_id(url, bvid)
-    root = Path(out_root)
-    if not root.is_dir():
-        return None
-    candidates: list[Path] = []
-    for child in root.iterdir():
-        if not child.is_dir():
-            continue
-        if child.name != base_id and not re.fullmatch(rf"{re.escape(base_id)}-r\d+", child.name):
-            continue
-        if (child / "report.html").is_file():
-            candidates.append(child)
-    if not candidates:
-        return None
-    latest = max(candidates, key=lambda d: d.stat().st_mtime)
-    generated = datetime.fromtimestamp(latest.stat().st_mtime).astimezone()
-    return {
-        "run_id": latest.name,
-        "generated_at": generated.strftime("%m-%d %H:%M"),
-        "report_url": f"/report/{latest.name}",
-    }
 
 
 def list_runs(out_root: Path) -> list[dict]:
@@ -438,6 +428,22 @@ def delete_run(out_root: Path, run_id: str) -> bool:
     return True
 
 
+def run_title(out_root: Path, run_id: str) -> str | None:
+    """轻量取标题：走 _entry 缓存并套用自定义标题，不读 outline / trace / 产物清单。
+
+    导出接口只需要一个标题做下载文件名，不该为它付出 run_detail 的全套开销
+    （读大纲、汇总 trace、stat 整个 run 目录）。run 无效或 meta 损坏返回 None。
+    """
+    run_dir = safe_run_dir(out_root, run_id)
+    if run_dir is None:
+        return None
+    base = _entry(run_dir)
+    if base is None:
+        return None
+    custom = load_titles(out_root).get(run_id, "")
+    return (custom or str(base["title"])).strip() or None
+
+
 def run_detail(out_root: Path, run_id: str) -> dict | None:
     """单个 run 的详情：基础信息 + 大纲章节 + trace 摘要 + 产物清单。"""
     run_dir = safe_run_dir(out_root, run_id)
@@ -499,6 +505,32 @@ _SNIPPET_RADIUS = 60
 #: 全文检索的返回上限
 _SEARCH_LIMIT = 20
 
+# 转写稿文本缓存：key 含 transcript.md 的 mtime_ns。检索是每次请求都重扫
+# 全部报告的少数路径之一，转写稿几百 KB 一份，逐次重读纯浪费；条数上限
+# 比条目缓存收紧（文本体积大），超限整体清空——个人库规模下极少触发。
+_TEXT_CACHE: dict[tuple[str, int], str] = {}
+_TEXT_CACHE_MAX_ENTRIES = 128
+
+
+def _transcript_text(transcript: Path) -> str:
+    """读转写稿全文（带 mtime 缓存）；文件缺失或读失败返回空串。"""
+    key = (str(transcript), _mtime_ns(transcript))
+    with _CACHE_LOCK:
+        cached = _TEXT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    text = ""
+    if transcript.is_file():
+        try:
+            text = transcript.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+    with _CACHE_LOCK:
+        if len(_TEXT_CACHE) >= _TEXT_CACHE_MAX_ENTRIES:
+            _TEXT_CACHE.clear()
+        _TEXT_CACHE[key] = text
+    return text
+
 
 def _snippet(text: str, query: str) -> str:
     """取第一处命中（忽略大小写）前后的文本作为摘要，命中词以原文大小写保留。"""
@@ -526,13 +558,7 @@ def search_runs(out_root: Path, query: str) -> list[dict]:
     results: list[dict] = []
     for entry in list_runs(root):
         run_dir = root / entry["run_id"]
-        text = ""
-        transcript = run_dir / "transcript.md"
-        if transcript.is_file():
-            try:
-                text = transcript.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                text = ""
+        text = _transcript_text(run_dir / "transcript.md")
         haystack = f"{entry['title']}\n{text}".lower()
         count = haystack.count(query.lower())
         if count == 0:

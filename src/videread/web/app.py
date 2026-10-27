@@ -210,8 +210,7 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
                 "请改用 PDF / PNG 长图导出",
             )
 
-        detail = library.run_detail(out_root, run_id) or {}
-        title = str(detail.get("title") or "").strip() or run_id
+        title = library.run_title(out_root, run_id) or run_id
         return Response(
             content=markdown.html_to_markdown(path.read_text(encoding="utf-8")),
             media_type="text/markdown; charset=utf-8",
@@ -239,8 +238,7 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
         if not html_path.is_file():
             raise HTTPException(status_code=404, detail="该 run 还没有 report.html")
 
-        detail = library.run_detail(out_root, run_id) or {}
-        title = str(detail.get("title") or "").strip() or run_id
+        title = library.run_title(out_root, run_id) or run_id
         try:
             pdf_path = pdf_mod.export_pdf(html_path, run_dir / "report.pdf", get_settings())
         except VidereadError as exc:
@@ -270,8 +268,7 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
         if not html_path.is_file():
             raise HTTPException(status_code=404, detail="该 run 还没有 report.html")
 
-        detail = library.run_detail(out_root, run_id) or {}
-        title = str(detail.get("title") or "").strip() or run_id
+        title = library.run_title(out_root, run_id) or run_id
         try:
             if self_base:
                 # 编辑风长图：缓存判据仍是 report.html 的新旧
