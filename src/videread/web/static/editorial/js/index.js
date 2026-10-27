@@ -777,14 +777,8 @@ async function submitJob(){
     const target = (probePages.length && pageSelKey === url) ? withPage(url, selectedPage()) : url;
     const job = await post("/api/jobs", {url: target, mode, frames, lang, no_cache: true, keep_audio: false});
     localStorage.setItem("videread.activeJob", job.job_id);
-    /* 提交后留在主页：工单入口就地给出（工单页有完整的步进器与日志），不整页跳转 */
-    showJobline(job.job_id);
-    toast("已投递，正在排印");
-    $("#stepper").innerHTML = "";
-    $("#logbox").style.display = "none";
-    $("#submeta").innerHTML = "";
-    btn.disabled = false; btn.textContent = "投印 →";
-    watchActiveJob();
+    /* 提交成功即跳工单页：步进器、排印日志与取消操作都在那边完整呈现 */
+    location.href = "/editorial/job/" + encodeURIComponent(job.job_id);
   }catch(e){
     renderStepper(-1, doneSet);
     $("#submeta").innerHTML = '<span style="color:var(--accent)">' + (OFFLINE ? "演示模式 · 提交任务在启动本地服务后可用" : "提交失败：" + esc(e.message)) + '</span>';

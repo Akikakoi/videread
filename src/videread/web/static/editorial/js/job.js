@@ -163,12 +163,11 @@ function renderActions(job){
     return a;
   };
   if(job.state === "done" && job.run_id){
-    /* 与编辑部同款行为：新标签页翻开全文，工单页随后自动回到编辑部 */
+    /* 新标签页翻开全文，工单页留在原地 */
     const read = mk("翻开全文 →", "/read/" + encodeURIComponent(job.run_id));
     read.addEventListener("click", e => {
       e.preventDefault();
       window.open(read.href, "_blank");
-      location.href = "/editorial";
     });
     box.appendChild(read);
     box.appendChild(mk("原样打开", "/report/" + encodeURIComponent(job.run_id)));
