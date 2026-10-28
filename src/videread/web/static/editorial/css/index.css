@@ -32,10 +32,13 @@ a{color:inherit;}
   padding:9px 13px;margin-top:14px;word-break:break-word;
 }
 .dlg-run:empty{display:none;}
-.dlg-actions{display:flex;justify-content:flex-end;align-items:baseline;gap:22px;margin-top:24px;}
+.dlg-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:baseline;gap:10px 22px;margin-top:24px;}
 .dlg-btn{cursor:pointer;font-family:var(--mono);font-size:13px;letter-spacing:1.5px;transition:color var(--t),background var(--t);}
 .dlg-btn.ghost{border:0;background:none;color:var(--muted);padding:8px 2px;}
 .dlg-btn.ghost:hover{color:var(--ink);}
+/* 重复投印确认里的「查看上次报告」：贴在操作行左侧，再投印前先看一眼 */
+.dlg-view{margin-right:auto;text-decoration:none;}
+.dlg-view:hover{color:var(--accent);}
 .dlg-btn.solid{
   border:1.5px solid var(--accent);background:transparent;color:var(--accent);
   padding:10px 24px;border-radius:2px;letter-spacing:2px;

@@ -27,16 +27,31 @@ function toast(msg){
 /* ================= 确认弹窗（替代原生 confirm） ================= */
 let dlgResolve = null;
 let dlgKind = "run";
-/* 同一个 #veil 承担两种删除确认：整期与单封来信，文案随场景切换 */
+/* 同一个 #veil 承担整期删除、来信删除与重复投印确认，文案随场景切换 */
 const DLG_COPY = {
-  run: {title: "撕掉这一期？", body: "该期的转写缓存、正文报告与问答历史将一并清除，删除后不可恢复。", cancel: "已取消删除，这一期先留着"},
-  letter: {title: "撕掉这封来信？", body: "这封来信与编辑部的回信将从本期档案中移除，删除后不可恢复。", cancel: "已取消删除，这封来信先留着"}
+  run: {title: "撕掉这一期？", body: "该期的转写缓存、正文报告与问答历史将一并清除，删除后不可恢复。", confirm: "确认删除", cancel: "已取消删除，这一期先留着"},
+  letter: {title: "撕掉这封来信？", body: "这封来信与编辑部的回信将从本期档案中移除，删除后不可恢复。", confirm: "确认删除", cancel: "已取消删除，这封来信先留着"},
+  reprint: {
+    title: "这一期已经印过了",
+    body: "报告库里已有这个视频的解析记录。再次投印会重新转写、重新写作，可能产生额外调用费用；只想重看的话，点「查看上次报告」就好。",
+    confirm: "仍要投印",
+    cancel: "已取消投印，这一期保持原样"
+  }
 };
-function askDelete(kind, subject){
+function askConfirm(kind, subject, reportUrl){
   const copy = DLG_COPY[kind] || DLG_COPY.run;
   dlgKind = DLG_COPY[kind] ? kind : "run";
   $("#dlg-title").textContent = copy.title;
   $("#dlg-body").textContent = copy.body;
+  $("#dlg-confirm").textContent = copy.confirm || "确认删除";
+  const view = $("#dlg-view");
+  if(reportUrl){
+    view.href = reportUrl;
+    view.style.display = "";
+  }else{
+    view.removeAttribute("href");
+    view.style.display = "none";
+  }
   /* 弹窗里只示视频标题 / 来信问题，run_id 仅作兜底 */
   $("#dlg-run").textContent = subject || "";
   $("#veil").classList.add("open");
@@ -44,16 +59,20 @@ function askDelete(kind, subject){
   $("#dlg-confirm").focus();
   return new Promise(res => { dlgResolve = res; });
 }
-function closeDlg(v){
+function closeDlg(v, cancelMsg){
   const veil = $("#veil");
   if(!veil.classList.contains("open")) return;
   veil.classList.remove("open");
   veil.setAttribute("aria-hidden", "true");
   if(dlgResolve){ dlgResolve(v); dlgResolve = null; }
-  if(!v) toast((DLG_COPY[dlgKind] || DLG_COPY.run).cancel);
+  if(!v) toast(cancelMsg || (DLG_COPY[dlgKind] || DLG_COPY.run).cancel);
 }
 $("#dlg-cancel").addEventListener("click", () => closeDlg(false));
 $("#dlg-confirm").addEventListener("click", () => closeDlg(true));
+/* 先去看旧报告：链接本身在新标签打开，这里只收掉弹窗并放弃本次投印 */
+$("#dlg-view").addEventListener("click", () => {
+  closeDlg(false, "已打开上次的报告，这次没有投印");
+});
 /* 仅当「按下」也发生在遮罩上才关闭：按住弹窗内文本拖到弹窗外松开时，
    click 会被派发到按下/松开点的公共祖先（遮罩），不做此判断弹窗会被误关 */
 let veilPressed = false;
@@ -291,7 +310,7 @@ async function deleteLetter(runId, btn){
   const index = Number(btn.dataset.letter);
   const letter = btn.closest(".letter");
   const question = letter && letter.querySelector(".q") ? letter.querySelector(".q").textContent : "";
-  const ok = await askDelete("letter", question);
+  const ok = await askConfirm("letter", question);
   if(!ok) return;
   btn.disabled = true;
   try{
@@ -562,13 +581,15 @@ function bindToc(){
       const runId = b.dataset.delRun;
       const title = b.dataset.delTitle || runId;
       if(OFFLINE){ toast("离线演示模式，暂不支持删除"); return; }
-      const ok = await askDelete("run", title);
+      const ok = await askConfirm("run", title);
       if(!ok) return;
       const fade = collapseRow(b.closest("li"));
       try{
         /* 接口与退场动画并行：网络再快动画也完整走完，慢了也不额外等待 */
         await Promise.all([del("/api/runs/" + encodeURIComponent(runId)), fade ? fade.finished : Promise.resolve()]);
         toast("已删除：" + title);
+        /* 报告删掉后，预检里的「已解析」提示作废，下次投印重新核对 */
+        probeOk = false; lastProbedUrl = null; probedExisting = null; probedTitle = "";
         if(currentRunId === runId){
           currentRunId = null;
           try{
@@ -691,6 +712,9 @@ function withPage(source, page){
 }
 
 let lastProbedUrl = null; /* 已预检过的输入：blur 重复触发同一输入时直接跳过 */
+let probedExisting = null; /* 与 lastProbedUrl 对应的已有报告 */
+let probedTitle = "";
+let probeOk = false;
 
 async function doProbe(){
   const url = $("#url").value.trim();
@@ -698,12 +722,16 @@ async function doProbe(){
   const line = $("#probeline");
   if(!url){
     probePages = []; pageSelKey = null; lastProbedUrl = null; probeBlocked = false;
+    probedExisting = null; probedTitle = ""; probeOk = false;
     $("#btn-submit").disabled = false; line.innerHTML = ""; return;
   }
   line.innerHTML = "预检中…";
   try{
     const p = await post("/api/probe", {url});
     lastProbedUrl = url;
+    probedExisting = p.existing_run || null;
+    probedTitle = p.title || "";
+    probeOk = true;
     /* 付费内容：禁用投递按钮，提示暂不支持（流水线侧同样会拒绝） */
     if(p.paywalled){
       probeBlocked = true;
@@ -733,6 +761,7 @@ async function doProbe(){
   }catch(e){
     probePages = []; pageSelKey = null; /* 预检失败放行原文，过期分P一并失效 */
     lastProbedUrl = url; probeBlocked = false;
+    probedExisting = null; probedTitle = ""; probeOk = false;
     $("#btn-submit").disabled = false;
     /* 付费内容类拒绝是确定性的（流水线会再次拦截），不追加「仍可提交」 */
     const rejected = String(e.message || "").indexOf("已拒绝解析") >= 0;
@@ -758,29 +787,72 @@ function renderStepper(current, doneSet){
   stepperSeen = new Set(doneSet);
 }
 
+function resetSubmitState(){
+  const btn = $("#btn-submit");
+  btn.disabled = probeBlocked;
+  btn.textContent = "投印 →";
+  $("#logbox").style.display = "none";
+  $("#logbox").textContent = "";
+  $("#submeta").innerHTML = "";
+  $("#stepper").innerHTML = "";
+  stepperSeen = new Set();
+}
+
+function beginSubmit(){
+  const btn = $("#btn-submit");
+  btn.disabled = true;
+  btn.textContent = "排片中…";
+  $("#logbox").style.display = "block";
+  $("#logbox").textContent = "";
+  $("#submeta").innerHTML = "";
+  renderStepper(-1, new Set());
+}
+
+/* 投印前确认是否已有解析记录：预检结果对应当前链接就直接用，
+   否则补查一次（分P 改写链接、或用户没等预检完就点了投印）。 */
+async function existingRunFor(target){
+  if(probeOk && target === lastProbedUrl){
+    return probedExisting ? { ...probedExisting, title: probedTitle } : null;
+  }
+  try{
+    const p = await post("/api/probe", {url: target});
+    if(p.existing_run) return { ...p.existing_run, title: p.title || "" };
+  }catch(e){ /* 补查失败不阻断投印，按「没有记录」继续 */ }
+  return null;
+}
+
 async function submitJob(){
   const url = $("#url").value.trim();
   if(!url){ toast("先填一个 B 站链接或 BV 号"); return; }
   if(probeBlocked){ toast("这类付费视频暂不支持解析"); return; }
+  /* 多P 视频：仅当分P 列表仍对应当前输入时才改写链接，避免过期分P 误选 */
+  const target = (probePages.length && pageSelKey === url) ? withPage(url, selectedPage()) : url;
   const btn = $("#btn-submit");
-  btn.disabled = true; btn.textContent = "排片中…";
-  $("#logbox").style.display = "block";
-  $("#logbox").textContent = "";
-  $("#submeta").innerHTML = "";
-  const doneSet = new Set();
-  renderStepper(-1, doneSet);
+  beginSubmit();
   try{
+    const existing = await existingRunFor(target);
+    if(existing){
+      resetSubmitState();
+      const subject = (existing.title ? "《" + existing.title + "》" : "")
+        + (existing.generated_at ? " · 上次解析 " + existing.generated_at : "");
+      const ok = await askConfirm("reprint", subject, existing.report_url);
+      if(!ok) return;
+      beginSubmit();
+    }
     const frames = $("#frames-switch") && $("#frames-switch").checked ? true : null;
     const lang = ($("#lang-btn") || {}).dataset ? ($("#lang-btn").dataset.lang || null) : null;
     /* 投印策略固定：忽略缓存强制重跑、不留音频文件、转写引擎按 .env 配置（不传即"自动"） */
-    /* 多P 视频：仅当分P 列表仍对应当前输入时才改写链接，避免过期分P 误选 */
-    const target = (probePages.length && pageSelKey === url) ? withPage(url, selectedPage()) : url;
     const job = await post("/api/jobs", {url: target, mode, frames, lang, no_cache: true, keep_audio: false});
     localStorage.setItem("videread.activeJob", job.job_id);
-    /* 提交成功即跳工单页：步进器、排印日志与取消操作都在那边完整呈现 */
-    location.href = "/editorial/job/" + encodeURIComponent(job.job_id);
+    /* 工单页在新标签打开：主页留在原地给出工单入口，并轮询终态刷新目录 */
+    const win = window.open("/editorial/job/" + encodeURIComponent(job.job_id), "_blank");
+    if(win) win.opener = null;
+    showJobline(job.job_id);
+    resetSubmitState();
+    watchActiveJob();
+    toast(win ? "已投递，工单页已在新标签打开" : "已投递；浏览器拦截了新标签，请点上方工单链接进入");
   }catch(e){
-    renderStepper(-1, doneSet);
+    renderStepper(-1, new Set());
     $("#submeta").innerHTML = '<span style="color:var(--accent)">' + (OFFLINE ? "演示模式 · 提交任务在启动本地服务后可用" : "提交失败：" + esc(e.message)) + '</span>';
     toast(OFFLINE ? "离线演示模式，暂不支持提交" : "提交失败：" + e.message);
     btn.disabled = false; btn.textContent = "投印 →";
@@ -788,6 +860,13 @@ async function submitJob(){
 }
 $("#btn-submit").addEventListener("click", submitJob);
 $("#url").addEventListener("keydown", e => { if(e.key === "Enter") submitJob(); });
+/* 页面从 bfcache 恢复时脚本不重跑：提交锁可能停在“排片中…”。
+   恢复时还原投印区，并按 localStorage 重新核对进行中的工单。 */
+window.addEventListener("pageshow", e => {
+  if(!e.persisted) return;
+  resetSubmitState();
+  checkActiveJob();
+});
 
 /* 行内改名：标题原地变输入框，回车保存 / Esc 或失焦取消 */
 function startRename(runId){
@@ -1048,11 +1127,11 @@ function watchActiveJob(){
 }
 async function checkActiveJob(){
   const id = localStorage.getItem("videread.activeJob");
-  if(!id) return;
+  if(!id){ $("#jobline").innerHTML = ""; return; }
   try{
     const job = await jfetch("/api/jobs/" + encodeURIComponent(id));
     if(JOB_TERMINAL.has(job.state)){
-      localStorage.removeItem("videread.activeJob");
+      clearJobline();
       return;
     }
     showJobline(id);
