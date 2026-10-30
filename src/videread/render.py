@@ -28,6 +28,7 @@ _INCLUDES = {
     "SHARED_BASE_CSS": "_shared/base.css",
     "SHARED_EXTERNAL_LINKS": "_shared/external-links.html",
     "SHARED_TS_JUMP": "_shared/ts-jump.html",
+    "SHARED_FAVICON": "_shared/favicon.html",
 }
 _INCLUDE = re.compile(r"<!--#include:([A-Z0-9_]+)-->")
 

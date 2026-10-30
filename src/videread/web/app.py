@@ -10,13 +10,21 @@ import json
 import os
 import queue
 import threading
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from .. import markdown
 from .. import pdf as pdf_mod
@@ -26,13 +34,14 @@ from ..config import get_settings
 from ..errors import UsageError, VidereadError
 from ..report import qa
 from .. import usersettings
-from . import library, probe
+from . import batch_export, library, probe
 from .jobs import Job, JobBusy, JobManager
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 #: 编辑风正式版页面目录（随包分发；原 demos/ 实验页已随 P4 退役删除，历史在 git）
 EDITORIAL_DIR = STATIC_DIR / "editorial"
 EDITORIAL_ASSETS = (
+    "favicon.svg", "favicon.ico",
     "css/base.css", "css/index.css", "css/reader.css", "css/job.css",
     "js/common.js", "js/index.js", "js/reader.js", "js/job.js", "js/theme.js",
     "fonts/fraunces/index.css", "fonts/fraunces/500.css", "fonts/fraunces/600-italic.css",
@@ -68,6 +77,13 @@ class QaRequest(BaseModel):
 
 class TitleRequest(BaseModel):
     title: str = ""
+
+
+class BatchExportRequest(BaseModel):
+    """批量导出：run_ids 顺序即打包顺序，format 支持 md / pdf。"""
+
+    run_ids: list[str] = []
+    format: str = "md"
 
 
 class LlmSettingsRequest(BaseModel):
@@ -293,6 +309,65 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
             },
         )
 
+    @app.post("/api/runs/export")
+    def api_export_runs(payload: BatchExportRequest) -> FileResponse:
+        """批量导出报告为 ZIP（Markdown / PDF / PNG）。
+
+        单份导出的规则原样复用：Markdown 不含图片，所选报告里只要有带
+        视频截图的一律整批拒绝并列出标题，避免交出一个缺文件的压缩包；
+        PDF / PNG 命中 run 目录里的缓存时不再调用浏览器。
+        """
+        run_ids = list(dict.fromkeys((payload.run_ids or [])))
+        if not run_ids:
+            raise HTTPException(status_code=400, detail="还没有勾选任何报告")
+        if len(run_ids) > batch_export.MAX_BATCH:
+            raise HTTPException(
+                status_code=400,
+                detail=f"一次最多导出 {batch_export.MAX_BATCH} 期，请分批操作",
+            )
+        fmt = (payload.format or "").strip().lower()
+        if fmt not in batch_export.EXPORT_FORMATS:
+            raise HTTPException(
+                status_code=400,
+                detail="批量导出只支持 Markdown（md）、PDF（pdf）或 PNG（png）",
+            )
+
+        framed: list[str] = []
+        for run_id in run_ids:
+            run_dir = library.safe_run_dir(out_root, run_id)
+            if run_dir is None:
+                raise HTTPException(status_code=404, detail=f"未找到该 run：{run_id}")
+            if not (run_dir / "report.html").is_file():
+                raise HTTPException(
+                    status_code=404, detail=f"该 run 还没有 report.html：{run_id}"
+                )
+            if fmt == "md" and frames_mod.has_frames(run_dir):
+                framed.append(library.run_title(out_root, run_id) or run_id)
+        if framed:
+            names = "、".join(f"《{title}》" for title in framed[:5])
+            if len(framed) > 5:
+                names += f" 等 {len(framed)} 期"
+            raise HTTPException(
+                status_code=409,
+                detail=f"{names}带视频截图，Markdown 导出不含图片；请改用 PDF / PNG",
+            )
+
+        try:
+            archive, exported = batch_export.build_archive(
+                out_root, run_ids, fmt, get_settings(), self_base=self_base
+            )
+        except VidereadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        stamp = datetime.now().strftime("%Y%m%d-%H%M")
+        return FileResponse(
+            archive,
+            media_type="application/zip",
+            filename=f"videread-{fmt}-{stamp}.zip",
+            headers={"X-Exported": str(len(exported))},
+            background=BackgroundTask(archive.unlink, missing_ok=True),
+        )
+
     @app.get("/api/config")
     def api_config() -> dict:
         """非密钥配置摘要：ASR 后端与模型名、LLM 模型名（编辑风页脚版权页展示用）。
@@ -342,8 +417,11 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
 
     @app.get("/api/stats")
     def api_stats() -> dict:
-        """按日汇总各 run 的耗时与 token 用量（成本面板数据源）。"""
-        return {"days": library.usage_stats(out_root)}
+        """成本面板数据源：全库累计概览 + 按日汇总。"""
+        return {
+            "overview": library.usage_overview(out_root),
+            "days": library.usage_stats(out_root),
+        }
 
     @app.get("/api/runs/{run_id}")
     def api_run(run_id: str) -> dict:

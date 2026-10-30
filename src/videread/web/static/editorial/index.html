@@ -7,6 +7,8 @@
 <script>document.documentElement.classList.add("js");</script>
 <script>if("scrollRestoration" in history)history.scrollRestoration="manual";</script>
 <title>VIDEREAD · 视读 — 编辑部</title>
+<link rel="icon" type="image/svg+xml" href="/static/editorial/favicon.svg">
+<link rel="icon" href="/static/editorial/favicon.ico" sizes="any">
 <link rel="stylesheet" href="/static/editorial/fonts/fraunces/index.css">
 <link rel="stylesheet" href="/static/editorial/fonts/fraunces/500.css">
 <link rel="stylesheet" href="/static/editorial/fonts/fraunces/600-italic.css">
@@ -223,6 +225,24 @@
       </div>
       <label class="switch"><input type="checkbox" id="fav-switch"><span class="knob"></span>收藏</label>
       <label class="switch"><input type="checkbox" id="full-switch"><span class="knob"></span>全文</label>
+      <button type="button" id="batch-toggle">批量导出</button>
+    </div>
+    <div class="batch-bar" id="batch-bar">
+      <span class="batch-count" id="batch-count">已选 <b>0</b> 期</span>
+      <span class="batch-note" id="batch-note">Markdown 不含图片 · 带截图报告不可选</span>
+      <button type="button" class="batch-mini" id="batch-all">全选本页</button>
+      <button type="button" class="batch-mini" id="batch-clear">清空</button>
+      <span class="batch-actions">
+      <span class="batch-fmt">
+        <button type="button" id="batch-fmt-btn" class="mode" aria-haspopup="listbox" aria-expanded="false" data-fmt="md">格式 · Markdown</button>
+        <span class="fmt-pick" id="batch-format" role="listbox" aria-label="导出格式">
+          <button type="button" class="fmt-item on" data-fmt="md" data-label="Markdown" role="option" aria-selected="true">Markdown<small>纯文字 · 不含截图</small></button>
+          <button type="button" class="fmt-item" data-fmt="pdf" data-label="PDF" role="option" aria-selected="false">PDF<small>文档 · 含视频截图</small></button>
+          <button type="button" class="fmt-item" data-fmt="png" data-label="PNG" role="option" aria-selected="false">PNG<small>竖长图 · 含视频截图</small></button>
+        </span>
+      </span>
+      <button type="button" id="batch-run">导出 ZIP →</button>
+      </span>
     </div>
     <p class="search-note" id="search-note"></p>
     <ul class="toc" id="toc-list"><li><p class="skeleton">正在翻检档案…</p></li></ul>
@@ -240,7 +260,7 @@
   <section class="block reveal" id="stats">
     <div class="section-head">
       <h3>COLOPHON · 印务统计</h3>
-      <span class="hint">按日汇总 · 读自 run.trace.jsonl</span>
+      <span class="hint">累计概览 + 按日台账 · 读自 run.trace.jsonl</span>
     </div>
     <div id="stats-body"><p class="skeleton">正在核对台账…</p></div>
   </section>

@@ -163,6 +163,10 @@ const SAMPLE = {
     {date:"2026-10-14", runs:1, total_ms:1043000, tokens:210800},
     {date:"2026-10-12", runs:1, total_ms:233000, tokens:39500}
   ],
+  statsOverview: {
+    runs:5, duration_seconds:9013, tokens:507910, total_ms:2614000,
+    avg_ms:522800, subtitle_first_runs:3, subtitle_share:0.6
+  },
   qa: {
     "BV1xx411c7mD": {history:[
       {question:"嘉宾提到的「三遍阅读法」具体是哪三遍？",
@@ -376,6 +380,150 @@ async function ask(runId, btn){
 /* ================= 目录（报告库） ================= */
 const state = {page: 1, pages: 1, q: "", fav: false, full: false, scrollAfterLoad: false};
 
+/* ================= 批量导出（目录勾选） ================= */
+let batchMode = false;
+let batchFormat = "md";
+/* 跨页保留勾选：翻页只是换了一屏，用户不必重新点一遍已选中的期 */
+const picked = new Set();
+/* run_id → 是否带视频截图：Markdown 不含图片，带截图的期在勾选阶段就禁用 */
+const pickFrames = new Map();
+
+function pruneFramed(){
+  if(batchFormat !== "md") return 0;
+  let removed = 0;
+  for(const id of [...picked]){
+    if(pickFrames.get(id)){ picked.delete(id); removed++; }
+  }
+  return removed;
+}
+function syncBatchNote(){
+  const note = $("#batch-note");
+  if(note) note.textContent = batchFormat === "md"
+    ? "Markdown 不含图片 · 带截图报告不可选"
+    : batchFormat === "png"
+      ? "PNG 长图含截图 · 全部报告可选"
+      : "PDF 含视频截图 · 全部报告可选";
+}
+function syncPicks(){
+  pruneFramed();
+  document.querySelectorAll("#toc-list .pick").forEach(b => {
+    const blocked = batchFormat === "md" && b.dataset.frames === "1";
+    b.disabled = blocked;
+    b.title = blocked ? "带视频截图的报告不支持 Markdown 导出，请改用 PDF" : "选中这一期";
+    const on = picked.has(b.dataset.pickRun);
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    const li = b.closest("li");
+    if(li) li.classList.toggle("picked", on);
+  });
+  $("#batch-count").innerHTML = "已选 <b>" + picked.size + "</b> 期";
+  $("#batch-run").disabled = picked.size === 0;
+  syncBatchNote();
+}
+function setBatchMode(on){
+  if(on === batchMode) return;
+  batchMode = on;
+  $("#toc").classList.toggle("batch", on);
+  const toggle = $("#batch-toggle");
+  toggle.classList.toggle("on", on);
+  toggle.textContent = on ? "退出批量" : "批量导出";
+  if(!on) picked.clear();
+  if(!on) closeFmtPick();
+  syncPicks();
+}
+function togglePick(runId){
+  if(!runId) return;
+  if(picked.has(runId)) picked.delete(runId);
+  else picked.add(runId);
+  syncPicks();
+}
+function closeFmtPick(){
+  const pick = $("#batch-format");
+  if(!pick || !pick.classList.contains("open")) return;
+  pick.classList.remove("open");
+  $("#batch-fmt-btn").setAttribute("aria-expanded", "false");
+}
+function setBatchFormat(fmt, label){
+  if(fmt === batchFormat){ closeFmtPick(); return; }
+  batchFormat = fmt;
+  const btn = $("#batch-fmt-btn");
+  btn.dataset.fmt = fmt;
+  btn.textContent = "格式 · " + (label || fmt);
+  $("#batch-format").querySelectorAll(".fmt-item").forEach(x => {
+    const on = x.dataset.fmt === fmt;
+    x.classList.toggle("on", on);
+    x.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  const removed = pruneFramed();
+  syncPicks();
+  if(removed) toast("已取消 " + removed + " 期带视频截图的报告：Markdown 不含图片，可改用 PDF / PNG");
+  closeFmtPick();
+}
+
+function zipStamp(){
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" + p(d.getHours()) + p(d.getMinutes());
+}
+
+async function batchExport(){
+  if(OFFLINE){ toast("离线演示模式，暂不支持批量导出"); return; }
+  if(!picked.size){ toast("先勾选要导出的期数"); return; }
+  const btn = $("#batch-run");
+  const ids = [...picked];
+  btn.disabled = true;
+  btn.textContent = batchFormat === "pdf" ? "正在打印…"
+    : batchFormat === "png" ? "正在截长图…"
+    : "正在打包…";
+  try{
+    const r = await fetch(API + "/api/runs/export", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({run_ids: ids, format: batchFormat})
+    });
+    if(!r.ok){
+      let detail = r.status;
+      try{ const j = await r.json(); if(j && j.detail) detail = j.detail; }catch(e){}
+      throw new Error(detail);
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "videread-" + batchFormat + "-" + zipStamp() + ".zip";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    const exported = Number(r.headers.get("X-Exported") || ids.length) || ids.length;
+    toast("已导出 " + exported + " 期");
+    setBatchMode(false);
+  }catch(e){
+    toast("批量导出失败：" + e.message);
+  }finally{
+    btn.textContent = "导出 ZIP →";
+    btn.disabled = picked.size === 0;
+  }
+}
+
+$("#batch-toggle").addEventListener("click", () => setBatchMode(!batchMode));
+$("#batch-all").addEventListener("click", () => {
+  document.querySelectorAll("#toc-list .pick:not(:disabled)").forEach(b => picked.add(b.dataset.pickRun));
+  syncPicks();
+});
+$("#batch-clear").addEventListener("click", () => { picked.clear(); syncPicks(); });
+$("#batch-fmt-btn").addEventListener("click", e => {
+  e.stopPropagation();
+  const pick = $("#batch-format");
+  const open = pick.classList.toggle("open");
+  $("#batch-fmt-btn").setAttribute("aria-expanded", open ? "true" : "false");
+});
+$("#batch-format").addEventListener("click", e => {
+  const item = e.target.closest(".fmt-item[data-fmt]");
+  if(item) setBatchFormat(item.dataset.fmt, item.dataset.label);
+});
+addEventListener("keydown", e => { if(e.key === "Escape") closeFmtPick(); });
+$("#batch-run").addEventListener("click", batchExport);
+
 function tagOf(item){
   if(!item.has_report) return '<span class="tag gray">生成中</span>';
   if(item.favorite) return '<span class="tag">收藏</span>';
@@ -398,6 +546,9 @@ async function loadRuns(page, silent){
 
   const note = $("#search-note");
   if(state.full && state.q.trim().length >= 2){
+    /* 全文检索结果是另一种行结构：批量勾选在这里收起，避免两套入口打架 */
+    $("#batch-toggle").disabled = true;
+    if(batchMode) setBatchMode(false);
     let res;
     try{ res = await jfetch("/api/search?q=" + encodeURIComponent(state.q.trim())); }
     catch(e){ if(!OFFLINE){ toast("检索失败：" + e.message); return; } res = null; }
@@ -409,6 +560,8 @@ async function loadRuns(page, silent){
       $("#toc-hint").textContent = "共 " + SAMPLE.runs.length + " 期";
       setPager(1, 1, SAMPLE.runs.length, false);
       $("#prev-page").disabled = $("#next-page").disabled = true;
+      bindToc();
+      syncPicks();
       return;
     }
     note.style.display = "block";
@@ -429,9 +582,11 @@ async function loadRuns(page, silent){
     $("#prev-page").disabled = $("#next-page").disabled = true;
     $("#jump-page").disabled = true;
     bindToc();
+    syncPicks();
     return;
   }
   note.style.display = "none";
+  $("#batch-toggle").disabled = false;
 
   let r;
   try{
@@ -447,6 +602,7 @@ async function loadRuns(page, silent){
     $("#prev-page").disabled = $("#next-page").disabled = true;
     $("#jump-page").disabled = true;
     bindToc();
+    syncPicks();
     return;
   }
   const runs = r.runs || [];
@@ -458,6 +614,7 @@ async function loadRuns(page, silent){
   $("#next-page").disabled = r.page >= r.pages;
   state.pages = r.pages;
   bindToc();
+  syncPicks();
   if(state.scrollAfterLoad){
     state.scrollAfterLoad = false;
     /* 翻页后回到目录板块顶部，让新列表从头看起 */
@@ -470,7 +627,9 @@ function rowOf(item, i){
   const no = (state.page - 1) * 10 + i + 1;
   /* 正在作为「本期特稿」展示的那一期：行加标记类 + 实心徽标，方便一眼定位 */
   const isFeature = item.run_id === currentRunId;
+  if(item.has_report) pickFrames.set(item.run_id, !!item.has_frames);
   return '<li' + (isFeature ? ' class="feature-now"' : "") + '><a href="#" data-run="' + esc(item.run_id) + '">' +
+    (item.has_report ? '<button class="pick" type="button" data-pick-run="' + esc(item.run_id) + '" data-frames="' + (item.has_frames ? "1" : "0") + '" aria-pressed="false" aria-label="选中这一期" title="选中这一期"></button>' : "") +
     '<span class="no">' + String(no).padStart(2, "0") + '</span>' +
     '<span class="t">' + esc(item.title) + '<small>' + esc(item.uploader || "—") + ' · ' + esc(item.generated_at || "") + '</small></span>' +
     '<span class="dots"></span>' +
@@ -554,8 +713,24 @@ function bindToc(){
     a.addEventListener("click", e => {
       if(e.target.closest(".fav") || e.target.closest(".del")) return;
       e.preventDefault();
+      if(batchMode){
+        const pick = a.querySelector(".pick");
+        if(pick && pick.disabled){
+          toast("这一期带视频截图，Markdown 不含图片；请改用 PDF 导出");
+        }else if(pick){
+          togglePick(a.dataset.run);
+        }
+        return;
+      }
       openFeature(a.dataset.run);
       document.getElementById("feature").scrollIntoView({behavior: scrollBehavior()});
+    });
+  });
+  document.querySelectorAll("#toc-list .pick").forEach(b => {
+    b.addEventListener("click", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      togglePick(b.dataset.pickRun);
     });
   });
   document.querySelectorAll("#toc-list .fav").forEach(b => {
@@ -588,6 +763,7 @@ function bindToc(){
         /* 接口与退场动画并行：网络再快动画也完整走完，慢了也不额外等待 */
         await Promise.all([del("/api/runs/" + encodeURIComponent(runId)), fade ? fade.finished : Promise.resolve()]);
         toast("已删除：" + title);
+        picked.delete(runId);
         /* 报告删掉后，预检里的「已解析」提示作废，下次投印重新核对 */
         probeOk = false; lastProbedUrl = null; probedExisting = null; probedTitle = "";
         if(currentRunId === runId){
@@ -675,6 +851,8 @@ document.addEventListener("click", e => {
     langPick.classList.remove("open");
     document.getElementById("lang-btn").setAttribute("aria-expanded", "false");
   }
+  const fmtPick = document.getElementById("batch-format");
+  if(fmtPick && fmtPick.classList.contains("open") && !e.target.closest(".batch-fmt")) closeFmtPick();
 });
 
 /* 语言自绘下拉：触发钮复用 .mode 胶囊（与模式按钮同一套样式），浮层同分P 选择器 */
@@ -901,22 +1079,46 @@ function startRename(runId){
 }
 
 /* ================= 印务统计 ================= */
+/* 累计指标带：回答"这一库一共多大、多贵、多省"。
+   span 用「h/m」拆分，token 与期数走千分位。 */
+function kpiCell(label, value, unit){
+  return '<li><span class="k">' + esc(label) + '</span><span class="v">' + value +
+    (unit ? '<i>' + esc(unit) + '</i>' : '') + '</span></li>';
+}
+function spanText(sec){
+  const s = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  return h ? h + '<i>h</i>' + String(m).padStart(2, "0") + '<i>m</i>' : m + '<i>m</i>';
+}
+function statsBand(ov){
+  const share = Math.round((ov.subtitle_share || 0) * 100);
+  return '<ul class="stats-kpi">' +
+    kpiCell("在库", fmtNum(ov.runs), "期") +
+    kpiCell("视频总长", spanText(ov.duration_seconds)) +
+    kpiCell("累计 TOKEN", fmtNum(ov.tokens)) +
+    kpiCell("平均每期", spanText((ov.avg_ms || 0) / 1000)) +
+    kpiCell("字幕优先", share + "%") +
+    '</ul>';
+}
 async function loadStats(){
   const body = $("#stats-body");
-  let days;
+  let overview = null, days;
   try{
     const r = await jfetch("/api/stats");
+    overview = r.overview || null;
     days = r.days || [];
   }catch(e){
     if(!OFFLINE){ body.innerHTML = '<p class="skeleton">统计读取失败</p>'; return; }
+    overview = SAMPLE.statsOverview;
     days = SAMPLE.statsDays;
   }
   const recent = days.slice(-7).reverse();
   if(!recent.length){
-    body.innerHTML = '<p class="skeleton">还没有台账记录，投印第一期后这里会出现按日汇总。</p>';
+    body.innerHTML = '<p class="skeleton">还没有台账记录，投印第一期后这里会出现累计概览与按日台账。</p>';
     return;
   }
   body.innerHTML =
+    (overview ? statsBand(overview) : "") +
     '<table class="stats-table"><thead><tr>' +
     '<th>日期</th><th>期数</th><th>总耗时</th><th>TOKEN</th></tr></thead><tbody>' +
     recent.map(d =>

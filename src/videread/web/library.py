@@ -129,7 +129,22 @@ def trace_summary(path: Path) -> dict:
         if isinstance(stage_tokens, int):
             tokens += stage_tokens
 
-    result = {"stages": stages, "total_ms": total_ms, "tokens": tokens, "errors": errors}
+    # 「字幕优先」信号：下载阶段选用了平台字幕（detail.subtitle_first），
+    # 或 ASR 阶段直接由字幕构造分段（detail.source == "subtitle"）。
+    # 任一命中即记一次——它代表这一期没有调用 ASR，是省钱的直接证据。
+    download_detail = (ends.get("download") or {}).get("detail") or {}
+    asr_detail = (ends.get("asr") or {}).get("detail") or {}
+    subtitle_first = bool(download_detail.get("subtitle_first")) or (
+        asr_detail.get("source") == "subtitle"
+    )
+
+    result = {
+        "stages": stages,
+        "total_ms": total_ms,
+        "tokens": tokens,
+        "errors": errors,
+        "subtitle_first": subtitle_first,
+    }
     with _CACHE_LOCK:
         if len(_TRACE_CACHE) >= _TRACE_CACHE_MAX_ENTRIES:
             _TRACE_CACHE.clear()
@@ -165,9 +180,11 @@ def _entry(run_dir: Path) -> dict | None:
         return None
 
     outline = _read_outline(outline_path)
-    source = report if report.is_file() else meta_path
+    # 生成时间取 meta.json 的 mtime：meta 只在真实运行（重新抓取）时写一次，
+    # 而 report.html 可能被纯展示层的批量回填就地重写（如 2026-10-26 统一改
+    # 链接写法），用它当时间锚点会让整批历史报告的时间集体漂移到回填当天。
     try:
-        mtime = source.stat().st_mtime
+        mtime = meta_path.stat().st_mtime
     except OSError:
         mtime = 0.0
 
@@ -602,3 +619,38 @@ def usage_stats(out_root: Path) -> list[dict]:
         agg["total_ms"] += summary["total_ms"]
         agg["tokens"] += summary["tokens"]
     return sorted(per_day.values(), key=lambda item: item["date"], reverse=True)
+
+
+def usage_overview(out_root: Path) -> dict:
+    """全库累计概览：回答"这一库一共多大、多贵、多省"。
+
+    - 期数 / 累计视频时长：来自每期的 meta（不需要 trace）
+    - 累计耗时 / 累计 token / 平均每期耗时 / 字幕优先占比：只统计有
+      run.trace.jsonl 的运行——耗时与 token 只有 trace 记过，缺 trace
+      的老条目不该被算成 0 而拉低平均值。
+    """
+    runs = list_runs(out_root)
+    traced = 0
+    total_ms = 0
+    tokens = 0
+    subtitle_first = 0
+    for entry in runs:
+        trace_path = Path(out_root) / entry["run_id"] / "run.trace.jsonl"
+        if not trace_path.is_file():
+            continue
+        summary = trace_summary(trace_path)
+        traced += 1
+        total_ms += summary["total_ms"]
+        tokens += summary["tokens"]
+        if summary["subtitle_first"]:
+            subtitle_first += 1
+    duration = sum(float(entry.get("duration") or 0) for entry in runs)
+    return {
+        "runs": len(runs),
+        "duration_seconds": duration,
+        "tokens": tokens,
+        "total_ms": total_ms,
+        "avg_ms": round(total_ms / traced) if traced else 0,
+        "subtitle_first_runs": subtitle_first,
+        "subtitle_share": round(subtitle_first / traced, 3) if traced else 0.0,
+    }

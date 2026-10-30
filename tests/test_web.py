@@ -1007,6 +1007,46 @@ def test_usage_stats_aggregates_by_day(tmp_path: Path):
     assert days[0]["tokens"] == 1234 * 2  # 每份 run 的 outline 阶段各记 1234
 
 
+def test_usage_overview_counts_only_traced_runs(tmp_path: Path):
+    """概览：期数与视频时长来自各期 meta，耗时/token 只结有 trace 的运行。"""
+    make_run(tmp_path, RUN_ID)
+    second = make_run(tmp_path, "BV1xx411c7mD-bbbbbbbb")
+    (second / "run.trace.jsonl").unlink()  # 缺 trace 的老条目不该被当成 0 拉低均值
+
+    ov = library.usage_overview(tmp_path)
+
+    assert ov["runs"] == 2
+    assert ov["duration_seconds"] == 2137.0 * 2
+    assert ov["total_ms"] == 4768 + 1000
+    assert ov["tokens"] == 1234
+    assert ov["avg_ms"] == 4768 + 1000  # 只除以有 trace 的 1 期
+    assert ov["subtitle_first_runs"] == 0
+    assert ov["subtitle_share"] == 0.0
+
+
+def test_usage_overview_counts_subtitle_first(tmp_path: Path):
+    """字幕优先：download 阶段记了 subtitle_first 的运行被计入占比。"""
+    run_dir = make_run(tmp_path, RUN_ID)
+    with (run_dir / "run.trace.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "ts": "t",
+                    "stage": "download",
+                    "event": "end",
+                    "dur_ms": 5,
+                    "detail": {"subtitle_first": "subtitle.ai-zh.srt"},
+                }
+            )
+            + "\n"
+        )
+
+    ov = library.usage_overview(tmp_path)
+
+    assert ov["subtitle_first_runs"] == 1
+    assert ov["subtitle_share"] == 1.0
+
+
 def test_job_status_and_events_routes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(jobs, "pipeline_run", fake_pipeline())
     app = create_app(tmp_path)
