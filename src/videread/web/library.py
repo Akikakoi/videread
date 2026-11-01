@@ -198,6 +198,7 @@ def _entry(run_dir: Path) -> dict | None:
         "duration": meta.duration,
         "duration_text": format_time(meta.duration),
         "profile": outline.profile if outline else "",
+        "lang": (outline.lang if outline else "").strip().lower(),
         "sections": len(outline.sections) if outline else 0,
         "has_report": report.is_file(),
         "has_frames": has_frames(run_dir),

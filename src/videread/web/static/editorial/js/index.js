@@ -524,10 +524,20 @@ $("#batch-format").addEventListener("click", e => {
 addEventListener("keydown", e => { if(e.key === "Escape") closeFmtPick(); });
 $("#batch-run").addEventListener("click", batchExport);
 
+/* 语言徽标：中文（默认）不标，其余语种标缩写，悬停看全名 */
+const LANG_TAG = {en: {label: "EN", name: "English"}, ja: {label: "JA", name: "日本語"}};
+function langTagOf(item){
+  const lang = (item.lang || "").trim().toLowerCase();
+  if(!lang || lang === "zh" || lang === "zh-cn" || lang === "zh-hans") return "";
+  const info = LANG_TAG[lang];
+  return '<span class="tag" title="这一期以 ' + esc(info ? info.name : lang) + ' 印制">' +
+    esc(info ? info.label : lang.toUpperCase()) + '</span>';
+}
+
 function tagOf(item){
+  /* 收藏期数：类型标签转朱红描边，与红星呼应；未收藏为灰描边 */
   if(!item.has_report) return '<span class="tag gray">生成中</span>';
-  if(item.favorite) return '<span class="tag">收藏</span>';
-  return '<span class="tag gray">' + esc(structureZh(item.profile)) + '</span>';
+  return '<span class="tag' + (item.favorite ? "" : " gray") + '">' + esc(structureZh(item.profile)) + '</span>';
 }
 
 function setPager(page, pages, total, enabled){
@@ -635,6 +645,8 @@ function rowOf(item, i){
     '<span class="dots"></span>' +
     '<span class="dur">' + esc(item.duration_text || "—") + '</span>' +
     (isFeature ? '<span class="tag hot" title="这一期正在下方特稿区展示">本期特稿</span>' : "") +
+    langTagOf(item) +
+    (item.has_frames ? '<span class="tag gray" title="报告内嵌视频截图">带截图</span>' : "") +
     tagOf(item) +
     '<button class="fav' + (item.favorite ? " on" : "") + '" data-fav-run="' + esc(item.run_id) + '" data-on="' + (item.favorite ? 1 : 0) + '" title="收藏">' + (item.favorite ? "★" : "☆") + '</button>' +
     '<button class="del" data-del-run="' + esc(item.run_id) + '" data-del-title="' + esc(item.title || item.run_id) + '" title="删除这一期">✕</button>' +
