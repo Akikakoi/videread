@@ -31,6 +31,7 @@ def _no_paywall_network(monkeypatch: pytest.MonkeyPatch):
 
 URL = "https://www.bilibili.com/video/BV1xx411c7mD"
 RUN_ID = "BV1xx411c7mD-aaaaaaaa"
+OTHER_RUN_ID = "BV1xx411c7mD-cccccccc"
 BAD_RUN_ID = "BV1xx411c7mD-bbbbbbbb"
 REPORT_HTML = "<!DOCTYPE html><html><body><p>report</p></body></html>"
 
@@ -170,6 +171,25 @@ def test_list_runs_skips_malformed_meta(tmp_path: Path):
 
 def test_list_runs_missing_root_returns_empty(tmp_path: Path):
     assert library.list_runs(tmp_path / "nope") == []
+
+
+def test_list_runs_carries_outline_lang(tmp_path: Path):
+    """列表带出 outline.json 的语言：非中文供前端标徽标，历史产物缺 lang 视为 zh。"""
+    make_run(tmp_path, RUN_ID)
+    outline_path = tmp_path / RUN_ID / "outline.json"
+    data = json.loads(outline_path.read_text(encoding="utf-8"))
+    data["lang"] = "en"
+    outline_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    runs = library.list_runs(tmp_path)
+    assert runs[0]["lang"] == "en"
+
+    # make_run 写出的 outline 缺 lang 字段，按中文处理（Outline.from_dict 的默认值）
+    make_run(tmp_path, OTHER_RUN_ID)
+    runs = library.list_runs(tmp_path)
+    langs = {item["run_id"]: item["lang"] for item in runs}
+    assert langs[RUN_ID] == "en"
+    assert langs[OTHER_RUN_ID] == "zh"
 
 
 def test_list_runs_cache_invalidates_on_new_report(tmp_path: Path):

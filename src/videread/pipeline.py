@@ -42,7 +42,7 @@ from .report import (
 )
 from .report import load as load_outline
 from .report import write as write_outline
-from .report.writer import BRIEF_HARD_MAX, section_dir
+from .report.writer import brief_hard_max, existing_sections
 from .trace import TraceWriter
 from .transcript import (
     TranscriptUnit,
@@ -88,9 +88,11 @@ def _cached(text: str) -> str:
     return f"{text}  (缓存命中，跳过)"
 
 
-def _sections_complete(out_dir: Path, outline: Outline) -> bool:
-    directory = section_dir(out_dir)
-    return all(_nonempty(directory / f"{section.id}.html") for section in outline.sections)
+def _sections_complete(out_dir: Path, outline: Outline, lang: str) -> bool:
+    """全部小节都有**同语言**的非空片段才算完整（片段与语言绑定，
+    见 existing_sections：换语言后旧片段必须重写而非复用）。"""
+    found = existing_sections(out_dir, lang)
+    return all(found.get(section.id) for section in outline.sections)
 
 
 def _asr_cached(use_cache: bool, run_dir: Path) -> bool:
@@ -726,7 +728,7 @@ def _stage_sections(state: _RunState) -> None:
         complete = (
             state.use_cache
             and not state.force_report
-            and _sections_complete(state.run_dir, state.outline)
+            and _sections_complete(state.run_dir, state.outline, state.lang)
         )
         if not complete and state.client is None:
             state.client = LlmClient(state.settings)
@@ -752,14 +754,15 @@ def _stage_sections(state: _RunState) -> None:
             stage.detail["tokens"] = state.client.usage.total
             detail += f"  {state.client.usage.describe()}"
         if state.mode == "brief":
-            length = check_brief_length(parts)
+            length = check_brief_length(parts, state.lang)
             stage.detail["brief_chars"] = length.chars
-            detail += f"  Brief {length.chars} 字"
+            detail += f"  Brief {length.chars} {length.unit}"
             for issue in length.issues:
                 state.progress(f"  Brief 字数提示：{issue}")
             if length.over_hard:
                 raise LlmError(
-                    f"Brief 正文 {length.chars} 字，超过硬上限 {BRIEF_HARD_MAX} 字；"
+                    f"Brief 正文 {length.chars} {length.unit}，超过硬上限 "
+                    f"{brief_hard_max(state.lang)} {length.unit}；"
                     "删除 runs/<run-id>/sections/ 后重跑可重新生成，或改用 --mode standard"
                 )
     state.parts = parts

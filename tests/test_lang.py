@@ -10,9 +10,9 @@ from videread.config import lang_display_name
 from videread.download import VideoMeta
 from videread.report import load as load_outline
 from videread.report import write as write_outline
-from videread.report import prompts
+from videread.report import prompts, writer
 from videread.report.outline import Outline, plan_outline, validate
-from videread.report.writer import check_brief_length, count_text_words
+from videread.report.writer import check_brief_length, count_text_words, write_sections
 from videread.trace import TraceWriter
 from videread.transcript import TranscriptUnit
 
@@ -217,3 +217,100 @@ def test_stage_outline_keeps_cache_when_lang_matches(tmp_path: Path, monkeypatch
     pipeline_mod._stage_outline(state)
     assert state.force_report is False
     assert state.outline is not None and state.outline.lang == "en"
+
+
+# ---------------------------------------------------- 分节片段的语言绑定
+
+
+def _seed_section(run_dir: Path, text: str) -> None:
+    directory = run_dir / "sections"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "s1.html").write_text(text, encoding="utf-8")
+
+
+def _fake_llm(monkeypatch: pytest.MonkeyPatch, calls: list[int]) -> None:
+    class _FakeLlm:
+        def __init__(self, *_args: object) -> None:
+            calls.append(1)
+
+        def complete(self, **_kwargs: object) -> str:
+            return '<p data-source-units="u0001">body</p>'
+
+    monkeypatch.setattr(writer, "LlmClient", _FakeLlm)
+
+
+def test_write_sections_ignores_stale_language_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """换语言重出：旧语言的分节片段必须失效重写。
+
+    否则会出现截图里的拼接报告：英文大纲标题配中文正文（Web 重新解析
+    走 no_cache 路径，大纲重出而分节缓存照旧命中）。
+    """
+    calls: list[int] = []
+    _fake_llm(monkeypatch, calls)
+    outline = validate(_outline_data(), _units(), lang="en")
+
+    # 历史产物（无标记，视为 zh）与 zh 标记产物，对 en 请求都必须失效
+    for stale in ("<p>中文正文</p>\n", "<!--videread:lang=zh-->\n<p>中文正文</p>\n"):
+        calls.clear()
+        _seed_section(tmp_path, stale)
+        parts = write_sections(
+            outline, _units(), out_dir=tmp_path, mode="standard", lang="en"
+        )
+        assert calls, "旧语言片段不应命中缓存"
+        assert "中文正文" not in parts[0]
+        cached = (tmp_path / "sections" / "s1.html").read_text(encoding="utf-8")
+        assert cached.startswith("<!--videread:lang=en-->"), cached
+
+
+def test_write_sections_reuses_same_language_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """同语言续跑照常命中缓存，且标记行不进正文。"""
+
+    class _NoLlm:
+        def __init__(self, *_args: object) -> None:
+            raise AssertionError("语言一致时不应重写分节")
+
+    monkeypatch.setattr(writer, "LlmClient", _NoLlm)
+    outline = validate(_outline_data(), _units(), lang="en")
+    (tmp_path / "sections").mkdir(parents=True)
+    for section_id in ("s1", "s2"):
+        (tmp_path / "sections" / f"{section_id}.html").write_text(
+            '<!--videread:lang=en-->\n<p data-source-units="u0001">body</p>\n',
+            encoding="utf-8",
+        )
+
+    parts = write_sections(outline, _units(), out_dir=tmp_path, mode="standard", lang="en")
+
+    assert "videread:lang" not in parts[0]
+    assert '<p data-source-units="u0001">body</p>' in parts[0]
+
+
+def test_write_sections_regenerates_when_language_switches_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """en 片段对 zh 请求同样失效：语言绑定是双向的。"""
+    calls: list[int] = []
+    _fake_llm(monkeypatch, calls)
+    write_sections(
+        validate(_outline_data(), _units(), lang="en"),
+        _units(),
+        out_dir=tmp_path,
+        mode="standard",
+        lang="en",
+    )
+    assert calls
+    calls.clear()
+
+    write_sections(
+        validate(_outline_data(), _units(), lang="zh"),
+        _units(),
+        out_dir=tmp_path,
+        mode="standard",
+        lang="zh",
+    )
+    assert calls, "en 标记的片段不应供 zh 请求复用"
+    cached = (tmp_path / "sections" / "s1.html").read_text(encoding="utf-8")
+    assert cached.startswith("<!--videread:lang=zh-->"), cached

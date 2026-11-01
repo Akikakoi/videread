@@ -23,6 +23,8 @@ _SCRIPT_OR_STYLE = re.compile(
 _STRUCTURAL_TAG = re.compile(r"<\s*/?\s*(html|head|body)\b[^>]*>", re.IGNORECASE)
 _SOURCE_UNITS = re.compile(r'data-source-units\s*=\s*"([^"]*)"', re.IGNORECASE)
 _CODE_FENCE = re.compile(r"^\s*```[a-zA-Z]*\s*|\s*```\s*$")
+# 分节片段首行的语言标记：换语言重出时据此判定旧片段失效（§ 缓存与语言绑定）
+_LANG_MARK = re.compile(r"^<!--videread:lang=([a-z-]+)-->$")
 _ANY_TAG = re.compile(r"<[^>]+>")
 # 模型偶发输出的 Markdown 强调标记：模板只认 HTML，字面 `**` 会原样显示给读者
 _MD_BOLD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
@@ -41,8 +43,14 @@ BRIEF_HARD_MAX_WORDS = 1200
 BRIEF_SECTION_MAX_WORDS = 180
 
 
+def _norm_lang(lang: str) -> str:
+    """归一化语言代码：zh 变体折叠为 zh，其余小写透传（落标记用）。"""
+    lang = (lang or "").strip().lower()
+    return "zh" if lang in {"", "zh-cn", "zh-hans"} else lang
+
+
 def _is_zh(lang: str) -> bool:
-    return (lang or "zh").strip().lower() in {"", "zh", "zh-cn", "zh-hans"}
+    return _norm_lang(lang) == "zh"
 
 
 def _brief_limits(lang: str) -> tuple[int, int, int, int]:
@@ -62,6 +70,7 @@ class BriefLengthReport:
     chars: int
     issues: list[str] = field(default_factory=list)
     over_hard: bool = False
+    unit: str = "字"
 
 
 def extract_text(html: str) -> str:
@@ -98,7 +107,12 @@ def check_brief_length(html_parts: list[str], lang: str = "zh") -> BriefLengthRe
         issues.append(f"Brief 正文 {total} {unit}，超出目标区间上限 {target_max} {unit}")
     elif total < target_min:
         issues.append(f"Brief 正文 {total} {unit}，低于目标区间下限 {target_min} {unit}")
-    return BriefLengthReport(chars=total, issues=issues, over_hard=total > hard_max)
+    return BriefLengthReport(chars=total, issues=issues, over_hard=total > hard_max, unit=unit)
+
+
+def brief_hard_max(lang: str) -> int:
+    """Brief 正文硬上限：zh 按字计数，其他语言按词计数。"""
+    return _brief_limits(lang)[2]
 
 
 def strip_markdown_markers(html: str) -> str:
@@ -200,16 +214,38 @@ def section_dir(out_dir: Path) -> Path:
     return out_dir / "sections"
 
 
-def existing_sections(out_dir: Path) -> dict[str, str]:
-    """读取已完成的分节产物（单节失败可单独重试，已成功的节不重跑）。"""
+def existing_sections(out_dir: Path, lang: str = "zh") -> dict[str, str]:
+    """读取已完成的分节产物（单节失败可单独重试，已成功的节不重跑）。
+
+    片段与语言绑定：落盘文件首行带 `<!--videread:lang=xx-->` 标记，与请求
+    语言不符的节视为不存在——换语言重出时正文必须重写，否则会拼出英文标题
+    配中文正文的报告。历史产物没有标记，只按 zh 对待。
+    """
     directory = section_dir(out_dir)
     if not directory.is_dir():
         return {}
     found: dict[str, str] = {}
     for path in sorted(directory.glob("s*.html")):
-        if _SECTION_FILE.match(path.name) and path.stat().st_size > 0:
-            found[path.stem] = path.read_text(encoding="utf-8")
+        if not (_SECTION_FILE.match(path.name) and path.stat().st_size > 0):
+            continue
+        text = path.read_text(encoding="utf-8")
+        head, _sep, tail = text.partition("\n")
+        mark = _LANG_MARK.match(head.strip())
+        if mark is not None:
+            if mark.group(1) != lang:
+                continue  # 语言不同：这一节必须按新语言重写
+            text = tail  # 返回给调用方的片段不含标记行
+        elif not _is_zh(lang):
+            continue  # 无标记的历史产物只可能是 zh
+        found[path.stem] = text
     return found
+
+
+def _store_section(directory: Path, section_id: str, html: str, lang: str) -> None:
+    """片段落盘：首行带语言标记，供换语言重出时判定缓存失效。"""
+    (directory / f"{section_id}.html").write_text(
+        f"<!--videread:lang={lang}-->\n{html}\n", encoding="utf-8", newline="\n"
+    )
 
 
 def _section_units(section: OutlineSection, unit_map: dict[str, TranscriptUnit]) -> list[TranscriptUnit]:
@@ -254,8 +290,8 @@ def write_sections(
     产物不该丢；未开始的节全部撤销，重跑时从断点续写。
 
     返回值是**已完成标题拼装**的整节 HTML（标题由 `assemble_section` 注入）。
-    落盘的 `sections/sN.html` 只存 LLM 片段，标题在拼装时确定性生成，
-    因此重跑只重渲染也能补齐标题，不必重新调用模型。
+    落盘的 `sections/sN.html` 只存 LLM 片段（首行是语言标记），标题在拼装时
+    确定性生成，因此重跑只重渲染也能补齐标题，不必重新调用模型。
     """
     if not outline.sections:
         raise LlmError("大纲为空，无法逐节写作")
@@ -268,9 +304,9 @@ def write_sections(
 
     directory = section_dir(out_dir)
     directory.mkdir(parents=True, exist_ok=True)
-    cached = {} if force else existing_sections(out_dir)
+    lang = _norm_lang(lang or getattr(outline, "lang", "") or "")
+    cached = {} if force else existing_sections(out_dir, lang)
     unit_map = {unit.id: unit for unit in units}
-    lang = lang or getattr(outline, "lang", "zh") or "zh"
     system = prompts.writer_system(mode, lang)
     component_list = prompts.components_for(mode)
     total = len(outline.sections)
@@ -350,8 +386,7 @@ def write_sections(
             except Exception as exc:  # noqa: BLE001 - 收集后统一抛出；用户中断不在此列
                 failures.append((index, exc))
                 continue
-            path = directory / f"{section.id}.html"
-            path.write_text(html + "\n", encoding="utf-8", newline="\n")
+            _store_section(directory, section.id, html, lang)
             done = counter.next()
             progress(f"第 {done}/{total} 节完成")
             parts[section.id] = assemble_section(section, index, html, mode=mode)
@@ -366,9 +401,7 @@ def write_sections(
             if future.exception() is not None:
                 continue
             html = future.result()
-            (directory / f"{section.id}.html").write_text(
-                html + "\n", encoding="utf-8", newline="\n"
-            )
+            _store_section(directory, section.id, html, lang)
             parts[section.id] = assemble_section(section, index, html, mode=mode)
         saved = len(parts)
         progress(f"已取消：已完成的 {saved}/{total} 节已保留，重跑将从断点续写")
