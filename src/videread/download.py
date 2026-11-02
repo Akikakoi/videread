@@ -40,9 +40,14 @@ _TRACKING_PARAMS = {
     "is_room_feed",
 }
 
+# 多字幕并存时的取用优先级：中文优先，避免双语视频误选英文字幕；
+# 人手 CC 排在 AI 字幕之前（质量通常更好），ai-zh 排在 en 之前。
+# 这份顺序同时决定 yt-dlp 的请求列表（--sub-langs 只做过滤，不决定取哪一份）
+_SUBTITLE_PRIORITY = ("zh-CN", "zh-Hans", "zh", "zh-Hant", "ai-zh", "en", "ai-en")
+
 # B 站 AI 生成字幕的语言代码是 ai-zh / ai-en（UP 主手传 CC 为 zh-CN / zh-Hans）；
 # 不在请求列表里 yt-dlp 就不会下载，这正是 B 站视频"明明有字幕却走了 ASR"的主因
-_SUBTITLE_LANGS = "zh-CN,zh-Hans,zh,zh-Hant,ai-zh,ai-en,en"
+_SUBTITLE_LANGS = ",".join(_SUBTITLE_PRIORITY)
 
 # B 站分P探测用的公开 view 接口：无需登录，一次请求带回全部分P 的标题与时长
 _VIEW_API = "https://api.bilibili.com/x/web-interface/view"
@@ -98,11 +103,6 @@ def _preview_reject_text(actual: float, full: float) -> str:
 _CHEESE_EP_RE = re.compile(r"bilibili\.com/cheese/play/ep(\d+)")
 _CHEESE_SEASON_API = "https://api.bilibili.com/pugv/view/web/season"
 
-# 多字幕并存时的取用优先级：中文优先，避免双语视频误选英文字幕；
-# 人手 CC 排在 AI 字幕之前（质量通常更好），ai-zh 排在 en 之前
-# （yt-dlp 的 --sub-langs 只做过滤，不决定我们取哪一份）
-_SUBTITLE_PRIORITY = ("zh-CN", "zh-Hans", "zh", "zh-Hant", "ai-zh", "en", "ai-en")
-
 
 @dataclass
 class VideoMeta:
@@ -113,7 +113,6 @@ class VideoMeta:
     uploader: str
     duration: float
     url: str
-    cover: str = ""
     description: str = ""
     uploader_id: str = ""
     subtitles: list[dict] = field(default_factory=list)
@@ -129,7 +128,6 @@ class VideoMeta:
             uploader=str(data.get("uploader", "")),
             duration=float(data.get("duration", 0) or 0),
             url=str(data.get("url", "")),
-            cover=str(data.get("cover", "") or ""),
             description=str(data.get("description", "") or ""),
             uploader_id=str(data.get("uploader_id", "") or ""),
             subtitles=list(data.get("subtitles") or []),
@@ -246,7 +244,6 @@ def local_meta(path: Path, duration: float) -> VideoMeta:
         uploader="",
         duration=duration,
         url=resolved.as_uri(),
-        cover="",
         description="",
         subtitles=[],
     )
@@ -370,18 +367,6 @@ def _charging_flag(data: dict) -> bool:
         except (TypeError, ValueError):
             continue
     return False
-
-
-def charging_exclusive(url: str, settings: Settings | None = None) -> bool | None:
-    """该稿件是否为充电专属/付费内容。
-
-    True = 是（未充电用户只能拿到试看预览）；False = 确认不是；
-    None = 无法判定（非 B 站链接 / view API 失败），调用方不应阻断。
-    """
-    data = _view_data(url, settings)
-    if data is None:
-        return None
-    return _charging_flag(data)
 
 
 def _cheese_ep_id(url: str) -> str | None:
@@ -583,7 +568,6 @@ def fetch_meta(
         uploader=str(info.get("uploader") or info.get("channel") or "").strip(),
         duration=duration,
         url=str(info.get("webpage_url") or url),
-        cover=str(info.get("thumbnail") or ""),
         description=str(info.get("description") or ""),
         uploader_id=str(info.get("uploader_id") or info.get("channel_id") or "").strip(),
         subtitles=[],
@@ -972,14 +956,6 @@ def subtitle_login_hint(settings: Settings) -> str | None:
         "才可见：在 .env 里配置 YTDLP_COOKIES_FILE（已登录浏览器导出的 "
         "cookies.txt）后，带 AI 字幕的视频可由字幕直接建稿，跳过音频下载与 ASR。"
     )
-
-
-def download_subtitles(
-    url: str, dest_dir: Path, settings: Settings | None = None
-) -> list[dict]:
-    """下载平台自带字幕到 `subtitle.<lang>.srt`；没有字幕时返回空列表。"""
-    settings = settings or get_settings()
-    return _download_subtitles_into(url, dest_dir, settings)
 
 
 def pick_subtitle(subtitles: list[dict], run_dir: Path) -> Path | None:

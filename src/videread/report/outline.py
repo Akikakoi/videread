@@ -73,9 +73,6 @@ class Outline:
             ],
         )
 
-    def source_ids(self) -> set[str]:
-        return {unit_id for section in self.sections for unit_id in section.source_ids}
-
 
 def write(outline: Outline, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

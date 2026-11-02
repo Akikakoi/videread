@@ -7,11 +7,9 @@ import sys
 from pathlib import Path
 
 from . import __version__, download, failures
-from .config import DEFAULT_OUT_ROOT, configure_console
+from .config import DEFAULT_OUT_ROOT, REPORT_MODES, configure_console
 from .errors import EXIT_OK, EXIT_USAGE, VidereadError
 from .pipeline import run
-
-_MODES = ("standard", "deep", "brief", "outline")
 
 
 class _Parser(argparse.ArgumentParser):
@@ -34,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
         "也可以是 .txt 批量列表（每行一个来源，# 为注释，逐个顺序解析）",
     )
     parser.add_argument(
-        "--mode", choices=_MODES, default="standard", help="阅读模式，默认 standard"
+        "--mode", choices=REPORT_MODES, default="standard", help="阅读模式，默认 standard"
     )
     parser.add_argument("--out", default=str(DEFAULT_OUT_ROOT), help="产物根目录，默认 ./runs")
     parser.add_argument("--no-cache", action="store_true", help="忽略已有产物，全部重跑")

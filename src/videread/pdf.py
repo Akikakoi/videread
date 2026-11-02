@@ -48,6 +48,29 @@ def find_browser(settings: Settings | None = None) -> str | None:
     return None
 
 
+def browser_command(browser: str, profile: str, *extra: str) -> list[str]:
+    """无头浏览器的公共启动参数；各导出按需追加自己的动作参数。"""
+    return [
+        browser,
+        "--headless",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-default-browser-check",
+        f"--user-data-dir={profile}",
+        *extra,
+    ]
+
+
+def valid_artifact(path: Path, magic: bytes) -> bool:
+    """外部产物有效性：存在、非空且以指定魔数开头。"""
+    if not path.is_file() or path.stat().st_size < 100:
+        return False
+    try:
+        return path.read_bytes()[: len(magic)] == magic
+    except OSError:
+        return False
+
+
 def expand_details(html: str) -> str:
     """给所有 `<details>` 补 `open` 属性（幂等）。
 
@@ -83,17 +106,13 @@ def export_pdf(html_path: Path, out_pdf: Path, settings: Settings | None = None)
         print_html.write_text(
             expand_details(html_path.read_text(encoding="utf-8")), encoding="utf-8"
         )
-        cmd = [
+        cmd = browser_command(
             browser,
-            "--headless",
-            "--disable-gpu",
-            "--no-first-run",
-            "--no-default-browser-check",
+            profile,
             "--no-pdf-header-footer",
-            f"--user-data-dir={profile}",
             f"--print-to-pdf={out_pdf}",
             print_html.resolve().as_uri(),
-        ]
+        )
         result = execution.run_command(
             cmd,
             timeout=PDF_TIMEOUT_SEC,
@@ -101,7 +120,9 @@ def export_pdf(html_path: Path, out_pdf: Path, settings: Settings | None = None)
             missing_message=lambda program: f"浏览器启动失败（{program} 已不存在）",
             timeout_message=lambda seconds, _program: f"PDF 导出超时（{seconds:.0f}s）",
         )
-        if result.returncode not in (0, None) and not _valid_pdf(out_pdf):
+        if result.returncode not in (0, None) and not valid_artifact(
+            out_pdf, b"%PDF-"
+        ):
             raise PdfError(
                 f"PDF 导出失败（退出码 {result.returncode}）："
                 f"{result.stderr.strip()[-500:]}"
@@ -110,16 +131,6 @@ def export_pdf(html_path: Path, out_pdf: Path, settings: Settings | None = None)
         shutil.rmtree(profile, ignore_errors=True)
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-    if not _valid_pdf(out_pdf):
+    if not valid_artifact(out_pdf, b"%PDF-"):
         raise PdfError(f"PDF 导出失败：浏览器未产出有效文件 {out_pdf}")
     return out_pdf
-
-
-def _valid_pdf(path: Path) -> bool:
-    """PDF 有效性：存在、非空、以 %PDF 魔数开头。"""
-    if not path.is_file() or path.stat().st_size < 100:
-        return False
-    try:
-        return path.read_bytes()[:5] == b"%PDF-"
-    except OSError:
-        return False

@@ -7,6 +7,25 @@ const JOB_TERMINAL = new Set(["done","cancelled","failed","error"]);
 /* JS 触发的滚动不受 CSS scroll-behavior:auto 管，reduce 下须显式降级为瞬间跳转 */
 const scrollBehavior = () => matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
 
+/* 阶段步进器（首页提交面板与工单页共用）；currentMark 覆盖「进行中」标记的样式 */
+let stepperSeen = new Set();
+function resetStepper(){ stepperSeen = new Set(); }
+function renderStepper(current, doneSet, currentMark){
+  const ul = $("#stepper");
+  if(!ul) return;
+  const mark = currentMark || '<span class="mark">●</span>';
+  ul.innerHTML = STAGES.map((name, i) => {
+    const no = String(i + 1).padStart(2, "0");
+    if(doneSet.has(i)) {
+      const pop = !stepperSeen.has(i) && stepperSeen.size > 0 ? " pop" : "";
+      return '<li class="done' + pop + '"><span class="no">' + no + '</span><span class="t">' + esc(name) + '</span><span class="mark">✓</span></li>';
+    }
+    if(i === current) return '<li class="cur"><span class="no">' + no + '</span><span class="t">' + esc(name) + '</span>' + mark + '</li>';
+    return '<li><span class="no">' + no + '</span><span class="t">' + esc(name) + '</span><span class="mark">·</span></li>';
+  }).join("");
+  stepperSeen = new Set(doneSet);
+}
+
 /* 刷新一律从顶部开始：浏览器恢复的滚动位置会与异步渲染后的内容高度错位，
    表现为每次刷新都停在页面的不同位置。不支持的浏览器（如 Safari）由
    pageshow 兜底；页面内锚点与阅读页 ?sec= 深链仍保留原跳转行为。 */

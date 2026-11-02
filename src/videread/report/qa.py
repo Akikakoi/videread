@@ -22,7 +22,7 @@ from . import prompts
 from .llm import LlmClient
 from .outline import Outline
 from .outline import load as load_outline
-from .writer import sanitize_section_html
+from .writer import SOURCE_UNITS, sanitize_section_html
 
 #: 整份转写的字符预算：不超过就直接全量送模型，避免检索漏召
 FULL_CONTEXT_BUDGET = 24000
@@ -34,7 +34,6 @@ MAX_QUESTION_CHARS = 500
 #: 问答答案允许使用的组件 class（其余按"未定义 class"剔除）
 _QA_CLASSES = {"keyline", "callout"}
 
-_SOURCE_UNITS = re.compile(r'data-source-units\s*=\s*"([^"]*)"', re.IGNORECASE)
 _SNIPPET_CHARS = 60
 
 
@@ -159,7 +158,7 @@ def _citations(
                 section_of.setdefault(unit_id, (section.id, index))
 
     ordered: list[str] = []
-    for attr in _SOURCE_UNITS.findall(html):
+    for attr in SOURCE_UNITS.findall(html):
         for unit_id in attr.split(","):
             unit_id = unit_id.strip()
             if unit_id and unit_id in by_id and unit_id not in ordered:

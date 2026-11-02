@@ -18,7 +18,7 @@ from pathlib import Path
 from . import execution
 from .config import PDF_TIMEOUT_SEC, Settings
 from .errors import PngError
-from .pdf import expand_details, find_browser
+from .pdf import browser_command, expand_details, find_browser, valid_artifact
 
 #: 长图宽度：报告正文在这个宽度下是舒适的手机阅读版式
 PNG_WIDTH = 900
@@ -27,6 +27,7 @@ _FALLBACK_HEIGHT = 16000
 #: 浏览器窗口最大高度（再高会被合成器拒绝），超长报告截断到此处
 _MAX_HEIGHT = 32000
 _MEASURE_MARK = "VRH:"
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 #: 阅读页渲染预算（毫秒，虚拟时间）：覆盖字体 CDN + API 拉取 + 拼版
 _READER_BUDGET_MS = 15000
 
@@ -62,19 +63,6 @@ def _run_browser(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _browser_cmd(browser: str, profile: str, *extra: str) -> list[str]:
-    return [
-        browser,
-        "--headless",
-        "--disable-gpu",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--hide-scrollbars",
-        f"--user-data-dir={profile}",
-        *extra,
-    ]
-
-
 def _parse_height(stdout: str) -> int:
     """从 dump 出的 DOM 标题里读测高标记；缺失时退回兜底高度而不是失败。"""
     match = re.search(_MEASURE_MARK + r"(\d+)", stdout)
@@ -88,9 +76,10 @@ def _dump_height(
 ) -> int:
     """第一趟：同宽视口下让页面把内容高度写进标题，再 dump 出来读。"""
     result = _run_browser(
-        _browser_cmd(
+        browser_command(
             browser,
             profile,
+            "--hide-scrollbars",
             *extra,
             f"--window-size={width},800",
             "--dump-dom",
@@ -112,21 +101,22 @@ def _screenshot(
 ) -> None:
     """第二趟：按测得高度开窗截图，并校验产物确为 PNG。"""
     result = _run_browser(
-        _browser_cmd(
+        browser_command(
             browser,
             profile,
+            "--hide-scrollbars",
             *extra,
             f"--screenshot={out_png}",
             f"--window-size={width},{height}",
             target,
         )
     )
-    if result.returncode not in (0, None) and not _valid_png(out_png):
+    if result.returncode not in (0, None) and not valid_artifact(out_png, _PNG_MAGIC):
         raise PngError(
             f"长图导出失败（退出码 {result.returncode}）："
             f"{result.stderr.strip()[-500:]}"
         )
-    if not _valid_png(out_png):
+    if not valid_artifact(out_png, _PNG_MAGIC):
         raise PngError(f"长图导出失败：浏览器未产出有效文件 {out_png}")
 
 
@@ -210,13 +200,3 @@ def export_reader_png(
     finally:
         shutil.rmtree(profile, ignore_errors=True)
     return out_png
-
-
-def _valid_png(path: Path) -> bool:
-    """PNG 有效性：存在、非空、以 PNG 魔数开头。"""
-    if not path.is_file() or path.stat().st_size < 100:
-        return False
-    try:
-        return path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
-    except OSError:
-        return False

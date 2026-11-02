@@ -216,31 +216,31 @@ def _fake_yt_dlp(duration: float):
     return _run
 
 
-def test_charging_exclusive_reads_rights_flag(monkeypatch: pytest.MonkeyPatch):
-    """rights 的 is_charging_arc / ugc_pay 任一置位即判为付费内容；API 失败为 None。"""
+def test_paywall_snapshot_reads_rights_flag(monkeypatch: pytest.MonkeyPatch):
+    """rights 的 is_charging_arc / ugc_pay 任一置位即判为付费内容；API 失败返回 None。"""
     monkeypatch.setattr(
         download.httpx,
         "Client",
         _view_client(_view_payload({}, 3000, None, {"is_upower_exclusive": 1})),
     )
-    assert download.charging_exclusive(URL, _settings()) is True
+    assert download.paywall_snapshot(URL, _settings())["paywalled"] is True
 
     monkeypatch.setattr(
         download.httpx, "Client", _view_client(_view_payload({}, 3000, None, None, {"ugc_pay": 1}))
     )
-    assert download.charging_exclusive(URL, _settings()) is True
+    assert download.paywall_snapshot(URL, _settings())["paywalled"] is True
 
     monkeypatch.setattr(
         download.httpx,
         "Client",
         _view_client(_view_payload({}, 3000)),
     )
-    assert download.charging_exclusive(URL, _settings()) is False
+    assert download.paywall_snapshot(URL, _settings())["paywalled"] is False
 
     broken = _view_payload({}, 3000)
     broken["code"] = -404
     monkeypatch.setattr(download.httpx, "Client", _view_client(broken))
-    assert download.charging_exclusive(URL, _settings()) is None
+    assert download.paywall_snapshot(URL, _settings()) is None
 
 
 def test_fetch_video_info_surfaces_charging_flag(monkeypatch: pytest.MonkeyPatch):

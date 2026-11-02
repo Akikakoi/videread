@@ -961,22 +961,6 @@ async function doProbe(){
   }
 }
 
-let stepperSeen = new Set();
-function renderStepper(current, doneSet){
-  const ul = $("#stepper");
-  ul.innerHTML = STAGES.map((name, i) => {
-    const no = String(i + 1).padStart(2, "0");
-    if(doneSet.has(i)) {
-      /* 只对本次新完成的阶段弹一次 ✓，重绘不重播 */
-      const pop = !stepperSeen.has(i) && stepperSeen.size > 0 ? " pop" : "";
-      return '<li class="done' + pop + '"><span class="no">' + no + '</span><span class="t">' + name + '</span><span class="mark">✓</span></li>';
-    }
-    if(i === current) return '<li class="cur"><span class="no">' + no + '</span><span class="t">' + name + '</span><span class="mark">●</span></li>';
-    return '<li><span class="no">' + no + '</span><span class="t">' + name + '</span><span class="mark">·</span></li>';
-  }).join("");
-  stepperSeen = new Set(doneSet);
-}
-
 function resetSubmitState(){
   const btn = $("#btn-submit");
   btn.disabled = probeBlocked;
@@ -985,7 +969,7 @@ function resetSubmitState(){
   $("#logbox").textContent = "";
   $("#submeta").innerHTML = "";
   $("#stepper").innerHTML = "";
-  stepperSeen = new Set();
+  resetStepper();
 }
 
 function beginSubmit(){

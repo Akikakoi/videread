@@ -7,24 +7,18 @@
 from __future__ import annotations
 
 import os
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
 
-from ..audio import cut_segment, detect_silence, plan_chunks, probe_duration
-from ..config import (
-    ASR_SEGMENT_SECONDS,
-    ASR_SEGMENT_TIMEOUT_SEC,
-    Settings,
-)
-from ..errors import AsrError, CancelledError, UsageError
-from .base import AsrSegment, offset_segments, sort_segments
+from ..config import ASR_SEGMENT_TIMEOUT_SEC, Settings
+from ..errors import AsrError, UsageError
+from .base import AsrSegment, ChunkedAsr, offset_segments
 
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
 _DEFAULT_MODEL = "whisper-1"
 
 
-class OpenAiWhisperAsr:
+class OpenAiWhisperAsr(ChunkedAsr):
     """OpenAI `whisper-1` 实现。"""
 
     name = "openai"
@@ -64,56 +58,17 @@ class OpenAiWhisperAsr:
             )
         return self._client
 
-    def transcribe(
-        self, audio: Path, *, duration: float | None = None
+    # whisper 接口按文件计费、无分段缓存；部分段失败时静默降级（原行为）
+    def _use_part_cache(self) -> bool:
+        return False
+
+    def _warn_partial(self) -> bool:
+        return False
+
+    def _transcribe_chunk(
+        self, audio: Path, index: int, start: float, end: float
     ) -> list[AsrSegment]:
-        total = duration if duration is not None else probe_duration(audio, self.settings)
-        if total <= ASR_SEGMENT_SECONDS:
-            return self._transcribe_file(audio)
-
-        silences = detect_silence(audio, settings=self.settings)
-        chunks = plan_chunks(total, silences, limit=ASR_SEGMENT_SECONDS)
-        self.progress(
-            f"长音频切段：{len(chunks)} 段（并发 {self.settings.asr_max_concurrency}）"
-        )
-
-        chunk_dir = (self.cache_dir or audio.parent) / "asr_chunks"
-        chunk_dir.mkdir(parents=True, exist_ok=True)
-
-        def _checkpoint() -> None:
-            if self.cancel_check is not None:
-                self.cancel_check()
-
-        _checkpoint()
-        results: dict[int, list[AsrSegment]] = {}
-        with ThreadPoolExecutor(max_workers=self.settings.asr_max_concurrency) as pool:
-            futures = {}
-            for index, (start, end) in enumerate(chunks):
-                dest = chunk_dir / f"chunk.{index:03d}.wav"
-                cut_segment(audio, dest, start, end, self.settings)
-                futures[pool.submit(self._transcribe_file, dest)] = (index, start, dest)
-            for future, (index, start, dest) in futures.items():
-                try:
-                    _checkpoint()
-                    results[index] = offset_segments(future.result(), start)
-                except CancelledError:
-                    for pending in futures:
-                        pending.cancel()
-                    raise
-                except Exception as exc:  # noqa: BLE001 - 单段失败不阻塞其他段
-                    self.failures.append(
-                        {"chunk": index, "error": f"{type(exc).__name__}: {exc}"}
-                    )
-                finally:
-                    dest.unlink(missing_ok=True)
-
-        if not results:
-            raise AsrError(f"ASR 全部切段失败：{self.failures}")
-
-        merged: list[AsrSegment] = []
-        for index in sorted(results):
-            merged.extend(results[index])
-        return sort_segments(merged)
+        return offset_segments(self._transcribe_file(audio), start)
 
     def _transcribe_file(self, audio: Path) -> list[AsrSegment]:
         from ..retry import retry_call

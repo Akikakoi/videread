@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from videread import png as png_mod
-from videread.config import get_settings
+from videread.config import Settings, get_settings
 from videread.errors import PngError
 from videread.web.app import create_app
 
@@ -23,7 +23,7 @@ URL = "https://www.bilibili.com/video/BV1xx411c7mD"
 _PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"fake" * 64
 
 
-def _settings() -> "Settings":  # noqa: F821
+def _settings() -> Settings:
     return get_settings()
 
 

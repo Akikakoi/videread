@@ -12,6 +12,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+from ..config import STAGE_KEYS, STAGE_LABELS
 from ..download import VideoMeta, read_meta
 from ..errors import VidereadError
 from ..frames import has_frames
@@ -29,17 +30,8 @@ _ENTRY_CACHE: dict[tuple[str, int, int, int], dict] = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE_MAX_ENTRIES = 512
 
-_STAGE_LABELS = {
-    "download": "下载",
-    "audio": "音频处理",
-    "asr": "转写",
-    "transcript": "规范化",
-    "outline": "结构规划",
-    "frames": "截图",
-    "sections": "逐节写作",
-    "render": "渲染",
-}
-_STAGE_ORDER = tuple(_STAGE_LABELS)
+_STAGE_LABELS = dict(zip(STAGE_KEYS, STAGE_LABELS))
+_STAGE_ORDER = STAGE_KEYS
 
 
 def safe_run_dir(out_root: Path, run_id: str) -> Path | None:

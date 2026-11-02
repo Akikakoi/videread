@@ -72,6 +72,24 @@ def lang_display_name(code: str) -> str:
     """语言代码 → prompt 用的展示名；未收录的代码原样返回。"""
     return LANG_NAMES.get((code or "").strip().lower(), (code or "").strip())
 
+
+# --- 报告模式与流水线阶段（CLI / Web / 流水线共用同一份定义）----------------
+REPORT_MODES = ("standard", "deep", "brief", "outline")
+
+#: 各阶段的展示名，顺序即执行顺序；`STAGE_KEYS` 是对应的 trace 事件名
+STAGE_LABELS = ("下载", "音频处理", "转写", "规范化", "结构规划", "截图", "逐节写作", "渲染")
+STAGE_KEYS = (
+    "download",
+    "audio",
+    "asr",
+    "transcript",
+    "outline",
+    "frames",
+    "sections",
+    "render",
+)
+STAGE_COUNT = len(STAGE_LABELS)
+
 # 截图（纯展示模式）：按大纲节定点拉取视频小段抽帧，以 base64 内嵌报告。
 # 默认关：--frames 显式开启，或 .env 设 FRAMES=1。
 FRAMES_ENABLED = False

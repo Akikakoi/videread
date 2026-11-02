@@ -1,6 +1,6 @@
 """流水线编排：阶段调度 + 断点续跑 + 异常归类（对应开发文档 §6.2 / §11.3）。
 
-7 个阶段（§3.1）：下载 → 音频处理 → 转写 → 规范化 → 结构规划 → 逐节写作 → 渲染。
+8 个阶段（§3.1）：下载 → 音频处理 → 转写 → 规范化 → 结构规划 → 截图 → 逐节写作 → 渲染。
 每阶段执行前先检查产物；命中则跳过（`use_cache=True`），阶段边界写入 `run.trace.jsonl`。
 
 每个阶段是独立的 `_stage_*` 函数，跨阶段状态集中在 `_RunState`；
@@ -22,7 +22,14 @@ from . import png as png_mod
 from . import render
 from .asr import get_backend, load_raw_jsonl, write_raw_jsonl
 from .asr.base import AsrSegment
-from .config import MAX_VIDEO_DURATION_SEC, Settings, get_settings
+from .config import (
+    FRAME_CLIP_SECONDS,
+    MAX_VIDEO_DURATION_SEC,
+    REPORT_MODES,
+    STAGE_LABELS,
+    Settings,
+    get_settings,
+)
 from .download import VideoMeta
 from .errors import (
     AsrError,
@@ -56,8 +63,7 @@ from .transcript import (
     write_markdown,
 )
 
-_MODES = ("standard", "deep", "brief", "outline")
-_STAGE_LABELS = ("下载", "音频处理", "转写", "规范化", "结构规划", "截图", "逐节写作", "渲染")
+_STAGE_LABELS = STAGE_LABELS
 
 # 字幕至少覆盖视频时长的这个比例，才允许用它替代 ASR（§6.3）
 _SUBTITLE_MIN_COVERAGE = 0.5
@@ -173,7 +179,7 @@ def run(
     `CancelledError` 即终止；已落盘产物照常保留，重跑可续。
     """
     mode = (mode or "").strip().lower()
-    if mode not in _MODES:
+    if mode not in REPORT_MODES:
         raise UsageError(f"未知模式：{mode!r}（可选 standard / deep / brief / outline）")
     url = download.normalize_source(url)
     out_root = Path(out_root)
@@ -689,7 +695,7 @@ def _stage_frames(state: _RunState) -> None:
                             state.run_dir,
                             index,
                             start,
-                            5.0,
+                            FRAME_CLIP_SECONDS,
                             state.settings,
                             max_height=720,
                         )

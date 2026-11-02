@@ -267,19 +267,15 @@ def load_units(path: Path) -> list[TranscriptUnit]:
     return units
 
 
-def write_markdown(units: list[TranscriptUnit], path: Path) -> None:
-    """人 / 模型可读形态（§5.3）。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    blocks = [
-        f"## {unit.id} [{format_time(unit.start)}-{format_time(unit.end)}]\n{unit.text}"
-        for unit in units
-    ]
-    path.write_text("\n\n".join(blocks) + "\n", encoding="utf-8", newline="\n")
-
-
 def units_to_markdown(units: list[TranscriptUnit]) -> str:
-    """把给定单元渲染成 markdown 片段，供 prompt 注入。"""
+    """把给定单元渲染成 markdown 片段，供 prompt 注入与落盘复用。"""
     return "\n\n".join(
         f"## {unit.id} [{format_time(unit.start)}-{format_time(unit.end)}]\n{unit.text}"
         for unit in units
     )
+
+
+def write_markdown(units: list[TranscriptUnit], path: Path) -> None:
+    """人 / 模型可读形态（§5.3）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(units_to_markdown(units) + "\n", encoding="utf-8", newline="\n")

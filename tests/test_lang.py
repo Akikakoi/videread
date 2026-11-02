@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from videread import pipeline as pipeline_mod
 from videread import render
 from videread.config import lang_display_name
@@ -129,7 +131,7 @@ def test_plan_outline_injects_language_rule(monkeypatch: pytest.MonkeyPatch):
 
     meta = VideoMeta(
         bvid="BV1xx411c7mD", title="T", uploader="U", duration=60.0,
-        url="https://www.bilibili.com/video/BV1xx411c7mD", cover="", description="",
+        url="https://www.bilibili.com/video/BV1xx411c7mD", description="",
     )
     outline = plan_outline(
         meta, _units(), lang="en", client=_FakeClient(),
@@ -145,7 +147,7 @@ def test_plan_outline_injects_language_rule(monkeypatch: pytest.MonkeyPatch):
 def _meta() -> VideoMeta:
     return VideoMeta(
         bvid="BV1xx411c7mD", title="T", uploader="U", duration=60.0,
-        url="https://www.bilibili.com/video/BV1xx411c7mD", cover="", description="desc",
+        url="https://www.bilibili.com/video/BV1xx411c7mD", description="desc",
     )
 
 

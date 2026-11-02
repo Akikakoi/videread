@@ -23,10 +23,10 @@ from ..errors import (
     CancelledError,
     VidereadError,
 )
+from ..config import REPORT_MODES, STAGE_COUNT
 from ..pipeline import run as pipeline_run
 
-_MODES = ("standard", "deep", "brief", "outline")
-_STAGE_RE = re.compile(r"^\[(\d)/8\]")
+_STAGE_RE = re.compile(rf"^\[(\d)/{STAGE_COUNT}\]")
 _TERMINAL = ("done", "error", "cancelled")
 
 #: SSE 事件的类型：status / stage / log / done / error
@@ -236,7 +236,7 @@ class JobManager:
         mode = (mode or "standard").strip().lower()
         if not url:
             raise VidereadError("请输入 B 站链接或本地音视频路径")
-        if mode not in _MODES:
+        if mode not in REPORT_MODES:
             raise VidereadError(f"未知模式：{mode!r}（可选 standard / deep / brief / outline）")
 
         with self._lock:

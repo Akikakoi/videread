@@ -156,6 +156,31 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
         with qa_locks_guard:
             return qa_locks.setdefault(run_id, threading.Lock())
 
+    def _export_target(run_id: str) -> tuple[Path, Path, str]:
+        """导出类接口的公共前置：定位 run、校验 report.html、取展示标题。"""
+        run_dir = library.safe_run_dir(out_root, run_id)
+        if run_dir is None:
+            raise HTTPException(status_code=404, detail="未找到该 run")
+        html_path = run_dir / "report.html"
+        if not html_path.is_file():
+            raise HTTPException(status_code=404, detail="该 run 还没有 report.html")
+        return run_dir, html_path, library.run_title(out_root, run_id) or run_id
+
+    def _attachment(
+        path: Path, media_type: str, run_id: str, title: str, ext: str
+    ) -> Response:
+        """以附件下载：同时给 ASCII 回退与 RFC 5987 的 UTF-8 文件名。"""
+        return Response(
+            content=path.read_bytes(),
+            media_type=media_type,
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{run_id}.{ext}"; '
+                    f"filename*=UTF-8''{quote(title + '.' + ext)}"
+                )
+            },
+        )
+
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     # ------------------------------------------------------------------ 页面
@@ -198,12 +223,7 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
 
     @app.get("/report/{run_id}", response_class=HTMLResponse)
     def report(run_id: str) -> HTMLResponse:
-        run_dir = library.safe_run_dir(out_root, run_id)
-        if run_dir is None:
-            raise HTTPException(status_code=404, detail="未找到该 run")
-        path = run_dir / "report.html"
-        if not path.is_file():
-            raise HTTPException(status_code=404, detail="该 run 还没有 report.html")
+        _run_dir, path, _title = _export_target(run_id)
         return HTMLResponse(path.read_text(encoding="utf-8"))
 
     @app.get("/api/runs/{run_id}/markdown")
@@ -213,12 +233,7 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
         Markdown 表达不了报告里的 CSS 组件，导出只保留文字层次（见 `markdown` 模块）。
         文件名同时给 ASCII 回退与 RFC 5987 的 UTF-8 形式，中文标题在各浏览器都能落对。
         """
-        run_dir = library.safe_run_dir(out_root, run_id)
-        if run_dir is None:
-            raise HTTPException(status_code=404, detail="未找到该 run")
-        path = run_dir / "report.html"
-        if not path.is_file():
-            raise HTTPException(status_code=404, detail="该 run 还没有 report.html")
+        run_dir, path, title = _export_target(run_id)
         if frames_mod.has_frames(run_dir):
             raise HTTPException(
                 status_code=409,
@@ -226,7 +241,6 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
                 "请改用 PDF / PNG 长图导出",
             )
 
-        title = library.run_title(out_root, run_id) or run_id
         return Response(
             content=markdown.html_to_markdown(path.read_text(encoding="utf-8")),
             media_type="text/markdown; charset=utf-8",
@@ -247,28 +261,12 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
         首次导出调用一次浏览器；report.html 更新后重新导出。
         浏览器缺失或打印失败转 400，前端展示后端给出的具体原因。
         """
-        run_dir = library.safe_run_dir(out_root, run_id)
-        if run_dir is None:
-            raise HTTPException(status_code=404, detail="未找到该 run")
-        html_path = run_dir / "report.html"
-        if not html_path.is_file():
-            raise HTTPException(status_code=404, detail="该 run 还没有 report.html")
-
-        title = library.run_title(out_root, run_id) or run_id
+        run_dir, html_path, title = _export_target(run_id)
         try:
             pdf_path = pdf_mod.export_pdf(html_path, run_dir / "report.pdf", get_settings())
         except VidereadError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return Response(
-            content=pdf_path.read_bytes(),
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": (
-                    f'attachment; filename="{run_id}.pdf"; '
-                    f"filename*=UTF-8''{quote(title + '.pdf')}"
-                )
-            },
-        )
+        return _attachment(pdf_path, "application/pdf", run_id, title, "pdf")
 
     @app.get("/api/runs/{run_id}/png")
     def run_png(run_id: str) -> Response:
@@ -277,14 +275,7 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
         配置了 self_base 时优先截编辑风阅读页（/read/{run_id}?png=1），
         失败转 400，前端展示后端给出的具体原因。
         """
-        run_dir = library.safe_run_dir(out_root, run_id)
-        if run_dir is None:
-            raise HTTPException(status_code=404, detail="未找到该 run")
-        html_path = run_dir / "report.html"
-        if not html_path.is_file():
-            raise HTTPException(status_code=404, detail="该 run 还没有 report.html")
-
-        title = library.run_title(out_root, run_id) or run_id
+        run_dir, html_path, title = _export_target(run_id)
         try:
             if self_base:
                 # 编辑风长图：缓存判据仍是 report.html 的新旧
@@ -298,16 +289,7 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
                 png_path = png_mod.export_png(html_path, run_dir / "report.png", get_settings())
         except VidereadError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return Response(
-            content=png_path.read_bytes(),
-            media_type="image/png",
-            headers={
-                "Content-Disposition": (
-                    f'attachment; filename="{run_id}.png"; '
-                    f"filename*=UTF-8''{quote(title + '.png')}"
-                )
-            },
-        )
+        return _attachment(png_path, "image/png", run_id, title, "png")
 
     @app.post("/api/runs/export")
     def api_export_runs(payload: BatchExportRequest) -> FileResponse:

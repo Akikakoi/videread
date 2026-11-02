@@ -21,7 +21,8 @@ _SCRIPT_OR_STYLE = re.compile(
     r"<\s*(script|style)\b[^>]*>.*?(?:<\s*/\s*\1\s*>|$)", re.IGNORECASE | re.DOTALL
 )
 _STRUCTURAL_TAG = re.compile(r"<\s*/?\s*(html|head|body)\b[^>]*>", re.IGNORECASE)
-_SOURCE_UNITS = re.compile(r'data-source-units\s*=\s*"([^"]*)"', re.IGNORECASE)
+#: 正文里绑定转写单元的属性；写作清洗与问答引用共用同一份解析规则
+SOURCE_UNITS = re.compile(r'data-source-units\s*=\s*"([^"]*)"', re.IGNORECASE)
 _CODE_FENCE = re.compile(r"^\s*```[a-zA-Z]*\s*|\s*```\s*$")
 # 分节片段首行的语言标记：换语言重出时据此判定旧片段失效（§ 缓存与语言绑定）
 _LANG_MARK = re.compile(r"^<!--videread:lang=([a-z-]+)-->$")
@@ -182,7 +183,7 @@ def sanitize_section_html(
             return ""
         return f'data-source-units="{",".join(kept)}"'
 
-    cleaned = _SOURCE_UNITS.sub(_fix_attr, cleaned)
+    cleaned = SOURCE_UNITS.sub(_fix_attr, cleaned)
     cleaned = re.sub(r"\s+data-source-units=\"\"", "", cleaned)
     return cleaned.strip(), violations
 

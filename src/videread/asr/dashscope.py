@@ -8,21 +8,15 @@ from __future__ import annotations
 
 import json
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
 import httpx
 
-from ..audio import cut_segment, detect_silence, plan_chunks, probe_duration
-from ..config import (
-    ASR_SEGMENT_SECONDS,
-    ASR_SEGMENT_TIMEOUT_SEC,
-    Settings,
-)
-from ..errors import AsrError, CancelledError
+from ..config import ASR_SEGMENT_TIMEOUT_SEC, Settings
+from ..errors import AsrError
 from ..retry import retry_call
-from .base import AsrSegment, PartCacheMixin, offset_segments, sort_segments
+from .base import AsrSegment, ChunkedAsr, offset_segments
 
 _UPLOAD_POLICY_PATH = "/uploads"
 _TRANSCRIPTION_PATH = "/services/audio/asr/transcription"
@@ -31,7 +25,7 @@ _POLL_INTERVAL = 2.0
 _POLL_MAX_INTERVAL = 10.0
 
 
-class DashScopeAsr(PartCacheMixin):
+class DashScopeAsr(ChunkedAsr):
     """通义 Paraformer 实现。"""
 
     name = "dashscope"
@@ -59,77 +53,6 @@ class DashScopeAsr(PartCacheMixin):
             follow_redirects=True,
         )
 
-    # ------------------------------------------------------------------ 取消
-
-    def _checkpoint(self) -> None:
-        """切段/收结果之间的取消检查点：抛 CancelledError 由上层归类。"""
-        if self.cancel_check is not None:
-            self.cancel_check()
-
-    # ------------------------------------------------------------------ 接口
-
-    def transcribe(
-        self, audio: Path, *, duration: float | None = None
-    ) -> list[AsrSegment]:
-        total = duration if duration is not None else probe_duration(audio, self.settings)
-
-        if total <= ASR_SEGMENT_SECONDS:
-            chunks = [(0.0, total)]
-        else:
-            self._checkpoint()
-            silences = detect_silence(audio, settings=self.settings)
-            chunks = plan_chunks(total, silences, limit=ASR_SEGMENT_SECONDS)
-            self.progress(
-                f"长音频切段：{len(chunks)} 段（并发 {self.settings.asr_max_concurrency}）"
-            )
-
-        if len(chunks) == 1:
-            return self._transcribe_chunk(audio, 0, 0.0, total)
-
-        chunk_dir = self._chunk_dir(audio)
-        chunk_files: list[tuple[int, float, float, Path]] = []
-        for index, (start, end) in enumerate(chunks):
-            dest = chunk_dir / f"chunk.{index:03d}.wav"
-            cut_segment(audio, dest, start, end, self.settings)
-            chunk_files.append((index, start, end, dest))
-
-        results: dict[int, list[AsrSegment]] = {}
-        with ThreadPoolExecutor(max_workers=self.settings.asr_max_concurrency) as pool:
-            futures = {
-                pool.submit(self._transcribe_chunk, path, index, start, end): index
-                for index, start, end, path in chunk_files
-            }
-            for future in as_completed(futures):
-                index = futures[future]
-                try:
-                    self._checkpoint()
-                    results[index] = future.result()
-                except CancelledError:
-                    # 撤销还没开始的段；已完成的段结果已落盘（asr.part.*），不白花钱
-                    for pending in futures:
-                        pending.cancel()
-                    raise
-                except Exception as exc:  # noqa: BLE001 - 单段失败不阻塞其他段
-                    self.failures.append(
-                        {"chunk": index, "error": f"{type(exc).__name__}: {exc}"}
-                    )
-
-        for _index, _start, _end, path in chunk_files:
-            path.unlink(missing_ok=True)
-
-        missing = [i for i in range(len(chunks)) if i not in results]
-        if missing and not results:
-            raise AsrError(
-                f"ASR 全部切段失败（{len(missing)}/{len(chunks)}）：{self.failures}"
-            )
-        if missing:
-            self.progress(f"警告：{len(missing)} 段 ASR 失败，报告将缺少这部分内容")
-
-        merged: list[AsrSegment] = []
-        for index in sorted(results):
-            merged.extend(results[index])
-        return sort_segments(merged)
-
     # ------------------------------------------------------------------ 单段
 
     def _transcribe_chunk(
@@ -152,13 +75,6 @@ class DashScopeAsr(PartCacheMixin):
         task_id = self._submit(file_url)
         transcription_url = self._await_task(task_id)
         return self._fetch_transcription(transcription_url)
-
-    # ------------------------------------------------------------------ 缓存
-
-    def _chunk_dir(self, audio: Path) -> Path:
-        directory = (self.cache_dir or audio.parent) / "asr_chunks"
-        directory.mkdir(parents=True, exist_ok=True)
-        return directory
 
     # ------------------------------------------------------------------ HTTP
 

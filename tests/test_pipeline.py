@@ -9,7 +9,7 @@ import pytest
 
 from videread import download, pipeline
 from videread.config import get_settings
-from videread.errors import AsrError, AudioError, LlmError, UsageError, VidereadError
+from videread.errors import AudioError, LlmError, UsageError, VidereadError
 from videread.pipeline import run
 
 URL = "https://www.bilibili.com/video/BV1xx411c7mD"
@@ -565,23 +565,6 @@ def test_realtime_backend_is_selectable(monkeypatch: pytest.MonkeyPatch):
     assert get_backend(get_settings(asr_backend="realtime")).model == (
         "paraformer-realtime-v1"
     )
-
-
-def test_realtime_rejects_non_mono_wav(tmp_path: Path):
-    """§6.5：实时接口只接受单声道 16bit PCM，双声道应直接报错而不是发错数据。"""
-    import wave
-
-    from videread.asr.realtime import _pcm_sample_rate
-
-    stereo = tmp_path / "stereo.wav"
-    with wave.open(str(stereo), "wb") as fh:
-        fh.setnchannels(2)
-        fh.setsampwidth(2)
-        fh.setframerate(16000)
-        fh.writeframes(b"\x00" * 400)
-
-    with pytest.raises(AsrError):
-        _pcm_sample_rate(stereo)
 
 
 def test_wav_cleaned_up_after_successful_run(tmp_path: Path):

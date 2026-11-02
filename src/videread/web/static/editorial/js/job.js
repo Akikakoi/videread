@@ -96,20 +96,8 @@ function resetAmbience(){
 }
 
 /* ---------- 渲染 ---------- */
-let stepperSeen = new Set();
-function renderStepper(current, doneSet){
-  const ul = $("#stepper");
-  ul.innerHTML = STAGES.map((name, i) => {
-    const no = String(i + 1).padStart(2, "0");
-    if(doneSet.has(i)){
-      const pop = !stepperSeen.has(i) && stepperSeen.size > 0 ? " pop" : "";
-      return '<li class="done' + pop + '"><span class="no">' + no + '</span><span class="t">' + esc(name) + '</span><span class="mark">✓</span></li>';
-    }
-    if(i === current) return '<li class="cur"><span class="no">' + no + '</span><span class="t">' + esc(name) + '</span><span class="mark dots"><i></i><i></i><i></i></span></li>';
-    return '<li><span class="no">' + no + '</span><span class="t">' + esc(name) + '</span><span class="mark">·</span></li>';
-  }).join("");
-  stepperSeen = new Set(doneSet);
-}
+const JOB_STEPPER_MARK = '<span class="mark dots"><i></i><i></i><i></i></span>';
+function renderJobStepper(current, doneSet){ renderStepper(current, doneSet, JOB_STEPPER_MARK); }
 
 function setProgress(value){
   const fill = $("#stepper-fill");
@@ -216,9 +204,9 @@ function renderJob(job){
 
   const idx = Math.min(Math.max(0, job.stage_index || 0), STAGES.length);
   const doneSet = new Set();
-  if(job.state === "done"){ for(let i = 0; i < STAGES.length; i++) doneSet.add(i); renderStepper(STAGES.length, doneSet); }
-  else if(job.state === "queued"){ renderStepper(-1, doneSet); }
-  else { for(let i = 0; i < idx; i++) doneSet.add(i); renderStepper(job.state === "running" ? idx : -1, doneSet); }
+  if(job.state === "done"){ for(let i = 0; i < STAGES.length; i++) doneSet.add(i); renderJobStepper(STAGES.length, doneSet); }
+  else if(job.state === "queued"){ renderJobStepper(-1, doneSet); }
+  else { for(let i = 0; i < idx; i++) doneSet.add(i); renderJobStepper(job.state === "running" ? idx : -1, doneSet); }
 
   const progressed = job.state === "done" ? 1
     : (job.state === "running" || JOB_TERMINAL.has(job.state)) ? idx / STAGES.length : 0;
@@ -252,7 +240,7 @@ function subscribe(){
     const d = JSON.parse(ev.data);
     const doneSet = new Set();
     for(let i = 0; i < d.index; i++) doneSet.add(i);
-    renderStepper(d.index, doneSet);
+    renderJobStepper(d.index, doneSet);
     setProgress(d.index / STAGES.length);
   });
   es.addEventListener("log", ev => pushLog(JSON.parse(ev.data).line || "", false, true));

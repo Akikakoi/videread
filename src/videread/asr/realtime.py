@@ -23,18 +23,16 @@ import json
 import time
 import uuid
 import wave
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import WebSocketException
 
-from ..audio import cut_segment, detect_silence, plan_chunks, probe_duration
 from ..config import ASR_REALTIME_SEGMENT_SECONDS, Settings
-from ..errors import AsrError, CancelledError
+from ..errors import AsrError
 from ..retry import retry_call
-from .base import AsrSegment, PartCacheMixin, offset_segments, sort_segments
+from .base import AsrSegment, ChunkedAsr, offset_segments
 
 # 实时接口与异步接口不在同一个路径下：/api/v1 → /api-ws/v1/inference
 _ASYNC_PATH_SUFFIX = "/api/v1"
@@ -73,7 +71,7 @@ def realtime_url(base_url: str) -> str:
     return f"{base}{_WS_PATH_SUFFIX}"
 
 
-class DashScopeRealtimeAsr(PartCacheMixin):
+class DashScopeRealtimeAsr(ChunkedAsr):
     """通义 Paraformer 实时（WebSocket）实现。"""
 
     name = "dashscope-realtime"
@@ -96,98 +94,19 @@ class DashScopeRealtimeAsr(PartCacheMixin):
         self.cancel_check = cancel_check
         self.failures: list[dict[str, object]] = []
 
-    def _checkpoint(self) -> None:
-        """切段之间的取消检查点：抛 CancelledError 由上层归类。"""
-        if self.cancel_check is not None:
-            self.cancel_check()
+    # ------------------------------------------------------------------ 切段
 
-    # ------------------------------------------------------------------ 接口
+    def _segment_limit(self) -> float:
+        """实时通道用更短的单段上限：一条连接要推完整段，越长失败重推代价越大。"""
+        return self.settings.asr_realtime_segment_seconds or ASR_REALTIME_SEGMENT_SECONDS
 
-    def transcribe(
-        self, audio: Path, *, duration: float | None = None
-    ) -> list[AsrSegment]:
-        total = duration if duration is not None else probe_duration(audio, self.settings)
-
-        # 实时通道用自己（更短）的单段上限：一条连接要推完整段，
-        # 段越长单次失败的重推代价越大
-        segment_limit = (
-            self.settings.asr_realtime_segment_seconds or ASR_REALTIME_SEGMENT_SECONDS
+    def _chunk_progress(self, count: int, total: float) -> str:
+        concurrency = self._concurrency()
+        return (
+            f"长音频切段：{count} 段（{concurrency} 路并行 × "
+            f"{self._speedup():g}x 倍速，"
+            f"约 {self._estimate_seconds(total) / concurrency / 60:.1f} 分钟）"
         )
-        # 并行路数与异步后端共用 ASR_MAX_CONCURRENCY：每段是独立连接、
-        # 独立任务，服务端按连接限流（RPM 充裕），并行互不干扰
-        concurrency = max(1, int(self.settings.asr_max_concurrency or 1))
-
-        if total <= segment_limit:
-            chunks = [(0.0, total)]
-        else:
-            self._checkpoint()
-            silences = detect_silence(audio, settings=self.settings)
-            chunks = plan_chunks(total, silences, limit=segment_limit)
-            self.progress(
-                f"长音频切段：{len(chunks)} 段（{concurrency} 路并行 × "
-                f"{self._speedup():g}x 倍速，"
-                f"约 {self._estimate_seconds(total) / concurrency / 60:.1f} 分钟）"
-            )
-
-        if len(chunks) == 1:
-            start, end = chunks[0]
-            return self._transcribe_chunk(audio, 0, start, end)
-
-        chunk_dir = (self.cache_dir or audio.parent) / "asr_chunks"
-        chunk_dir.mkdir(parents=True, exist_ok=True)
-
-        # 缓存命中的段不切段也不推流；未命中的先在本地切好（纯 ffmpeg 操作，
-        # 串行足够快），再交给线程池并行推流
-        results: dict[int, list[AsrSegment]] = {}
-        tasks: list[tuple[int, float, float, Path]] = []
-        for index, (start, end) in enumerate(chunks):
-            self._checkpoint()
-            cached = self._read_part(index, start, end)
-            if cached is not None:
-                self.progress(f"第 {index + 1} 段转写命中缓存，跳过")
-                results[index] = offset_segments(cached, start)
-                continue
-            dest = chunk_dir / f"chunk.{index:03d}.wav"
-            cut_segment(audio, dest, start, end, self.settings)
-            tasks.append((index, start, end, dest))
-
-        try:
-            with ThreadPoolExecutor(max_workers=concurrency) as pool:
-                futures = {
-                    pool.submit(self._transcribe_chunk, path, index, start, end): index
-                    for index, start, end, path in tasks
-                }
-                for future in as_completed(futures):
-                    index = futures[future]
-                    try:
-                        self._checkpoint()
-                        results[index] = future.result()
-                    except CancelledError:
-                        # 撤销还没开始的段；已完成段的结果已落盘（asr.part.*），
-                        # 正在推流的段跑完当前连接后自然收尾，重跑可续
-                        for pending in futures:
-                            pending.cancel()
-                        raise
-                    except Exception as exc:  # noqa: BLE001 - 单段失败不阻塞其他段
-                        self.failures.append(
-                            {"chunk": index, "error": f"{type(exc).__name__}: {exc}"}
-                        )
-        finally:
-            for _index, _start, _end, path in tasks:
-                path.unlink(missing_ok=True)
-
-        missing = [i for i in range(len(chunks)) if i not in results]
-        if missing and not results:
-            raise AsrError(
-                f"ASR 全部切段失败（{len(missing)}/{len(chunks)}）：{self.failures}"
-            )
-        if missing:
-            self.progress(f"警告：{len(missing)} 段 ASR 失败，报告将缺少这部分内容")
-
-        merged: list[AsrSegment] = []
-        for index in sorted(results):
-            merged.extend(results[index])
-        return sort_segments(merged)
 
     # ------------------------------------------------------------------ 单段
 
@@ -408,11 +327,6 @@ def _seconds(value: float | int | str | None) -> float:
         return float(value) / 1000.0
     except (TypeError, ValueError):
         return 0.0
-
-
-def _pcm_sample_rate(audio: Path) -> int:
-    """校验 wav 为单声道 16bit PCM 并返回采样率（只读文件头，不载入数据）。"""
-    return _pcm_probe(audio)[0]
 
 
 def _pcm_probe(audio: Path) -> tuple[int, float]:
