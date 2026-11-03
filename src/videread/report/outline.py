@@ -167,7 +167,6 @@ def plan_outline(
     meta: VideoMeta,
     units: list[TranscriptUnit],
     *,
-    mode: str = "standard",
     lang: str = "zh",
     client: LlmClient | None = None,
     settings: Settings | None = None,

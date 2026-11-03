@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from videread.config import FRAME_MAX_TOTAL
 from videread.frames import clip_bounds, inject_figures, plan_points
 from videread.report import Outline, OutlineSection
 from videread.transcript import TranscriptUnit
@@ -34,14 +33,6 @@ def test_plan_points_picks_section_midpoints() -> None:
     # s1 覆盖 0-30s，中点 15；s2 覆盖 30-50s，中点 40
     assert [(sid, round(t, 1)) for sid, t, _ in points] == [("s1", 15.0), ("s2", 40.0)]
     assert [label for _, _, label in points]  # 展示时间非空
-
-
-def test_plan_points_caps_total() -> None:
-    sections = [
-        OutlineSection(id=f"s{i}", heading="h", time_range="x", intent="", source_ids=["u0001"])
-        for i in range(1, FRAME_MAX_TOTAL + 5)
-    ]
-    assert len(plan_points(_outline(sections), _units())) == FRAME_MAX_TOTAL
 
 
 def test_clip_bounds_offsets_lead_in() -> None:

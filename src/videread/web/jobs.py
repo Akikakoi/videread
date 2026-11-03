@@ -51,7 +51,6 @@ class Job:
         mode: str,
         no_cache: bool,
         keep_audio: bool,
-        asr_backend: str | None,
         out_root: Path,
         frames: bool | None = None,
         retry: bool = False,
@@ -64,7 +63,6 @@ class Job:
         self.no_cache = no_cache or retry
         self.retry = retry
         self.keep_audio = keep_audio
-        self.asr_backend = asr_backend
         self.out_root = Path(out_root)
         self.frames = frames
         self.lang = (lang or "").strip().lower() or None
@@ -95,11 +93,11 @@ class Job:
         for channel in subscribers:
             channel.put(item)
 
-    def subscribe(self, since: int = 0) -> tuple[queue.Queue, list[Event]]:
+    def subscribe(self) -> tuple[queue.Queue, list[Event]]:
         """注册订阅者并返回其历史回放；两者在锁内完成，不会漏事件或重复。"""
         channel: queue.Queue = queue.Queue()
         with self._lock:
-            backlog = self._events[max(0, since) :]
+            backlog = list(self._events)
             self._subscribers.append(channel)
         return channel, backlog
 
@@ -227,7 +225,6 @@ class JobManager:
         mode: str = "standard",
         no_cache: bool = False,
         keep_audio: bool = False,
-        asr_backend: str | None = None,
         frames: bool | None = None,
         retry: bool = False,
         lang: str | None = None,
@@ -248,7 +245,6 @@ class JobManager:
                 mode=mode,
                 no_cache=no_cache,
                 keep_audio=keep_audio,
-                asr_backend=asr_backend,
                 out_root=self.out_root,
                 frames=frames,
                 retry=retry,
@@ -312,7 +308,6 @@ class JobManager:
                 out_root=self.out_root,
                 use_cache=not job.no_cache,
                 keep_audio=job.keep_audio,
-                asr_backend=job.asr_backend,
                 open_report=False,
                 frames=job.frames,
                 fresh_dir=job.retry,

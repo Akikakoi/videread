@@ -22,6 +22,30 @@ def test_build_units_merges_short_segments():
     assert units[0].id == "u0001"
 
 
+def test_build_units_keeps_latin_word_spacing():
+    """英文分段之间不能粘成 Hello.World。"""
+    units = build_units(
+        [
+            AsrSegment(start=0.0, end=1.0, text="Hello."),
+            AsrSegment(start=1.0, end=2.0, text="World."),
+        ],
+        max_chars=160,
+    )
+    assert units[0].text == "Hello. World."
+
+
+def test_merge_subtitles_keeps_latin_word_spacing(tmp_path: Path):
+    srt = tmp_path / "en.srt"
+    srt.write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nHello.\n\n"
+        "2\n00:00:01,000 --> 00:00:02,000\nWorld.\n",
+        encoding="utf-8",
+    )
+    units = build_units([AsrSegment(start=0.0, end=2.0, text="x")])
+    merged = merge_subtitles(units, srt)
+    assert merged[0].text == "Hello. World."
+
+
 def test_build_units_ids_are_continuous_and_unique():
     segments = [
         AsrSegment(start=i * 2.0, end=i * 2.0 + 2.0, text=f"这是第{i}段比较长的一句话。")

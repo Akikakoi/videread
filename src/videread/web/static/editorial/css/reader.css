@@ -50,6 +50,131 @@
 .page .report-foot p{font-size:13.5px;color:var(--muted);}
 .page .meta-fold summary,.page .sources summary{cursor:pointer;font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--muted);}
 .page a{color:var(--accent);}
+
+/* ── 报告组件：把三套模板里的版式在阅读页重建 ──
+   模板里的 <style> 不会搬进阅读页，组件若没有这里的选择器会退化成裸 HTML。 */
+.page .comparison,
+.page .categories{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:26px 0;}
+.page .comparison > *,
+.page .categories > *{
+  padding:16px;background:var(--paper-deep);border:1px solid var(--hairline);
+  border-top:3px solid var(--accent);
+}
+.page .comparison > * > :first-child,
+.page .categories > * > :first-child,
+.page .comparison > * > :last-child,
+.page .categories > * > :last-child{margin-top:0;margin-bottom:0;}
+
+.page .categories-detailed{display:grid;gap:12px;margin:26px 0;}
+.page .categories-detailed > *{
+  padding:14px 18px;background:var(--paper-deep);border:1px solid var(--hairline);
+  border-left:3px solid var(--tone,var(--accent));
+}
+.page .categories-detailed[data-tone="rust"]{--tone:#b4552d;}
+.page .categories-detailed[data-tone="ochre"]{--tone:#9a7514;}
+.page .categories-detailed[data-tone="plum"]{--tone:#7a3b6b;}
+.page .categories-detailed[data-tone="sage"]{--tone:#4a7a5a;}
+.page .categories-detailed[data-tone="rose"]{--tone:#b03a5b;}
+.page .categories-detailed > * > :first-child,
+.page .categories-detailed > * > :last-child{margin-top:0;margin-bottom:0;}
+
+.page .steps{display:grid;gap:14px;margin:26px 0;padding:0;list-style:none;counter-reset:step;}
+.page .steps > li{position:relative;min-height:32px;padding:3px 0 3px 44px;counter-increment:step;}
+.page .steps > li::before{
+  content:counter(step);position:absolute;left:0;top:2px;
+  display:flex;align-items:center;justify-content:center;width:28px;height:28px;
+  font-family:var(--mono);font-size:13px;color:var(--accent);
+  background:var(--paper-deep);border:1px solid var(--hairline);border-radius:50%;
+}
+.page .steps > li > :first-child,
+.page .steps > li > :last-child{margin-top:0;margin-bottom:0;}
+
+.page .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:26px 0;}
+.page .tiles > *{padding:18px 20px;background:var(--paper-deep);border:1px solid var(--hairline);}
+.page .tiles > * > :first-child,
+.page .tiles > * > :last-child{margin-top:0;margin-bottom:0;}
+.page .tiles .stat-value{font-size:28px;}
+
+.page .bars{display:grid;gap:12px;margin:26px 0;}
+.page .bars > *{display:grid;grid-template-columns:minmax(72px,26%) 1fr auto;align-items:center;gap:12px;}
+.page .bar-track{height:12px;background:var(--paper-deep);border:1px solid var(--hairline);border-radius:999px;overflow:hidden;}
+.page .bar-fill{display:block;height:100%;background:var(--accent);border-radius:999px;}
+.page .bar-value{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap;}
+
+.page .table-compact{font-size:13px;}
+.page .table-compact th,
+.page .table-compact td{padding:6px 8px;}
+
+.page .cycle-map{margin:26px 0;padding:18px;text-align:center;background:var(--paper-deep);border:1px solid var(--hairline);}
+.page .cycle-map svg{display:block;width:100%;max-width:560px;height:auto;margin:0 auto;}
+
+/* ── Brief 模板组件 ── */
+.page .brief-branch-group{display:grid;gap:10px;margin:22px 0;}
+.page .brief-branch-group > *{padding:12px 16px;background:var(--paper-deep);border:1px solid var(--hairline);border-left:3px solid var(--accent);}
+.page .brief-branch-group > * > :first-child,
+.page .brief-branch-group > * > :last-child{margin-top:0;margin-bottom:0;}
+
+.page .brief-change{position:relative;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin:22px 0;}
+.page .brief-change::before{
+  content:"→";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  padding:2px 7px;font-family:var(--mono);font-size:12px;color:var(--muted);
+  background:var(--paper);border:1px solid var(--hairline);border-radius:999px;
+}
+.page .brief-change > *{padding:12px 16px;background:var(--paper-deep);border:1px solid var(--hairline);}
+.page .brief-change > * > :first-child,
+.page .brief-change > * > :last-child{margin-top:0;margin-bottom:0;}
+
+.page .brief-open-card{margin:22px 0;padding:18px 20px;background:var(--paper);border:1px dashed var(--hairline);}
+.page .brief-case-card{margin:22px 0;padding:14px 18px;background:var(--paper-deep);border:1px solid var(--hairline);border-left:2px solid var(--accent);}
+.page .brief-fold-card{margin:22px 0;padding:16px 20px;background:var(--paper-deep);border:1px solid var(--hairline);}
+.page .brief-open-card > :first-child,
+.page .brief-case-card > :first-child,
+.page .brief-fold-card > :first-child{margin-top:0;}
+.page .brief-open-card > :last-child,
+.page .brief-case-card > :last-child,
+.page .brief-fold-card > :last-child{margin-bottom:0;}
+
+.page .brief-timeline{position:relative;display:grid;gap:16px;margin:24px 0;padding:0 0 0 26px;list-style:none;}
+.page .brief-timeline::before{content:"";position:absolute;left:6px;top:6px;bottom:6px;width:2px;background:var(--hairline);}
+.page .brief-timeline > li{position:relative;}
+.page .brief-timeline > li::before{content:"";position:absolute;left:-24px;top:8px;width:9px;height:9px;background:var(--paper);border:2px solid var(--accent);border-radius:50%;}
+.page .brief-timeline > li > :first-child,
+.page .brief-timeline > li > :last-child{margin-top:0;margin-bottom:0;}
+.page .brief-timeline[data-layout="alternating"]{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:48px;row-gap:18px;padding-left:0;}
+.page .brief-timeline[data-layout="alternating"]::before{left:50%;top:0;bottom:0;transform:translateX(-50%);}
+.page .brief-timeline[data-layout="alternating"] > li::before{left:auto;}
+.page .brief-timeline[data-layout="alternating"] > li:nth-child(odd){grid-column:1;text-align:right;}
+.page .brief-timeline[data-layout="alternating"] > li:nth-child(odd)::before{right:-26px;}
+.page .brief-timeline[data-layout="alternating"] > li:nth-child(even){grid-column:2;text-align:left;}
+.page .brief-timeline[data-layout="alternating"] > li:nth-child(even)::before{left:-26px;}
+
+.page .brief-facts{display:grid;gap:8px;margin:22px 0;}
+.page .brief-facts > *{display:flex;gap:10px;padding:9px 14px;font-size:15px;line-height:1.75;background:var(--paper-deep);border:1px solid var(--hairline);}
+.page .brief-facts > *::before{content:"";flex:0 0 auto;width:6px;height:6px;margin-top:10px;background:var(--accent);border-radius:50%;}
+.page .brief-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;margin:22px 0;background:var(--hairline);border:1px solid var(--hairline);}
+.page .brief-pair > *{padding:12px 16px;font-size:15px;line-height:1.75;background:var(--paper);}
+.page .brief-pair > * > :first-child,
+.page .brief-pair > * > :last-child{margin-top:0;margin-bottom:0;}
+
+.page .brief-dimension-group{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin:22px 0;}
+.page .brief-dimension-group > *{grid-column:span 3;padding:14px 16px;background:var(--paper-deep);border:1px solid var(--hairline);border-top:2px solid var(--accent);}
+.page .brief-dimension-group > *:only-child{grid-column:1/-1;}
+.page .brief-dimension-group > * > :first-child,
+.page .brief-dimension-group > * > :last-child{margin-top:0;margin-bottom:0;}
+
+.page .brief-table{width:100%;margin:22px 0;border-collapse:collapse;font-size:14px;line-height:1.7;}
+.page .brief-table th,
+.page .brief-table td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--hairline);}
+.page .brief-table thead th{background:var(--paper-deep);border-bottom:2px solid var(--ink);}
+
+/* brief / outline：补回模板里由 CSS 计数器生成的节号 */
+.page.numbered .report-body{counter-reset:reader-sec;}
+.page.numbered .report-body h2{counter-increment:reader-sec;}
+.page.numbered .report-body h2::before{
+  content:counter(reader-sec,decimal-leading-zero);flex:0 0 auto;
+  font-family:var(--mono);font-size:24px;font-weight:500;color:var(--accent);
+  margin-right:14px;letter-spacing:1px;
+}
 /* 时间戳跳转：编辑部样式的「页码签」——直角、细线框、等宽字 + 字距，
    与 callout / meta-fold / 章节导航同一语言；hover 才点亮 accent。
    旧的圆角胶囊是从控制台样式带过来的，全文唯一的圆角元素，已弃。 */
@@ -97,6 +222,21 @@
   .page .cards{grid-template-columns:1fr;}
   .page .cards > :last-child{grid-column:auto;}
 }
+/* ---------- 组件窄屏：两列退单列，交替时间轴回左侧实线 ---------- */
+@media (max-width:700px){
+  .page .comparison,
+  .page .categories,
+  .page .brief-change,
+  .page .brief-pair{grid-template-columns:1fr;}
+  .page .brief-change::before{content:"↓";}
+  .page .brief-timeline[data-layout="alternating"]{grid-template-columns:1fr;padding-left:26px;}
+  .page .brief-timeline[data-layout="alternating"]::before{left:6px;transform:none;}
+  .page .brief-timeline[data-layout="alternating"] > li:nth-child(odd),
+  .page .brief-timeline[data-layout="alternating"] > li:nth-child(even){grid-column:1;text-align:left;}
+  .page .brief-timeline[data-layout="alternating"] > li:nth-child(odd)::before,
+  .page .brief-timeline[data-layout="alternating"] > li:nth-child(even)::before{left:-24px;right:auto;}
+}
+
 /* ---------- 长图导出模式（html.png-mode，由 ?png=1 触发） ----------
    无头浏览器整页截图：隐藏纯交互件（进度条 / 主题钮 / 悬浮导航），
    报头与页脚是版式的一部分，保留。 */

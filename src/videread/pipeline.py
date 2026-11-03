@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import uuid
 import webbrowser
@@ -94,6 +95,63 @@ def _cached(text: str) -> str:
     return f"{text}  (缓存命中，跳过)"
 
 
+_ASR_PARTIAL = "asr.partial.json"
+
+
+def _clear_frames(run_dir: Path) -> bool:
+    """删除该 run 的截图产物；返回删除前是否真的存在。
+
+    大纲或模式变化后，旧截图对应的是旧章节；继续复用会把不相干的画面
+    塞进新报告。封面式缓存（report.html）是否重渲染由调用方决定。
+    """
+    had = (run_dir / "frames").is_dir() or (run_dir / "frames.jsonl").is_file()
+    shutil.rmtree(run_dir / "frames", ignore_errors=True)
+    (run_dir / "frames.jsonl").unlink(missing_ok=True)
+    return had
+
+
+def _clear_overwritten_artifacts(run_dir: Path) -> None:
+    """覆盖重跑前清掉不会随本次运行自动重写的旧展示产物。
+
+    `qa.jsonl` 绑定旧转写稿的问答历史，`frames/` 与 `frames.jsonl` 绑定旧大纲的
+    截图；ASR 分段缓存（`asr.part.*` 与 `asr_chunks/`）若不删，`--no-cache`
+    仍会复用旧转写结果，"全量重跑"只是名义上的。旧导出的 PDF / PNG / MD
+    会因 report.html 变新而自动重出或按需重出。
+    """
+    (run_dir / "qa.jsonl").unlink(missing_ok=True)
+    (run_dir / _ASR_PARTIAL).unlink(missing_ok=True)
+    for part in run_dir.glob("asr.part.*.jsonl"):
+        part.unlink(missing_ok=True)
+    shutil.rmtree(run_dir / "asr_chunks", ignore_errors=True)
+    _clear_frames(run_dir)
+
+
+_MODE_MARKER = "run.mode"
+
+
+def _sync_mode(run_dir: Path, mode: str) -> bool:
+    """记录本次阅读模式，返回是否发生了模式切换。
+
+    正文片段只按语言做了缓存标记，不会区分 standard / brief / outline；
+    换模式时若直接复用旧片段，会拼出旧篇幅与旧组件的正文。因此模式变化时
+    先清空 `sections/`，让调用方置 `force_report` 重写正文与重渲染。
+    """
+    marker = run_dir / _MODE_MARKER
+    try:
+        previous = marker.read_text(encoding="utf-8").strip().lower()
+    except OSError:
+        previous = ""
+    changed = bool(previous) and previous != mode
+    if changed:
+        shutil.rmtree(run_dir / "sections", ignore_errors=True)
+    try:
+        marker.write_text(mode + "\n", encoding="utf-8", newline="\n")
+    except OSError:
+        # 标记写失败不该阻断报告；下次按首次运行处理
+        pass
+    return changed
+
+
 def _sections_complete(out_dir: Path, outline: Outline, lang: str) -> bool:
     """全部小节都有**同语言**的非空片段才算完整（片段与语言绑定，
     见 existing_sections：换语言后旧片段必须重写而非复用）。"""
@@ -101,9 +159,18 @@ def _sections_complete(out_dir: Path, outline: Outline, lang: str) -> bool:
     return all(found.get(section.id) for section in outline.sections)
 
 
-def _asr_cached(use_cache: bool, run_dir: Path) -> bool:
-    """ASR 原始结果是否已落盘（它落盘后，音频就再没有消费方了）。"""
-    return use_cache and _nonempty(run_dir / "asr.raw.jsonl")
+def _asr_cached(use_cache: bool, run_dir: Path, *, force_asr: bool = False) -> bool:
+    """ASR 原始结果是否可作为完整缓存复用。
+
+    部分切段失败的 raw 会带 `asr.partial.json` 标记：它足以生成当前报告，
+    但不能算完成，下次运行必须重试缺失段；`force_asr` 同样跳过缓存。
+    """
+    return (
+        use_cache
+        and not force_asr
+        and _nonempty(run_dir / "asr.raw.jsonl")
+        and not (run_dir / _ASR_PARTIAL).is_file()
+    )
 
 
 @dataclass
@@ -122,6 +189,10 @@ class _RunState:
     cancel_check: Callable[[], None] | None = None
 
     is_local: bool = False
+    # 本次 ASR 是否真的重跑过（不是缓存命中）：转写与大纲都必须跟着重建
+    asr_fresh: bool = False
+    # 只重渲染、不重写正文（关闭截图后去掉已内嵌的图片）
+    force_render: bool = False
     fresh_dir: bool = False
     lang: str = "zh"
     run_dir: Path | None = None
@@ -173,6 +244,8 @@ def run(
     （PDF 与长图由本机 Edge / Chrome 无头打印 / 截图，已存在且较新则复用）。
     `fresh_dir=True`（重新解析）落 `-rN` 新目录，不覆盖已有报告；
     调用方应同时给 `use_cache=False`，否则等于照抄旧产物没有意义。
+    `use_cache=False` 且未另起新目录时视为覆盖：先清掉旧 `qa.jsonl` 与截图，
+    避免新报告继续挂载上一版的问答历史与旧大纲截图。
 
     `cancel_check` 是取消检查点回调（Web 控制台取消任务用）：在每个阶段
     边界与长阶段内部（ASR 切段之间、逐节写作各节之间）被调用，抛
@@ -243,7 +316,14 @@ def run(
         # asr.raw.jsonl，后续阶段不再读它，故删除不影响报告与各级缓存。
         # 代价：将来重跑 ASR（如换用别的转写通道）需要重新下载并转码一次音频。
         # 字幕文件不在此列：体积小，且是「字幕优先」判断覆盖率所必需。
-        if state.wav is not None and not keep_audio and _nonempty(state.wav):
+        # ASR 有失败分段时保留 wav：下次只需补失败段，避免重新下载整段音频。
+        partial_asr = (state.run_dir / _ASR_PARTIAL).is_file()
+        if (
+            state.wav is not None
+            and not keep_audio
+            and not partial_asr
+            and _nonempty(state.wav)
+        ):
             freed = state.wav.stat().st_size / 1024 / 1024
             state.wav.unlink(missing_ok=True)
             progress(f"已清理中间产物 audio.wav，释放 {freed:.1f} MB")
@@ -318,6 +398,10 @@ def _download_local(state: _RunState, local_path: Path) -> str:
         state.fresh_dir,
     )
     run_dir.mkdir(parents=True, exist_ok=True)
+    if not state.use_cache and not state.fresh_dir:
+        _clear_overwritten_artifacts(run_dir)
+    if _sync_mode(run_dir, state.mode):
+        state.force_report = True
     trace = TraceWriter(run_dir / "run.trace.jsonl")
     meta_path = run_dir / "meta.json"
     with trace.stage("download") as stage:
@@ -387,6 +471,10 @@ def _download_remote(state: _RunState) -> str:
     else:
         run_dir, meta = _fetch_meta_with_subtitles(state, url_text)
     run_dir.mkdir(parents=True, exist_ok=True)
+    if not state.use_cache and not state.fresh_dir:
+        _clear_overwritten_artifacts(run_dir)
+    if _sync_mode(run_dir, state.mode):
+        state.force_report = True
     trace = TraceWriter(run_dir / "run.trace.jsonl")
     wav_path = run_dir / "audio.wav"
     did_download = False
@@ -432,7 +520,7 @@ def _download_remote(state: _RunState) -> str:
         # 音频的唯一消费方是 ASR：字幕优先或 ASR 已缓存时，下载与转码都应跳过，
         # 否则缓存命中的重跑也会把刚删掉的音频重新下载一遍
         need_audio = state.subtitle_path is None and not _asr_cached(
-            state.use_cache, run_dir
+            state.use_cache, run_dir, force_asr=state.force_asr
         )
         source_audio = download.find_audio(run_dir) if need_audio else None
         if (
@@ -493,7 +581,9 @@ def _stage_audio(state: _RunState) -> None:
         if state.subtitle_path is not None:
             stage.detail["skipped"] = "字幕优先，无需音频"
             detail = "字幕优先，跳过音频处理"
-        elif _asr_cached(state.use_cache, state.run_dir):
+        elif _asr_cached(
+            state.use_cache, state.run_dir, force_asr=state.force_asr
+        ):
             # ASR 结果已缓存时音频没有消费方：不转码；残留的旧 wav
             # 由跑完后的统一清理兜底删除
             stage.detail["skipped"] = "ASR 已缓存，无需音频"
@@ -528,7 +618,9 @@ def _stage_asr(state: _RunState) -> None:
     assert state.run_dir is not None and state.trace is not None and state.meta is not None
     raw_path = state.run_dir / "asr.raw.jsonl"
     with state.trace.stage("asr") as stage:
-        if state.use_cache and _nonempty(raw_path):
+        if _asr_cached(
+            state.use_cache, state.run_dir, force_asr=state.force_asr
+        ):
             segments = load_raw_jsonl(raw_path)
             stage.detail.update({"segments": len(segments), "cached": True})
             detail = _cached(f"{len(segments)} 段")
@@ -538,6 +630,8 @@ def _stage_asr(state: _RunState) -> None:
             if not segments:
                 raise AsrError(f"字幕未解析出任何内容：{state.subtitle_path.name}")
             write_raw_jsonl(segments, raw_path)
+            (state.run_dir / _ASR_PARTIAL).unlink(missing_ok=True)
+            state.asr_fresh = True
             stage.detail.update({"segments": len(segments), "source": "subtitle"})
             detail = f"{len(segments)} 段（平台字幕）"
         else:
@@ -550,9 +644,19 @@ def _stage_asr(state: _RunState) -> None:
             )
             segments = backend.transcribe(state.wav, duration=state.meta.duration)
             write_raw_jsonl(segments, raw_path)
+            state.asr_fresh = True
             failures = list(getattr(backend, "failures", []) or [])
+            # 部分段失败仍可出报告，但不能当成完整缓存：留标记让下次只补失败段
+            marker = state.run_dir / _ASR_PARTIAL
             if failures:
+                marker.write_text(
+                    json.dumps(failures, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                    newline="\n",
+                )
                 stage.detail["failures"] = failures
+            else:
+                marker.unlink(missing_ok=True)
             stage.detail["segments"] = len(segments)
             detail = f"{len(segments)} 段"
     state.produced.append(raw_path)
@@ -573,7 +677,13 @@ def _stage_transcript(state: _RunState) -> None:
     jsonl_path = state.run_dir / "transcript.jsonl"
     markdown_path = state.run_dir / "transcript.md"
     with state.trace.stage("transcript") as stage:
-        if state.use_cache and _nonempty(jsonl_path) and _nonempty(markdown_path):
+        if (
+            state.use_cache
+            and not state.force_asr
+            and not state.asr_fresh
+            and _nonempty(jsonl_path)
+            and _nonempty(markdown_path)
+        ):
             units = load_units(jsonl_path)
             stage.detail.update({"units": len(units), "cached": True})
             detail = _cached(f"{len(units)} 单元  u0001-u{len(units):04d}")
@@ -606,7 +716,12 @@ def _stage_outline(state: _RunState) -> None:
     with state.trace.stage("outline") as stage:
         outline: Outline | None = None
         detail = ""
-        if state.use_cache and _nonempty(outline_path):
+        if (
+            state.use_cache
+            and not state.force_asr
+            and not state.asr_fresh
+            and _nonempty(outline_path)
+        ):
             cached_outline = load_outline(outline_path)
             if cached_outline.lang == state.lang:
                 outline = cached_outline
@@ -630,12 +745,16 @@ def _stage_outline(state: _RunState) -> None:
             outline = plan_outline(
                 state.meta,
                 state.units,
-                mode=state.mode,
                 lang=state.lang,
                 client=client,
                 settings=state.settings,
                 progress=state.progress,
             )
+            # 大纲重出意味着章节来源可能变了：旧截图与旧正文都不再可信。
+            # 放在规划成功之后再清，规划失败时旧报告仍保持完整。
+            _clear_frames(state.run_dir)
+            shutil.rmtree(state.run_dir / "sections", ignore_errors=True)
+            state.force_report = True
             write_outline(outline, outline_path)
             stage.detail.update(
                 {
@@ -664,6 +783,9 @@ def _stage_frames(state: _RunState) -> None:
     assert state.outline is not None and state.units is not None and state.meta is not None
     with state.trace.stage("frames") as stage:
         if not state.settings.frames_enabled:
+            # 关闭截图时清掉旧帧，否则新报告会被旧画面与「带截图」标记污染
+            if _clear_frames(state.run_dir):
+                state.force_render = True
             stage.detail["skipped"] = "未开启截图"
             detail = "截图未开启（--frames 或 FRAMES=1 可开启）"
         else:
@@ -707,10 +829,6 @@ def _stage_frames(state: _RunState) -> None:
                             clip.unlink(missing_ok=True)
                     state.frame_files[section_id] = dest
                     state.progress(f"第 {section_id} 节截图完成 @ {label}")
-                manifest = frames_mod.write_manifest(
-                    state.run_dir, state.outline, state.frame_files, state.frame_moments
-                )
-                state.produced.append(manifest)
                 stage.detail["frames"] = len(state.frame_files)
                 detail = f"{len(state.frame_files)}/{len(points)} 节"
             except CancelledError:
@@ -788,7 +906,12 @@ def _stage_render(state: _RunState) -> Path:
     )
     report_path = state.run_dir / "report.html"
     with state.trace.stage("render") as stage:
-        cached_ok = state.use_cache and not state.force_report and _nonempty(report_path)
+        cached_ok = (
+            state.use_cache
+            and not state.force_report
+            and not state.force_render
+            and _nonempty(report_path)
+        )
         if cached_ok:
             html = report_path.read_text(encoding="utf-8")
             # 截图晚于报告生成时（如先跑完文字、再开 --frames 重跑），

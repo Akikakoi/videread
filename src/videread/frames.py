@@ -17,7 +17,6 @@ from . import execution
 from .config import (
     FRAME_JPEG_QUALITY,
     FRAME_LEAD_IN,
-    FRAME_MAX_TOTAL,
     FRAME_WIDTH,
     Settings,
 )
@@ -53,13 +52,11 @@ def section_moments(outline: Outline, units: list[TranscriptUnit]) -> dict[str, 
 def plan_points(
     outline: Outline, units: list[TranscriptUnit]
 ) -> list[tuple[str, float, str]]:
-    """截图点列表 `[(section_id, 绝对秒, 展示时间)]`，按大纲顺序、
-    超过 `FRAME_MAX_TOTAL` 时截断。"""
-    points = [
+    """截图点列表 `[(section_id, 绝对秒, 展示时间)]`，按大纲顺序每节一个。"""
+    return [
         (section_id, moment, format_time(moment))
         for section_id, moment in section_moments(outline, units).items()
     ]
-    return points[:FRAME_MAX_TOTAL]
 
 
 def clip_bounds(t: float) -> tuple[float, float]:
@@ -153,31 +150,6 @@ def inject_figures(
         )
         injected.append(part.replace("</h2>", "</h2>\n" + figure, 1))
     return injected
-
-
-def write_manifest(
-    out_dir: Path,
-    outline: Outline,
-    frame_files: dict[str, Path],
-    moments: dict[str, float] | None = None,
-) -> Path:
-    """写 `frames.jsonl`：每行一节的截图记录（含精确时刻），供排查与后续 VLM 复用。"""
-    path = out_dir / "frames.jsonl"
-    lines = []
-    for section in outline.sections:
-        file = frame_files.get(section.id)
-        if file is None:
-            continue
-        if moments and section.id in moments:
-            stamp = format_time(moments[section.id])
-        else:
-            stamp = section.time_range
-        lines.append(
-            f'{{"section": "{section.id}", "file": "frames/{file.name}", '
-            f'"time": "{stamp}"}}'
-        )
-    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8", newline="\n")
-    return path
 
 
 def has_frames(out_dir: Path) -> bool:

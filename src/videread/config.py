@@ -93,7 +93,6 @@ STAGE_COUNT = len(STAGE_LABELS)
 # 截图（纯展示模式）：按大纲节定点拉取视频小段抽帧，以 base64 内嵌报告。
 # 默认关：--frames 显式开启，或 .env 设 FRAMES=1。
 FRAMES_ENABLED = False
-FRAME_MAX_TOTAL = 16      # 全片截图上限，超出按节顺序截断
 FRAME_CLIP_SECONDS = 5.0  # 每个截图点定点拉取的视频时长
 FRAME_WIDTH = 960          # 输出图片宽度（等比缩放）
 FRAME_JPEG_QUALITY = 4     # ffmpeg mjpeg -q:v（2 最优、数值越大越差，4 ≈ JPEG 80）

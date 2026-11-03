@@ -32,10 +32,11 @@ const DLG_COPY = {
   run: {title: "撕掉这一期？", body: "该期的转写缓存、正文报告与问答历史将一并清除，删除后不可恢复。", confirm: "确认删除", cancel: "已取消删除，这一期先留着"},
   letter: {title: "撕掉这封来信？", body: "这封来信与编辑部的回信将从本期档案中移除，删除后不可恢复。", confirm: "确认删除", cancel: "已取消删除，这封来信先留着"},
   reprint: {
-    title: "这一期已经印过了",
-    body: "报告库里已有这个视频的解析记录。再次投印会重新转写、重新写作，可能产生额外调用费用；只想重看的话，点「查看上次报告」就好。",
-    confirm: "仍要投印",
-    cancel: "已取消投印，这一期保持原样"
+    title: "覆盖原来的视频报告？",
+    body: "报告库里已有这个视频的解析记录。覆盖会用当前设置重新转写、重新写作，替换原来的报告、转写缓存、逐节正文、问答历史与截图，且不可恢复；可能产生额外调用费用。只想重看的话，点「查看上次报告」就好。",
+    confirm: "覆盖重印",
+    cancel: "已保留原报告，本次没有投印",
+    cancelBtn: "保留原报告"
   }
 };
 function askConfirm(kind, subject, reportUrl){
@@ -44,6 +45,7 @@ function askConfirm(kind, subject, reportUrl){
   $("#dlg-title").textContent = copy.title;
   $("#dlg-body").textContent = copy.body;
   $("#dlg-confirm").textContent = copy.confirm || "确认删除";
+  $("#dlg-cancel").textContent = copy.cancelBtn || "先留着";
   const view = $("#dlg-view");
   if(reportUrl){
     view.href = reportUrl;
@@ -295,6 +297,37 @@ async function openFeature(runId){
 
 const LETTERS_EMPTY = '<p class="letters-empty">还没有来信。就这一期提个问题吧。</p>';
 
+/* 视频链接追加 t= 秒数；本地文件不是 http(s)，不生成跳转 */
+function videoAt(url, seconds){
+  if(!/^https?:/i.test(url || "")) return "";
+  const t = Math.max(0, Math.round(Number(seconds) || 0));
+  return url + (url.indexOf("?") >= 0 ? "&" : "?") + "t=" + t;
+}
+
+/* 答案引用：§N 跳阅读页对应章节，▶ 时间戳跳原视频；摘要作为悬停提示 */
+function renderCitations(l){
+  const list = Array.isArray(l.citations) ? l.citations : [];
+  if(!list.length) return "";
+  return '<div class="cites">' + list.map(c => {
+    const idx = Number(c.section_index);
+    const sec = Number.isFinite(idx) && idx > 0 && currentRunId
+      ? '<a class="cite-sec" href="' + API + '/read/' + encodeURIComponent(currentRunId) +
+        '?sec=' + idx + '" target="_blank" rel="noopener" title="' +
+        esc(c.snippet || "") + '">§' + idx + '</a>'
+      : "";
+    const href = videoAt(currentVideoUrl, c.seconds);
+    const label = "▷ " + esc(c.time_text || "");
+    const when = c.time_text
+      ? (href
+          ? '<a class="cite-ts" href="' + esc(href) + '" target="_blank" rel="noopener" title="' +
+            esc(c.snippet || "") + '">' + label + '</a>'
+          : '<span class="cite-ts">' + label + '</span>')
+      : "";
+    return '<span class="cite">' + sec + when +
+      '<small>' + esc(c.snippet || "") + '</small></span>';
+  }).join("") + '</div>';
+}
+
 function renderLetter(l, i){
   /* 下标即 GET /qa 返回 history 的顺序，删除接口按同一下标定位；
      离线演示插入的记录没有真实下标，不渲染删除钮 */
@@ -305,8 +338,8 @@ function renderLetter(l, i){
     '<div class="l-head"><p class="q">' + esc(l.question || "") + '</p>' + del + '</div>' +
     /* 与原控制台同口径：answer_html 由服务端 sanitize_section_html 清洗后走 innerHTML */
     '<div class="a">' + (l.answer_html || "") + '</div>' +
+    renderCitations(l) +
     '</div>';
-  /* 引文胶囊（l.citations 的 §N 定位原文 / ▶ 时间戳）按需求暂时不渲染，需要时在此恢复 */
 }
 
 async function deleteLetter(runId, btn){
@@ -819,11 +852,26 @@ $("#url").addEventListener("input", () => {
 });
 
 let probePages = [];   /* 预检拿到的分P列表（多P 视频才有值） */
-let probeBlocked = false; /* 预检判定为付费内容（充电专属/付费课程）时禁用投递 */
+let probeBlocked = false; /* 预检判定不可投印（付费内容或超长）时禁用投递 */
+let probeBlockMsg = "";   /* 对应的阻止原因，提交时提示用户 */
+let probeLimitSeconds = 7200; /* 预检返回的时长上限，供切换分P时就地判断 */
+let probeLimitText = "2 小时";
 let pageSelKey = null; /* 分P 列表对应的输入源，换源即失效 */
 
 let selPageNum = null; /* 当前选中的分P（null = P1/未选） */
 function selectedPage(){ return selPageNum || 1; }
+
+/* 多P 切换后按所选分P 的时长重新判定是否超限，避免拿整包/上一P 的结论卡住 */
+function updatePageBlock(item){
+  const tooLong = !!(item && item.duration > probeLimitSeconds);
+  probeBlocked = tooLong;
+  probeBlockMsg = tooLong
+    ? "所选分P 时长 " + (item.duration_text || "") + " 超过 " + probeLimitText + "，暂不支持解析"
+    : "";
+  $("#btn-submit").disabled = tooLong;
+  const warn = document.getElementById("page-warn");
+  if(warn) warn.textContent = tooLong ? " · 超过 " + probeLimitText + " 上限，暂不支持投印" : "";
+}
 
 /* 分P 自绘下拉：触发钮 + 浮层（样式与搜索历史下拉同源） */
 function renderPPick(){
@@ -853,6 +901,7 @@ function wirePPick(){
     pick.querySelectorAll(".pp-item").forEach(x => x.classList.toggle("on", Number(x.dataset.page) === selPageNum));
     pick.classList.remove("open");
     btn.setAttribute("aria-expanded", "false");
+    updatePageBlock(item);
   }));
 }
 document.addEventListener("click", e => {
@@ -912,7 +961,7 @@ async function doProbe(){
   const line = $("#probeline");
   if(!url){
     probePages = []; pageSelKey = null; lastProbedUrl = null; probeBlocked = false;
-    probedExisting = null; probedTitle = ""; probeOk = false;
+    probeBlockMsg = ""; probedExisting = null; probedTitle = ""; probeOk = false;
     $("#btn-submit").disabled = false; line.innerHTML = ""; return;
   }
   line.innerHTML = "预检中…";
@@ -925,32 +974,43 @@ async function doProbe(){
     /* 付费内容：禁用投递按钮，提示暂不支持（流水线侧同样会拒绝） */
     if(p.paywalled){
       probeBlocked = true;
+      probeBlockMsg = p.message || "这类付费视频暂不支持解析";
       $("#btn-submit").disabled = true;
       line.innerHTML = '<span class="warn">' + esc(p.message) + '</span>';
       return;
     }
-    probeBlocked = false;
-    $("#btn-submit").disabled = false;
+    /* 超长视频流水线侧同样会拒绝；预检就地禁用，避免用户空等一次提交 */
+    probeBlocked = !!p.too_long;
+    probeBlockMsg = p.too_long
+      ? "视频时长 " + (p.duration_text || "") + " 超过 " + (p.limit_text || "上限") + "，暂不支持解析"
+      : "";
+    $("#btn-submit").disabled = probeBlocked;
     /* 同一输入的重复预检保留用户已选的分P */
     const keepPage = (pageSelKey === url) ? selectedPage() : null;
     let html = "预检 · <b>" + esc(p.title || "未知标题") + "</b>";
+    probeLimitSeconds = Number(p.limit_seconds) || 7200;
+    probeLimitText = p.limit_text || "2 小时";
     if(p.pages && p.pages.length > 1){
       /* 多P：时长/超长判定跟随所选分P（选项里带各P时长），不显示整包时长 */
       probePages = p.pages; pageSelKey = url;
       selPageNum = keepPage || (p.current_page > 1 ? p.current_page : 1);
-      html += ' · 分P <span class="ppick-wrap">' + renderPPick() + '</span>';
+      html += ' · 分P <span class="ppick-wrap">' + renderPPick() + '</span>' +
+        '<span id="page-warn" class="warn"></span>';
     } else {
       probePages = []; pageSelKey = url; selPageNum = null;
       html += " · 时长 <b>" + esc(p.duration_text || "—") + "</b>";
     }
     if(p.uploader) html += " · " + esc(p.uploader);
-    if(p.too_long) html += ' · <span class="warn">超出 ' + esc(p.limit_text || "") + ' 上限，将被拒绝</span>';
+    if(p.too_long && probePages.length <= 1) html += ' · <span class="warn">超过 ' + esc(p.limit_text || "") + ' 上限，暂不支持投印</span>';
     if(p.existing_run) html += ' · <span class="warn">已解析过（' + esc(p.existing_run.generated_at) + '）</span> · <a href="' + p.existing_run.report_url + '" target="_blank" rel="noopener">查看上次报告</a>';
     line.innerHTML = html;
     wirePPick();
+    if(probePages.length > 1){
+      updatePageBlock(probePages.find(x => x.page === selectedPage()));
+    }
   }catch(e){
     probePages = []; pageSelKey = null; /* 预检失败放行原文，过期分P一并失效 */
-    lastProbedUrl = url; probeBlocked = false;
+    lastProbedUrl = url; probeBlocked = false; probeBlockMsg = "";
     probedExisting = null; probedTitle = ""; probeOk = false;
     $("#btn-submit").disabled = false;
     /* 付费内容类拒绝是确定性的（流水线会再次拦截），不追加「仍可提交」 */
@@ -965,21 +1025,14 @@ function resetSubmitState(){
   const btn = $("#btn-submit");
   btn.disabled = probeBlocked;
   btn.textContent = "投印 →";
-  $("#logbox").style.display = "none";
-  $("#logbox").textContent = "";
   $("#submeta").innerHTML = "";
-  $("#stepper").innerHTML = "";
-  resetStepper();
 }
 
 function beginSubmit(){
   const btn = $("#btn-submit");
   btn.disabled = true;
   btn.textContent = "排片中…";
-  $("#logbox").style.display = "block";
-  $("#logbox").textContent = "";
   $("#submeta").innerHTML = "";
-  renderStepper(-1, new Set());
 }
 
 /* 投印前确认是否已有解析记录：预检结果对应当前链接就直接用，
@@ -998,12 +1051,13 @@ async function existingRunFor(target){
 async function submitJob(){
   const url = $("#url").value.trim();
   if(!url){ toast("先填一个 B 站链接或 BV 号"); return; }
-  if(probeBlocked){ toast("这类付费视频暂不支持解析"); return; }
+  if(probeBlocked){ toast(probeBlockMsg || "预检未通过，暂不能投印"); return; }
   /* 多P 视频：仅当分P 列表仍对应当前输入时才改写链接，避免过期分P 误选 */
   const target = (probePages.length && pageSelKey === url) ? withPage(url, selectedPage()) : url;
   const btn = $("#btn-submit");
   beginSubmit();
   try{
+    let overwrite = false;
     const existing = await existingRunFor(target);
     if(existing){
       resetSubmitState();
@@ -1011,12 +1065,14 @@ async function submitJob(){
         + (existing.generated_at ? " · 上次解析 " + existing.generated_at : "");
       const ok = await askConfirm("reprint", subject, existing.report_url);
       if(!ok) return;
+      overwrite = true;
       beginSubmit();
     }
-    const frames = $("#frames-switch") && $("#frames-switch").checked ? true : null;
+    const frames = $("#frames-switch") ? !!$("#frames-switch").checked : false;
     const lang = ($("#lang-btn") || {}).dataset ? ($("#lang-btn").dataset.lang || null) : null;
-    /* 投印策略固定：忽略缓存强制重跑、不留音频文件、转写引擎按 .env 配置（不传即"自动"） */
-    const job = await post("/api/jobs", {url: target, mode, frames, lang, no_cache: true, keep_audio: false});
+    /* 投印策略：命中历史记录并确认覆盖时忽略缓存全量重跑；否则沿用已有产物，
+       让取消后的重投从断点续跑，避免重复付费。转写引擎按 .env 配置。 */
+    const job = await post("/api/jobs", {url: target, mode, frames, lang, no_cache: overwrite, keep_audio: false});
     localStorage.setItem("videread.activeJob", job.job_id);
     /* 工单页在新标签打开：主页留在原地给出工单入口，并轮询终态刷新目录 */
     const win = window.open("/editorial/job/" + encodeURIComponent(job.job_id), "_blank");
@@ -1026,7 +1082,6 @@ async function submitJob(){
     watchActiveJob();
     toast(win ? "已投递，工单页已在新标签打开" : "已投递；浏览器拦截了新标签，请点上方工单链接进入");
   }catch(e){
-    renderStepper(-1, new Set());
     $("#submeta").innerHTML = '<span style="color:var(--accent)">' + (OFFLINE ? "演示模式 · 提交任务在启动本地服务后可用" : "提交失败：" + esc(e.message)) + '</span>';
     toast(OFFLINE ? "离线演示模式，暂不支持提交" : "提交失败：" + e.message);
     btn.disabled = false; btn.textContent = "投印 →";
@@ -1051,7 +1106,7 @@ function startRename(runId){
   const input = document.createElement("input");
   input.className = "rename-input";
   input.value = current;
-  input.maxLength = 80;
+  input.maxLength = 200;
   h2.innerHTML = "";
   h2.appendChild(input);
   input.focus(); input.select();
@@ -1108,7 +1163,8 @@ async function loadStats(){
     overview = SAMPLE.statsOverview;
     days = SAMPLE.statsDays;
   }
-  const recent = days.slice(-7).reverse();
+  /* days 由后端按日期倒序返回：取前 7 个才是最近 7 天，再翻回时间正序展示 */
+  const recent = days.slice(0, 7).reverse();
   if(!recent.length){
     body.innerHTML = '<p class="skeleton">还没有台账记录，投印第一期后这里会出现累计概览与按日台账。</p>';
     return;
@@ -1289,6 +1345,13 @@ function updateConfFootnote(){
     if(llm){
       const models = Array.from(new Set([c.llm_model_plan, c.llm_model_write].filter(Boolean)));
       llm.textContent = models.length ? models.join(" / ") : "—";
+    }
+    /* 本地没保存过「默认带截图」时，投印开关跟随服务端 .env 的 FRAMES；
+       用户改过默认值或手动拨过开关后不再覆盖 */
+    if(!framesDefaultApplied && typeof c.frames === "boolean"){
+      framesDefaultApplied = true;
+      const fs = $("#frames-switch");
+      if(fs) fs.checked = c.frames;
     }
   }).catch(() => {
     const asr = $("#conf-asr"), llm = $("#conf-llm");
@@ -1590,6 +1653,8 @@ function storedDefaults(){
   catch(e){ return {}; }
 }
 
+let framesDefaultApplied = false;
+
 function applyDefaultsToForm(){
   const d = storedDefaults();
   if(d.mode && document.querySelector('#modes .mode[data-mode="' + d.mode + '"]')){
@@ -1609,6 +1674,7 @@ function applyDefaultsToForm(){
     }
   }
   if(typeof d.frames === "boolean"){
+    framesDefaultApplied = true;
     const fs = $("#frames-switch");
     if(fs) fs.checked = d.frames;
   }

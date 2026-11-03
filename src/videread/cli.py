@@ -38,7 +38,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-cache", action="store_true", help="忽略已有产物，全部重跑")
     parser.add_argument("--keep-audio", action="store_true", help="跑完保留音频中间文件（默认自动清理）")
     parser.add_argument(
-        "--open", dest="open_report", action="store_true", help="生成后自动用浏览器打开"
+        "--open",
+        dest="open_report",
+        action="store_true",
+        help="生成后自动用浏览器打开（批量模式下不生效）",
     )
     parser.add_argument(
         "--asr",
@@ -107,9 +110,16 @@ def _run_single(args: argparse.Namespace) -> int:
     """跑一个来源；返回退出码（不直接退出进程，批量模式要逐个收集）。"""
     try:
         url = _normalize_entry(args.url)
-        if args.page > 1 and download.extract_bvid(url):
-            # 只有确认为 B 站视频才改写链接；裸 BV 号先补全成标准链接
-            url = download.page_url(url, args.page)
+        if args.page > 1:
+            # 裸 BV 号已补全成标准链接；短链与 av 号链接同样追加 p 参数，
+            # 不能因为拿不到 BV 号就静默忽略 --page
+            lower = url.lower()
+            if (
+                download.extract_bvid(url)
+                or "bilibili.com/video" in lower
+                or "b23.tv" in lower
+            ):
+                url = download.page_url(url, args.page)
         path = run(
             url,
             mode=args.mode,

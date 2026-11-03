@@ -41,6 +41,38 @@ def format_time(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
+def _is_cjk(char: str) -> bool:
+    """是否属于中日韩文字（这些语言相邻文字之间不需要空格）。"""
+    code = ord(char)
+    return (
+        0x3040 <= code <= 0x30FF      # 平假名 / 片假名
+        or 0x3400 <= code <= 0x4DBF   # 扩展 A
+        or 0x4E00 <= code <= 0x9FFF   # 基本汉字
+        or 0xAC00 <= code <= 0xD7AF   # 韩文音节
+        or 0xF900 <= code <= 0xFAFF   # 兼容汉字
+    )
+
+
+def _join_parts(parts: list[str]) -> str:
+    """拼接文本片段：中日韩相邻不加空格，拉丁文字之间补一个空格。
+
+    ASR 分段与字幕 cue 通常各自已去掉首尾空白，直接 `"".join` 会把英文
+    "Hello." / "World" 粘成 "Hello.World"。
+    """
+    out = ""
+    for part in parts:
+        if not part:
+            continue
+        if not out:
+            out = part
+            continue
+        if out[-1].isspace() or part[0].isspace() or _is_cjk(out[-1]) or _is_cjk(part[0]):
+            out += part
+        else:
+            out += " " + part
+    return out
+
+
 def _split_text(text: str, max_chars: int) -> list[str]:
     """按标点把长文本切成不超过 max_chars 的片段；无标点可依时硬切。"""
     parts: list[str] = []
@@ -111,7 +143,7 @@ def build_units(
                 id=f"u{len(units) + 1:04d}",
                 start=round(buffer_start, 1),
                 end=round(max(buffer_end, buffer_start), 1),
-                text="".join(buffer_text),
+                text=_join_parts(buffer_text),
             )
         )
         buffer_text = []
@@ -216,7 +248,9 @@ def merge_subtitles(units: list[TranscriptUnit], srt: Path) -> list[TranscriptUn
                     id=unit.id,
                     start=unit.start,
                     end=unit.end,
-                    text=re.sub(r"\s+", "", "".join(texts)),
+                    text=_join_parts(
+                        [re.sub(r"\s+", " ", chunk).strip() for chunk in texts]
+                    ),
                     source="subtitle",
                 )
             )

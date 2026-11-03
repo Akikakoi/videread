@@ -151,6 +151,17 @@ def fake_pipeline(report_body: str = REPORT_HTML, run_id: str = RUN_ID):
     return _run
 
 
+def test_config_reports_effective_asr_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """实时后端未显式配置 realtime 模型时，页脚要展示实际生效的默认模型。"""
+    monkeypatch.setenv("ASR_BACKEND", "dashscope-realtime")
+    monkeypatch.setenv("DASHSCOPE_MODEL", "paraformer-v2")
+    app = create_app(tmp_path)
+    with TestClient(app) as client:
+        body = client.get("/api/config").json()
+    assert body["asr_model"] == "paraformer-realtime-v2"
+    assert body["frames"] is False
+
+
 # ----------------------------------------------------------------- 报告库
 
 
@@ -223,7 +234,6 @@ def test_run_detail_includes_sections_and_files(tmp_path: Path):
     assert detail is not None
     assert detail["sections_detail"][0]["heading"] == "第一章"
     assert detail["sections_detail"][0]["units"] == 2
-    assert any(item["name"] == "report.html" for item in detail["files"])
     assert detail["lead"] == "导语一段"
 
 
@@ -1107,19 +1117,6 @@ def test_web_main_uses_default_out_root(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setitem(sys.modules, "uvicorn", _StubUvicorn)
     assert web_main.main([]) == 0
-
-
-def test_events_replay_since_returns_tail_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setattr(jobs, "pipeline_run", fake_pipeline())
-    manager = jobs.JobManager(tmp_path)
-
-    job = manager.submit(url=URL)
-    wait_terminal(job)
-
-    _, backlog = job.subscribe(since=len(job._events) - 1)  # noqa: SLF001 - 用例内窥
-    assert [event["type"] for event in backlog] == ["done"]
 
 
 def test_markdown_endpoint_blocked_for_framed_runs(tmp_path: Path):

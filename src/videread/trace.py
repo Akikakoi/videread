@@ -16,11 +16,10 @@ def _now() -> str:
 
 @dataclass
 class Stage:
-    """单个阶段的记录句柄：可写入 detail 与 cost_cny。"""
+    """单个阶段的记录句柄：可写入 detail。"""
 
     name: str
     detail: dict[str, object] = field(default_factory=dict)
-    cost_cny: float | None = None
 
 
 class TraceWriter:
@@ -36,14 +35,11 @@ class TraceWriter:
         event: str,
         *,
         dur_ms: int | None = None,
-        cost_cny: float | None = None,
         detail: dict[str, object] | None = None,
     ) -> None:
         row: dict[str, object] = {"ts": _now(), "stage": stage, "event": event}
         if dur_ms is not None:
             row["dur_ms"] = dur_ms
-        if cost_cny is not None:
-            row["cost_cny"] = cost_cny
         if detail:
             row["detail"] = detail
         with self.path.open("a", encoding="utf-8", newline="\n") as fh:
@@ -71,7 +67,6 @@ class TraceWriter:
             name,
             "end",
             dur_ms=int((time.monotonic() - started) * 1000),
-            cost_cny=record.cost_cny,
             detail=record.detail or None,
         )
 

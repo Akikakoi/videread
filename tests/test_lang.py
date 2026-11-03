@@ -198,7 +198,7 @@ def _prepare_run(tmp_path: Path, outline: Outline) -> object:
 def test_stage_outline_recomputes_when_lang_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     state = _prepare_run(tmp_path, validate(_outline_data(), _units(), lang="zh"))
 
-    def _fake_plan(meta, units, *, mode, lang, client, settings, progress):
+    def _fake_plan(meta, units, *, lang, client, settings, progress):
         return validate(_outline_data(), units, lang=lang)
 
     monkeypatch.setattr(pipeline_mod, "plan_outline", _fake_plan)

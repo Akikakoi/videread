@@ -306,8 +306,7 @@ def test_frames_enabled_injects_figures(tmp_path: Path, monkeypatch: pytest.Monk
 
     joined = "\n".join(lines)
     assert "截图完成" in joined
-    manifest = (run_dir / "frames.jsonl").read_text(encoding="utf-8")
-    assert '"section": "s1"' in manifest
+    assert (run_dir / "frames" / "s1.jpg").is_file()
     report = (run_dir / "report.html").read_text(encoding="utf-8")
     assert "data:image/jpeg;base64," in report
     # 片段用完即删
@@ -333,19 +332,30 @@ def test_frames_degrade_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 
 def test_force_asr_overrides_subtitle_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """--force-asr 无视配置与字幕，坚持走 ASR。"""
+    """--force-asr 无视已有 ASR 缓存与字幕，真正重跑 ASR。"""
     run_dir = _seed_subtitle_run(tmp_path, SRT_FULL)
     _write(run_dir / "audio.wav", "fake-wav")
     _write(
         run_dir / "asr.raw.jsonl",
-        json.dumps({"start": 0.0, "end": 12.0, "text": "ASR 文本。"}, ensure_ascii=False) + "\n",
+        json.dumps({"start": 0.0, "end": 12.0, "text": "旧 ASR 文本。"}, ensure_ascii=False) + "\n",
     )
+    called = {"asr": False}
+
+    class _FakeBackend:
+        failures: list = []
+
+        def transcribe(self, audio: Path, *, duration: float | None = None):
+            called["asr"] = True
+            return [pipeline.AsrSegment(start=0.0, end=12.0, text="ASR 文本。")]
+
+    monkeypatch.setattr(pipeline, "get_backend", lambda *_a, **_k: _FakeBackend())
     _stop_at_outline(monkeypatch)
     lines: list[str] = []
 
     with pytest.raises(LlmError):
         run(URL, out_root=tmp_path, force_asr=True, progress=lines.append)
 
+    assert called["asr"] is True
     assert "字幕优先" not in "\n".join(lines)
 
 
@@ -625,6 +635,76 @@ def test_resolve_run_dir_fresh_suffix(tmp_path: Path):
     from videread.web.library import _RUN_ID_RE
 
     assert _RUN_ID_RE.match(second.name)
+
+
+def test_sync_mode_invalidates_sections_on_change(tmp_path: Path):
+    """模式变化清空正文片段；同一模式重复运行保留缓存。"""
+    run_dir = _seed_run(tmp_path)
+    assert pipeline._sync_mode(run_dir, "standard") is False
+    _write(run_dir / "sections" / "s2.html", "<p>旧模式正文</p>\n")
+
+    assert pipeline._sync_mode(run_dir, "brief") is True
+    assert not (run_dir / "sections").exists()
+    assert (run_dir / "run.mode").read_text(encoding="utf-8").strip() == "brief"
+
+
+def test_asr_cached_respects_partial_marker(tmp_path: Path):
+    """部分失败的 raw 不能当完整缓存；force_asr 同样绕过缓存。"""
+    run_dir = _seed_run(tmp_path)
+    assert pipeline._asr_cached(True, run_dir) is True
+    _write(run_dir / pipeline._ASR_PARTIAL, "[]\n")
+    assert pipeline._asr_cached(True, run_dir) is False
+    (run_dir / pipeline._ASR_PARTIAL).unlink()
+    assert pipeline._asr_cached(True, run_dir, force_asr=True) is False
+
+
+def test_disabling_frames_clears_old_frames_and_rerenders(tmp_path: Path):
+    """关掉截图后：旧帧删除、旧报告里的 base64 图被去掉，正文不重写。"""
+    run_dir = _seed_run(tmp_path)
+    _write(
+        run_dir / "report.html",
+        '<html><body><figure><img src="data:image/jpeg;base64,AAAA"></figure></body></html>',
+    )
+    frame = run_dir / "frames" / "s1.jpg"
+    frame.parent.mkdir(parents=True, exist_ok=True)
+    frame.write_bytes(b"fake-jpg")
+
+    lines: list[str] = []
+    report = run(URL, out_root=tmp_path, frames=False, progress=lines.append)
+
+    assert not (run_dir / "frames").exists()
+    assert not (run_dir / "frames.jsonl").exists()
+    assert "data:image/jpeg;base64," not in report.read_text(encoding="utf-8")
+
+
+def test_overwrite_clears_stale_qa_and_frames(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """覆盖重跑清掉旧问答与截图；旧报告保留到新报告渲染成功。"""
+    run_dir = _seed_run(tmp_path)
+    _write(run_dir / "qa.jsonl", '{"question": "旧问题", "answer_html": "旧回答"}\n')
+    _write(run_dir / "frames.jsonl", '{"section": "s1", "file": "frames/s1.jpg"}\n')
+    frame = run_dir / "frames" / "s1.jpg"
+    frame.parent.mkdir(parents=True, exist_ok=True)
+    frame.write_bytes(b"fake-jpg")
+
+    def _fake_fetch(url, settings=None, *, enforce_limit=True, subtitle_dir=None):
+        return download.VideoMeta(
+            bvid=BVID, title="覆盖重印", uploader="某UP主", duration=12.0, url=URL,
+        )
+
+    def _no_audio(*_args: object, **_kwargs: object) -> None:
+        raise AudioError("测试到此为止：覆盖清理已可断言")
+
+    monkeypatch.setattr(download, "fetch_meta", _fake_fetch)
+    monkeypatch.setattr(download, "download_audio", _no_audio)
+    monkeypatch.setattr(download, "sessdata_expired_hint", lambda _s: None)
+
+    with pytest.raises(VidereadError):
+        run(URL, out_root=tmp_path, use_cache=False, progress=lambda _l: None)
+
+    assert not (run_dir / "qa.jsonl").exists()
+    assert not (run_dir / "frames.jsonl").exists()
+    assert not (run_dir / "frames").exists()
+    assert (run_dir / "report.html").is_file()
 
 
 def test_fresh_dir_reparse_lands_in_new_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

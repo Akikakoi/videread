@@ -7,9 +7,8 @@ const JOB_TERMINAL = new Set(["done","cancelled","failed","error"]);
 /* JS 触发的滚动不受 CSS scroll-behavior:auto 管，reduce 下须显式降级为瞬间跳转 */
 const scrollBehavior = () => matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
 
-/* 阶段步进器（首页提交面板与工单页共用）；currentMark 覆盖「进行中」标记的样式 */
+/* 工单页阶段步进器；currentMark 覆盖「进行中」标记的样式 */
 let stepperSeen = new Set();
-function resetStepper(){ stepperSeen = new Set(); }
 function renderStepper(current, doneSet, currentMark){
   const ul = $("#stepper");
   if(!ul) return;

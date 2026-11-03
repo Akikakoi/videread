@@ -136,6 +136,19 @@ section.block{padding:56px 0 0;}
 .letter.enter{animation:letterIn var(--t) var(--ease) both;}
 @keyframes letterIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 .letter .a::before{content:"答 · ";font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:1px;}
+/* 问答引文：§章节定位 + ▷ 时间戳 + 来源摘要 */
+.letter .cites{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+.letter .cite{
+  display:inline-flex;align-items:center;gap:7px;min-width:0;max-width:100%;
+  padding:3px 8px;font-family:var(--mono);font-size:10.5px;color:var(--muted);
+  background:var(--paper-deep);border:1px solid var(--hairline);
+}
+.letter .cite-sec,.letter .cite-ts{color:var(--accent);text-decoration:none;white-space:nowrap;transition:color var(--t-fast);}
+.letter .cite-sec:hover,.letter .cite-ts:hover{color:var(--ink);}
+.letter .cite small{
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--sans);font-size:11px;color:var(--faint);letter-spacing:0;
+}
 .askline{display:flex;border-bottom:2px solid var(--ink);margin-top:16px;}
 .askline input{flex:1;border:0;background:transparent;outline:none;font-family:var(--sans);font-size:14.5px;color:var(--ink);padding:12px 4px;}
 .askline input::placeholder{color:var(--faint);}
@@ -380,14 +393,7 @@ section.block{padding:56px 0 0;}
 .probeline b{color:var(--ink);font-weight:400;}
 .probeline .warn{color:var(--accent);}
 .probeline a{color:var(--accent);}
-.stepper{list-style:none;border-top:2px solid var(--ink);margin-top:8px;}
-.stepper:empty{display:none;}
-.stepper li{display:flex;align-items:baseline;gap:14px;padding:11px 2px;border-bottom:1px solid var(--hairline);color:var(--faint);transition:color var(--t);}
-.stepper .no{font-family:var(--mono);font-size:12px;min-width:26px;}
-.stepper .t{font-size:14.5px;font-family:var(--serif);}
-.stepper .mark{margin-left:auto;font-family:var(--mono);font-size:12px;display:inline-block;}
-.stepper li.pop .mark{animation:markPop .3s var(--ease) 1;}
-@keyframes markPop{from{transform:scale(.5);opacity:0}to{transform:scale(1);opacity:1}}
+
 .rename-input{
   font:inherit;color:inherit;letter-spacing:inherit;
   border:0;border-bottom:2px solid var(--accent);background:transparent;outline:none;
@@ -423,12 +429,6 @@ section.block{padding:56px 0 0;}
 .ppick .pp-d{font-family:var(--mono);font-size:10px;color:var(--faint);flex-shrink:0;}
 .ppick .pp-item.on .pp-no,.ppick .pp-item.on .pp-t{color:var(--accent);}
 .ppick .pp-item.on .pp-d{color:var(--accent);}
-.stepper li.cur{color:var(--ink);}
-.stepper li.cur .mark{color:var(--accent);}
-.stepper li.cur .t::after{content:" …";}
-.stepper li.done{color:var(--muted);}
-.stepper li.done .mark{color:var(--ok);}
-.logbox{font-family:var(--mono);font-size:11.5px;line-height:1.8;color:var(--muted);background:var(--paper-deep);border:1px solid var(--hairline);padding:14px 16px;margin-top:20px;max-height:220px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;display:none;}
 .submeta{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:14px;letter-spacing:1px;}
 .submeta a{color:var(--accent);}
 
@@ -505,7 +505,7 @@ html.js .reveal.in{opacity:1;transform:none;}
   .side-nav a.on .dot{transform:none;}
   .switch .knob,.switch .knob::after{transition:none;}
   .pg-mid input{transition:none;}
-  .veil.open,.dialog,.hist.open,.ppick.open,.fmt-pick.open,.stepper li.pop .mark,.letter.enter{animation:none;}
+  .veil.open,.dialog,.hist.open,.ppick.open,.fmt-pick.open,.letter.enter{animation:none;}
 }
 .skeleton{color:var(--faint);font-family:var(--mono);font-size:12px;letter-spacing:2px;padding:32px 0;}
 
@@ -539,11 +539,11 @@ html.js .reveal.in{opacity:1;transform:none;}
 }
 
 /* ---------- 细滚条（编辑风） ---------- */
-#logbox::-webkit-scrollbar,#page-pick::-webkit-scrollbar{width:8px;}
-#logbox::-webkit-scrollbar-track,#page-pick::-webkit-scrollbar-track{background:transparent;}
-#logbox::-webkit-scrollbar-thumb,#page-pick::-webkit-scrollbar-thumb{background:var(--hairline);border-radius:4px;}
-#logbox::-webkit-scrollbar-thumb:hover,#page-pick::-webkit-scrollbar-thumb:hover{background:var(--muted);}
-#logbox,#page-pick{scrollbar-width:thin;scrollbar-color:var(--hairline) transparent;}
+#page-pick::-webkit-scrollbar{width:8px;}
+#page-pick::-webkit-scrollbar-track{background:transparent;}
+#page-pick::-webkit-scrollbar-thumb{background:var(--hairline);border-radius:4px;}
+#page-pick::-webkit-scrollbar-thumb:hover{background:var(--muted);}
+#page-pick{scrollbar-width:thin;scrollbar-color:var(--hairline) transparent;}
 
 /* ---------- 模型设置弹窗 ---------- */
 .settings-dialog{max-width:520px;}

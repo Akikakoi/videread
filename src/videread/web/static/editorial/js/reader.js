@@ -54,6 +54,9 @@ async function open(runId, sec){
     body.querySelectorAll("script,style,noscript").forEach(n => n.remove());
     let i = 0;
     body.querySelectorAll("h2").forEach(h => { i++; h.id = "sec-" + i; });
+    /* standard 的节号由正文手写 .num 承担；brief / outline 靠模板 CSS 计数器，
+       阅读页丢了那份样式，这里用同一套编号补回来 */
+    page.classList.toggle("numbered", !body.querySelector(".num"));
 
     page.innerHTML = "";
     const frag = document.createDocumentFragment();

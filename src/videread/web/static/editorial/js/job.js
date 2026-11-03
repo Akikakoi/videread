@@ -186,7 +186,7 @@ function renderMeta(job){
   if(job.mode) meta.push("模式 <b>" + esc(job.mode) + "</b>");
   if(job.created_at) meta.push("提交 <b>" + esc(job.created_at) + "</b>");
   if(job.state === "queued" && typeof job.queue_position === "number" && job.queue_position > 0)
-    meta.push('<span class="q">队列第 ' + (job.queue_position + 1) + " 位</span>");
+    meta.push('<span class="q">队列第 ' + job.queue_position + " 位</span>");
   if(job.finished_at) meta.push("结束 <b>" + esc(job.finished_at) + "</b>");
   $("#job-meta").innerHTML = meta.map(s => "<span>" + s + "</span>").join("");
 }

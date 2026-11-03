@@ -455,7 +455,7 @@ def run_title(out_root: Path, run_id: str) -> str | None:
 
 
 def run_detail(out_root: Path, run_id: str) -> dict | None:
-    """单个 run 的详情：基础信息 + 大纲章节 + trace 摘要 + 产物清单。"""
+    """单个 run 的详情：基础信息 + 大纲章节。"""
     run_dir = safe_run_dir(out_root, run_id)
     if run_dir is None:
         return None
@@ -487,23 +487,12 @@ def run_detail(out_root: Path, run_id: str) -> dict | None:
         else []
     )
 
-    files: list[dict] = []
-    for path in sorted(run_dir.iterdir(), key=lambda p: p.name):
-        if not path.is_file():
-            continue
-        try:
-            files.append({"name": path.name, "bytes": path.stat().st_size})
-        except OSError:
-            continue
-
     entry.update(
         {
             "title_full": outline.title if outline else entry["title"],
             "subtitle": outline.subtitle if outline else "",
             "lead": outline.lead if outline else "",
             "sections_detail": sections,
-            "trace": trace_summary(run_dir / "run.trace.jsonl"),
-            "files": files,
         }
     )
     return entry

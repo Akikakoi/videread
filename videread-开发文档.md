@@ -249,7 +249,7 @@ videread/
 ### 5.5 `run.trace.jsonl`
 
 ```json
-{"ts": "2026-09-27T10:12:03+08:00", "stage": "asr", "event": "end", "dur_ms": 48210, "cost_cny": 0.62, "detail": {"segments": 412}}
+{"ts": "2026-09-27T10:12:03+08:00", "stage": "asr", "event": "end", "dur_ms": 48210, "detail": {"segments": 412}}
 ```
 
 ### 5.6 `qa.jsonl`
@@ -463,7 +463,7 @@ def load_units(path: Path) -> list[TranscriptUnit]
 
 ```python
 def plan_outline(meta: VideoMeta, units: list[TranscriptUnit], *,
-                 mode: str) -> Outline
+                 lang: str = "zh") -> Outline
 ```
 
 要点：

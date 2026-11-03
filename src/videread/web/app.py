@@ -61,7 +61,6 @@ class JobRequest(BaseModel):
     mode: str = "standard"
     no_cache: bool = False
     keep_audio: bool = False
-    asr_backend: str | None = None
     frames: bool | None = None
     retry: bool = False
     lang: str | None = None
@@ -108,13 +107,13 @@ def _frame(item: dict) -> str:
     return f"event: {item.get('type', 'message')}\ndata: {data}\n\n"
 
 
-async def _event_stream(job: Job, request: Request, since: int):
+async def _event_stream(job: Job, request: Request):
     """回放历史事件后持续推送；心跳既防超时也让 `is_disconnected` 有机会生效。
 
     `queue.get` 必须走 `asyncio.to_thread`：生成器运行在事件循环线程里，
     直接阻塞会挂住整个服务的其他请求。
     """
-    channel, backlog = job.subscribe(since)
+    channel, backlog = job.subscribe()
     try:
         for item in backlog:
             yield _frame(item)
@@ -357,18 +356,34 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
         只吐后端类型与模型名，任何密钥与网关地址都不经过此接口。
         """
         s = get_settings()
+        backend = (s.asr_backend or "").strip().lower()
         asr_model = ""
-        if s.asr_backend.startswith("dashscope"):
-            asr_model = s.dashscope_model
-        elif s.asr_backend == "openai":
+        dashscope_backends = {
+            "dashscope", "paraformer", "paraformer-v2", "qwen",
+            "dashscope-realtime", "realtime",
+            "paraformer-realtime", "paraformer-realtime-v2",
+        }
+        if backend in dashscope_backends or backend.startswith("dashscope-"):
+            # 实时通道未显式配置 realtime 模型时会自动改用 paraformer-realtime-v2，
+            # 页脚要展示真正生效的模型，而不是 .env 里的异步默认值
+            if "realtime" in backend or "realtime" in s.dashscope_model:
+                asr_model = (
+                    s.dashscope_model
+                    if "realtime" in s.dashscope_model
+                    else "paraformer-realtime-v2"
+                )
+            else:
+                asr_model = s.dashscope_model
+        elif backend == "openai":
             asr_model = os.environ.get("OPENAI_ASR_MODEL", "").strip() or "whisper-1"
-        elif s.asr_backend == "local":
+        elif backend == "local":
             asr_model = os.environ.get("LOCAL_ASR_MODEL", "").strip() or "faster-whisper/small"
         return {
             "asr_backend": s.asr_backend,
             "asr_model": asr_model,
             "llm_model_plan": s.llm_model_plan,
             "llm_model_write": s.llm_model_write,
+            "frames": s.frames_enabled,
         }
 
     @app.get("/api/runs")
@@ -639,7 +654,6 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
                 mode=payload.mode,
                 no_cache=payload.no_cache,
                 keep_audio=payload.keep_audio,
-                asr_backend=(payload.asr_backend or "").strip() or None,
                 frames=payload.frames,
                 retry=payload.retry,
                 lang=(payload.lang or "").strip() or None,
@@ -670,12 +684,12 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
         return snap
 
     @app.get("/api/jobs/{job_id}/events")
-    async def job_events(job_id: str, request: Request, since: int = 0):
+    async def job_events(job_id: str, request: Request):
         job = manager.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="未找到该任务")
         return StreamingResponse(
-            _event_stream(job, request, since),
+            _event_stream(job, request),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
