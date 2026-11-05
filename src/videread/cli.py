@@ -47,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--asr",
         dest="asr_backend",
         default=None,
-        help="临时覆盖 ASR 后端（dashscope / dashscope-realtime / openai / local）",
+        help="临时覆盖 ASR 后端（dashscope / dashscope-realtime / openai / local / funasr）",
     )
     parser.add_argument(
         "--force-asr",

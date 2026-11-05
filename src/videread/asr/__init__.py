@@ -29,6 +29,7 @@ _DASHSCOPE_REALTIME_ALIASES = {
 }
 _OPENAI_ALIASES = {"openai", "openai-whisper", "whisper", "whisper-1"}
 _LOCAL_ALIASES = {"local", "local-whisper", "faster-whisper", "whisper-local"}
+_FUNASR_ALIASES = {"funasr", "local-funasr", "paraformer-local"}
 
 
 def get_backend(
@@ -63,8 +64,14 @@ def get_backend(
         return LocalWhisperAsr(
             settings, cache_dir=cache_dir, progress=progress, cancel_check=cancel_check
         )
+    if name in _FUNASR_ALIASES:
+        from .funasr_backend import FunAsrAsr
+
+        return FunAsrAsr(
+            settings, cache_dir=cache_dir, progress=progress, cancel_check=cancel_check
+        )
     raise UsageError(
         "未知的 ASR_BACKEND："
         f"{settings.asr_backend!r}"
-        "（可选 dashscope / dashscope-realtime / openai / local）"
+        "（可选 dashscope / dashscope-realtime / openai / local / funasr）"
     )

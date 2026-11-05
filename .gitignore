@@ -8,6 +8,9 @@ runs/
 # --- 外部程序（ffmpeg / ffprobe 二进制）---
 bin/
 
+# --- 本地模型缓存（FunASR / ModelScope，约 2GB）---
+.models/
+
 # --- Python ---
 __pycache__/
 *.py[cod]
@@ -38,3 +41,6 @@ bilibili_cookies.txt
 .workbuddy-ai/
 # --- 平台 cookies（含凭据，禁止入库） ---
 www.bilibili.com_cookies.txt
+
+# --- 消融实验 LLM 产物（可由脚本重算生成）---
+experiments/ablation/out/
