@@ -31,6 +31,16 @@ _ANY_TAG = re.compile(r"<[^>]+>")
 _MD_BOLD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 _MD_BOLD_UNDERSCORE = re.compile(r"__(.+?)__", re.DOTALL)
 _CLASS_ATTR = re.compile(r'(\s*)class\s*=\s*"([^"]*)"', re.IGNORECASE)
+# 写作规则 7「不是/并非/不在于……而是/而在于」的拆句变体实测会出现「不在…而在」，
+# 单独列出（2026-11-05 消融实验：摘除规则 7-9 后模型用该变体绕开窄匹配）
+FORBIDDEN_STYLE = re.compile(
+    r"不是[^。？！\n]{1,30}而是"
+    r"|并非[^。？！\n]{1,30}而是"
+    r"|不在于[^。？！\n]{1,30}而在于"
+    r"|不在[^。？！\n]{1,30}而在"
+)
+# 写作规则 5-6 的旁观者引导语
+NARRATION_VOICE = re.compile(r"作者认为|视频中提到|他据此判断|笔者认为|我认为")
 
 BRIEF_TARGET_MIN = 1600
 BRIEF_TARGET_MAX = 2200
@@ -185,6 +195,17 @@ def sanitize_section_html(
 
     cleaned = SOURCE_UNITS.sub(_fix_attr, cleaned)
     cleaned = re.sub(r"\s+data-source-units=\"\"", "", cleaned)
+
+    # 规则 5-9 的事后检测：只报警不改写（改写无法确定性判断原意，交给规则约束与复核）
+    text = _ANY_TAG.sub("", cleaned)
+    style_hits = list(dict.fromkeys(FORBIDDEN_STYLE.findall(text)))
+    if style_hits:
+        shown = "；".join(f"「{hit}」" for hit in style_hits[:3])
+        violations.append(f"疑似禁用句式：{shown}{'等' if len(style_hits) > 3 else ''}")
+    voice_hits = list(dict.fromkeys(NARRATION_VOICE.findall(text)))
+    if voice_hits:
+        violations.append(f"疑似旁观者引导语：{'、'.join(voice_hits[:5])}")
+
     return cleaned.strip(), violations
 
 

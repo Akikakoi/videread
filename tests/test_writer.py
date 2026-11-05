@@ -123,6 +123,35 @@ def test_sanitize_keeps_classes_when_no_allowlist_given():
     assert 'class="whatever"' in cleaned
 
 
+# ---------------------------------------------------- 禁用句式 / 引导语检测
+
+
+def test_sanitize_flags_forbidden_style_variants_without_rewriting():
+    """规则 7 的事后检测：各拆句变体都要报警，且只报警不改写。"""
+    for text in (
+        "<p>关键不是火药，而是弹头形状。</p>",
+        "<p>差距并非速度，而是角度。</p>",
+        "<p>问题不在于成本，而在于口径。</p>",
+        # 消融实验实测的绕开变体
+        "<p>关键不在火药，而在弹头形状。</p>",
+    ):
+        cleaned, violations = sanitize_section_html(text, set())
+        assert cleaned == text  # 只报警，不动原文
+        assert any("禁用句式" in item for item in violations)
+
+
+def test_sanitize_flags_narration_voice():
+    cleaned, violations = sanitize_section_html("<p>作者认为模型命中率很高。</p>", set())
+    assert cleaned == "<p>作者认为模型命中率很高。</p>"
+    assert any("旁观者引导语" in item for item in violations)
+
+
+def test_sanitize_no_style_violation_for_plain_text():
+    cleaned, violations = sanitize_section_html("<p>弹头形状决定毁伤机制。</p>", set())
+    assert cleaned == "<p>弹头形状决定毁伤机制。</p>"
+    assert violations == []
+
+
 def test_write_sections_injects_heading_from_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """命中缓存的分节也要补上程序注入的 <h2>，且不应构造 LlmClient。"""
 
