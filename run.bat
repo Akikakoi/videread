@@ -37,9 +37,15 @@ goto :fail
 :python_ok
 echo [1/4] Python OK
 
-rem ---------- 2/4 virtualenv + dependencies ----------
+rem ---------- 2/4 virtualenv + dependencies (uv preferred, pip fallback) ----------
+set "UV="
+uv --version >nul 2>nul
+if not errorlevel 1 set "UV=1"
+
 if exist "%VENV_PY%" goto :venv_ok
+if defined UV goto :uv_install
 echo [2/4] First run: creating .venv and installing deps (needs network) ...
+echo       (tip: install uv for much faster installs - https://docs.astral.sh/uv/)
 %BOOTSTRAP% -m venv "%ROOT%\.venv"
 if errorlevel 1 goto :venv_fail
 "%VENV_PY%" -m pip install --upgrade pip --quiet
@@ -47,6 +53,20 @@ if errorlevel 1 goto :venv_fail
 if errorlevel 1 goto :venv_fail
 echo       dependencies installed
 echo       (for pytest: .venv\Scripts\pip install -e ".[dev]")
+goto :ffmpeg
+
+:uv_install
+echo [2/4] uv detected: creating .venv and installing deps (fast) ...
+if defined BOOTSTRAP (
+  %BOOTSTRAP% -m venv "%ROOT%\.venv"
+) else (
+  uv venv "%ROOT%\.venv"
+)
+if errorlevel 1 goto :venv_fail
+uv pip install -e "%ROOT%" --python "%VENV_PY%" --quiet
+if errorlevel 1 goto :venv_fail
+echo       dependencies installed
+echo       (for pytest: uv pip install -e ".[dev]" --python "%VENV_PY%")
 goto :ffmpeg
 
 :venv_ok
@@ -116,7 +136,11 @@ echo Starting local web frontend at http://127.0.0.1:8765 ...
 "%VENV_PY%" -c "import fastapi, uvicorn" >nul 2>nul
 if errorlevel 1 (
   echo       installing web dependencies ...
-  "%VENV_PY%" -m pip install -e "%ROOT%" --quiet
+  if defined UV (
+    uv pip install -e "%ROOT%" --python "%VENV_PY%" --quiet
+  ) else (
+    "%VENV_PY%" -m pip install -e "%ROOT%" --quiet
+  )
   if errorlevel 1 goto :venv_fail
 )
 "%VENV_PY%" -m videread.web --open
