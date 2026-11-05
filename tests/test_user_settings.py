@@ -48,6 +48,22 @@ def test_clear_removes_file(settings_file: Path):
     assert usersettings.clear_user_llm_settings() is False  # 再删一次
 
 
+def test_clear_keep_asr_preserves_engine_choice(settings_file: Path):
+    """「写作模型恢复默认」不应顺手重置转写引擎的页面选择。"""
+    usersettings.save_user_llm_settings(
+        llm_base_url="https://api.example.com/v1", asr_backend="funasr"
+    )
+    assert usersettings.clear_user_llm_settings(keep_asr=True) is True
+    data = usersettings.load_user_llm_settings()
+    assert data == {"asr_backend": "funasr"}
+
+
+def test_clear_keep_asr_without_asr_removes_file(settings_file: Path):
+    usersettings.save_user_llm_settings(llm_base_url="https://api.example.com/v1")
+    assert usersettings.clear_user_llm_settings(keep_asr=True) is True
+    assert not settings_file.exists()
+
+
 def test_save_rejects_bad_base_url(settings_file: Path):
     with pytest.raises(Exception, match="http"):
         usersettings.save_user_llm_settings(llm_base_url="api.example.com")
@@ -60,6 +76,52 @@ def test_save_keep_keeps_existing_key(settings_file: Path):
     data = usersettings.load_user_llm_settings()
     assert data["llm_api_key"] == "sk-keep-me-1234"
     assert data["llm_model_plan"] == "new-model"
+
+
+# ------------------------------------------------------------- 转写引擎
+
+def test_save_asr_backend_roundtrip(settings_file: Path):
+    usersettings.save_user_llm_settings(asr_backend="dashscope-realtime")
+    assert usersettings.load_user_llm_settings()["asr_backend"] == "dashscope-realtime"
+
+
+def test_save_asr_backend_none_leaves_untouched(settings_file: Path):
+    """asr_backend 不传（None）= 本次调用与转写引擎无关，不动已存值。"""
+    usersettings.save_user_llm_settings(asr_backend="funasr")
+    usersettings.save_user_llm_settings(llm_model_plan="plan-x")
+    assert usersettings.load_user_llm_settings()["asr_backend"] == "funasr"
+    assert usersettings.load_user_llm_settings()["llm_model_plan"] == "plan-x"
+
+
+def test_save_asr_backend_empty_follows_env(settings_file: Path):
+    """空串 = 「跟随 .env」：撤掉已保存的覆盖值。"""
+    usersettings.save_user_llm_settings(asr_backend="funasr")
+    usersettings.save_user_llm_settings(asr_backend="")
+    assert "asr_backend" not in usersettings.load_user_llm_settings()
+    # 本来就没存过时空串也是无害的
+    usersettings.save_user_llm_settings(asr_backend="")
+    assert "asr_backend" not in usersettings.load_user_llm_settings()
+
+
+def test_save_asr_backend_rejects_unknown(settings_file: Path):
+    with pytest.raises(Exception, match="未知的转写引擎"):
+        usersettings.save_user_llm_settings(asr_backend="epic")
+    assert not settings_file.exists() or "asr_backend" not in json.loads(
+        settings_file.read_text(encoding="utf-8")
+    )
+
+
+def test_get_settings_user_asr_overrides_env(
+    settings_file: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("ASR_BACKEND", "funasr")
+    usersettings.save_user_llm_settings(asr_backend="dashscope-realtime")
+    assert get_settings().asr_backend == "dashscope-realtime"
+
+
+def test_get_settings_cli_asr_beats_user(settings_file: Path):
+    usersettings.save_user_llm_settings(asr_backend="funasr")
+    assert get_settings(asr_backend="local").asr_backend == "local"
 
 
 # ----------------------------------------------------------------- 优先级
@@ -109,6 +171,7 @@ def test_api_settings_roundtrip(settings_file: Path, tmp_path: Path):
                 "base_url": "https://api.example.com/v1",
                 "model_plan": "plan-x",
                 "model_write": "write-y",
+                "asr_backend": "funasr",
             },
         )
         assert r.status_code == 200
@@ -116,12 +179,74 @@ def test_api_settings_roundtrip(settings_file: Path, tmp_path: Path):
         assert body["source"] == "custom"
         assert body["has_key"] is True
         assert body["api_key_masked"] == "sk-****7890"
+        assert body["asr_backend"] == "funasr"
+        assert body["asr_backend_custom"] == "funasr"
         # 完整 key 永不出现在响应里
         assert "sk-web-1234567890" not in r.text
 
         r = client.get("/api/settings")
         assert r.status_code == 200
         assert r.json()["base_url"] == "https://api.example.com/v1"
+        assert r.json()["asr_backend_custom"] == "funasr"
+
+        # 选「跟随 .env」= 撤掉覆盖
+        r = client.post("/api/settings", json={"asr_backend": ""})
+        assert r.status_code == 200
+        assert r.json()["asr_backend_custom"] == ""
+
+        # 非法后端 400
+        r = client.post("/api/settings", json={"asr_backend": "epic"})
+        assert r.status_code == 400
+        assert "未知的转写引擎" in r.json()["detail"]
+
+        # 「恢复默认」只清 LLM：先存引擎，再 DELETE，引擎保留
+        client.post("/api/settings/asr", json={"backend": "funasr"})
+        client.delete("/api/settings")
+        assert client.get("/api/settings").json()["asr_backend_custom"] == "funasr"
+        assert client.get("/api/settings").json()["source"] == "env"
+
+
+def test_api_settings_llm_save_leaves_asr_untouched(
+    settings_file: Path, tmp_path: Path
+):
+    """两个页签互不干扰：保存写作模型不带 asr_backend 字段时，引擎配置不动。"""
+    with TestClient(create_app(tmp_path)) as client:
+        client.post("/api/settings/asr", json={"backend": "dashscope-realtime"})
+        r = client.post(
+            "/api/settings",
+            json={
+                "api_key": "sk-web-1234567890",
+                "base_url": "https://api.example.com/v1",
+                "model_plan": "plan-x",
+                "model_write": "write-y",
+            },
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["asr_backend_custom"] == "dashscope-realtime"
+        assert body["asr_backend"] == "dashscope-realtime"
+
+
+def test_api_settings_asr_route(settings_file: Path, tmp_path: Path):
+    """转写引擎独立端点：只碰 asr_backend，LLM 配置不受影响。"""
+    with TestClient(create_app(tmp_path)) as client:
+        client.post(
+            "/api/settings",
+            json={"base_url": "https://api.example.com/v1", "model_plan": "plan-x"},
+        )
+        r = client.post("/api/settings/asr", json={"backend": "funasr"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["asr_backend_custom"] == "funasr"
+        assert body["base_url"] == "https://api.example.com/v1"
+
+        # 空值 / 非法值都 400
+        r = client.post("/api/settings/asr", json={"backend": "  "})
+        assert r.status_code == 400
+        assert "请选择" in r.json()["detail"]
+        r = client.post("/api/settings/asr", json={"backend": "epic"})
+        assert r.status_code == 400
+        assert "未知的转写引擎" in r.json()["detail"]
 
         r = client.delete("/api/settings")
         assert r.status_code == 200

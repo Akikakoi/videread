@@ -546,7 +546,15 @@ html.js .reveal.in{opacity:1;transform:none;}
 #page-pick{scrollbar-width:thin;scrollbar-color:var(--hairline) transparent;}
 
 /* ---------- 模型设置弹窗 ---------- */
-.settings-dialog{max-width:520px;}
+.settings-dialog{max-width:520px;display:grid;}
+/* 三个页签内容占同一网格行：弹窗高度恒等于最高页签，切换页签不再跳尺寸。
+   隐藏页签用 visibility 而非 display:none——前者仍参与撑高、不响应指针、
+   不进键盘焦点序，三者正是这里要的组合 */
+.settings-dialog > .dlg-kicker,
+.settings-dialog > .dlg-title,
+.settings-dialog > .st-tabs{grid-column:1;}
+.settings-dialog > .st-pane{grid-column:1;grid-row:4;visibility:hidden;}
+.settings-dialog > .st-pane.on{visibility:visible;}
 /* ---------- 设置弹窗页签（通用 / 模型） ---------- */
 .st-tabs{display:flex;gap:20px;border-bottom:1px solid var(--hairline);margin-top:4px;}
 .st-tab{
@@ -557,7 +565,7 @@ html.js .reveal.in{opacity:1;transform:none;}
 }
 .st-tab:hover{color:var(--ink);}
 .st-tab.on{color:var(--accent);border-bottom-color:var(--accent);}
-.st-pane{display:none;}
+.st-pane{display:block;}
 .st-pane.on{display:block;}
 /* 通用页签的分段选择（主题 / 模式 / 语言）：复用 .mode 胶囊样式 */
 .st-seg{display:flex;gap:8px;flex-wrap:wrap;}

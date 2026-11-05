@@ -45,7 +45,8 @@
     <h3 class="dlg-title" id="st-title">编辑部设置</h3>
     <div class="st-tabs" role="tablist">
       <button type="button" class="st-tab on" data-tab="general">通用</button>
-      <button type="button" class="st-tab" data-tab="model">模型</button>
+      <button type="button" class="st-tab" data-tab="asr">转写引擎</button>
+      <button type="button" class="st-tab" data-tab="model">写作模型</button>
     </div>
 
     <div class="st-pane on" id="st-pane-general">
@@ -83,6 +84,26 @@
       <p class="st-note" id="st-gen-note"></p>
       <div class="dlg-actions">
         <button class="dlg-btn solid" id="st-gen-save">保存</button>
+      </div>
+    </div>
+
+    <div class="st-pane" id="st-pane-asr">
+      <p class="dlg-body">转写引擎决定语音怎么变成文字：本地引擎免费离线，云端引擎按时长付费、无需下载模型。此处选择即时生效，之后投印的报告都会用它转写；带平台字幕的视频始终跳过转写引擎。</p>
+      <div class="st-form">
+        <label class="st-field">
+          <span>转写引擎（ASR）</span>
+          <select id="st-asr">
+            <option value="funasr">本地 FunASR · 免费离线 · 中文推荐</option>
+            <option value="dashscope-realtime">云端实时通道 · DashScope · 按时长付费</option>
+            <option value="dashscope">云端异步通道 · DashScope · 按时长付费</option>
+            <option value="local">本地 faster-whisper · 免费离线 · 多语</option>
+            <option value="openai">OpenAI 兼容 whisper · 自备服务</option>
+          </select>
+        </label>
+      </div>
+      <p class="st-note" id="st-asr-note"></p>
+      <div class="dlg-actions">
+        <button class="dlg-btn solid" id="st-asr-save">保存</button>
       </div>
     </div>
 

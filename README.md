@@ -30,7 +30,7 @@ run.bat
 | 步骤 | 行为 |
 |---|---|
 | Python | 依次尝试 `py -3` / `python`，缺失则提示安装 Python 3.11+ |
-| 虚拟环境 | 无 `.venv` 时创建并 `pip install -e .`，已存在则跳过 |
+| 虚拟环境 | 优先用 `uv` 创建 `.venv` 并安装依赖（快一个量级；无 uv 回退 pip），已存在则跳过 |
 | ffmpeg | 优先项目 `bin\`，其次系统 PATH；都没有则从 npmmirror 下载静态包解压到 `bin\` |
 | 配置 | 无 `.env` 时从 `.env.example` 复制并提示填写密钥 |
 
@@ -58,7 +58,7 @@ pip install -e .
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
-| `ASR_BACKEND` | 是 | `dashscope` / `dashscope-realtime` / `openai` / `local` |
+| `ASR_BACKEND` | 是 | `dashscope` / `dashscope-realtime` / `openai` / `local` / `funasr` |
 | `DASHSCOPE_API_KEY` | 用 `dashscope*` 时 | 阿里云百炼（Model Studio）API Key |
 | `DASHSCOPE_BASE_URL` | 否 | 默认 `https://dashscope.aliyuncs.com/api/v1`；私有化 MaaS 部署可覆盖 |
 | `DASHSCOPE_MODEL` | 否 | 默认 `paraformer-v2`；实时后端未含 `realtime` 关键字时自动改用 `paraformer-realtime-v2` |
@@ -139,7 +139,7 @@ python -m videread.cli BV1xx411c7mD
 
 ## Web 前端（编辑风）
 
-不想敲命令时用本地 Web 服务：浏览器打开后会进入杂志编辑风的「编辑部」界面，包含投印新篇（提交 BV 号 / 本地文件，多P 可选，可选报告语言）、本期特稿（最新一期报告的完整排版与操作）、往期目录（全部报告：分页 / 关键词 / 收藏 / 全文检索 / 改名 / 删除 / 单份与批量导出）、印务统计（按日耗时与 token）四大板块；右上角「设置」可就地配置 LLM 网关与模型（存用户级配置，优先于 `.env`，免改文件重启）。投印提交后进入独立工单页，实时显示 8 阶段步进器与排印日志，可随时取消。
+不想敲命令时用本地 Web 服务：浏览器打开后会进入杂志编辑风的「编辑部」界面，包含投印新篇（提交 BV 号 / 本地文件，多P 可选，可选报告语言）、本期特稿（最新一期报告的完整排版与操作）、往期目录（全部报告：分页 / 关键词 / 收藏 / 全文检索 / 改名 / 删除 / 单份与批量导出）、印务统计（按日耗时与 token）四大板块；右上角「设置」可就地配置转写引擎（本地 FunASR / 云端 DashScope / 本地 faster-whisper 等，存用户级配置，优先于 `.env`）与 LLM 网关、模型（同样存用户级配置，免改文件重启）。投印提交后进入独立工单页，实时显示 8 阶段步进器与排印日志，可随时取消。
 
 | 本期特稿 | 往期目录 |
 |---|---|
@@ -167,7 +167,7 @@ videread-web                     # 安装后的服务命令
 
 约定与限制：
 
-- **同一时刻只执行一个任务，其余排队**：提交时若已有任务在跑，新任务进入 FIFO 队列（上限 10 个，超出返回 409），前一个结束后自动开跑；串行既是个人工具的取舍，也避免争用同一 run 目录、重复付费。批量场景也可以直接用 CLI 的 `.txt` 列表。
+- **同一时刻只执行一个任务，其余排队**：提交时若已有任务在跑，新任务进入 FIFO 队列（上限 10 个，超出返回 409），前一个结束后自动开跑；串行既是个人工具的取舍，也避免争用同一 run 目录、重复付费。队列落盘在产物根目录的 `.jobs.sqlite3`：服务重启后排队任务自动恢复执行，重启时正在跑的任务标记为已中断（已落盘产物保留，重新提交同一视频即断点续跑）。批量场景也可以直接用 CLI 的 `.txt` 列表。
 - **支持取消**：工单页点「取消投印」，流水线在最近的检查点（阶段边界、ASR 切段之间、逐节写作各节之间）停止；排队中的任务直接出队。已落盘产物照常保留，重新提交同一视频即可从断点续跑，已完成的节不再重复付费；只有命中已有报告并确认「覆盖重印」时才会忽略缓存全量重跑。
 - **主题**：报头开关在浅色 / 深色两档间直接切换，默认浅色；选择存浏览器 localStorage，换浏览器不迁移。深色为「深夜印刷间」配色（深纸底 / 暖白字 / 强调红提亮），主页、阅读页、工单页三页同步。
 - **收藏报告**：目录行「☆」按报告（run）标记收藏，收藏开关只显示收藏项并按收藏先后排序；收藏存在产物根目录的 `.favorites.json`，删除报告时同步摘除，换 `--out` 则跟随该目录。
@@ -217,7 +217,8 @@ videread-web                     # 安装后的服务命令
 | `dashscope` | 异步：`getPolicy` → OSS 直传 → 提交任务 → 轮询 | 账号对 `dashscope-instant` 即时桶有授权时，可并行切段 |
 | `dashscope-realtime` | 实时：WebSocket 二进制帧直推 | 不经 OSS 桶，**不受对象归属校验限制**；长音频切段后多路并行推流（`ASR_MAX_CONCURRENCY` × `ASR_REALTIME_SPEEDUP` 倍速） |
 | `openai` | OpenAI 兼容 `audio/transcriptions` | 自备 whisper 类服务 |
-| `local` | 本地 faster-whisper（CTranslate2） | **离线、免费**；可选依赖（`pip install -e ".[local]"`），首次运行下载模型（国内可设 `HF_ENDPOINT=https://hf-mirror.com` 走镜像），速度取决于机器性能 |
+| `funasr` | 本地 FunASR（paraformer-zh + fsmn-vad + ct-punc） | **中文首选的离线后端**：中文准确率更高、自带标点，模型经 ModelScope 国内源下载；可选依赖（`pip install -e ".[funasr]"`），取消只在调用边界生效 |
+| `local` | 本地 faster-whisper（CTranslate2） | 离线、免费、多语；可选依赖（`pip install -e ".[local]"`），首次运行下载模型（国内可设 `HF_ENDPOINT=https://hf-mirror.com` 走镜像），速度取决于机器性能 |
 
 若异步后端报 `403 Resource.AccessDenied`（提示 `OSS Resource oss://dashscope-instant/... access denied`），属账号对即时桶无读取授权，换 Key 不解决，改用 `dashscope-realtime` 即可。
 

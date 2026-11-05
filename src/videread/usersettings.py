@@ -1,4 +1,4 @@
-"""用户在 Web 界面填写的 LLM 配置（自定义 API Key / 网关 / 模型）。
+"""用户在 Web 界面填写的模型配置（自定义 API Key / 网关 / 模型 / 转写引擎）。
 
 存放在项目根的 `.llm-settings.json`（已加入 .gitignore，不入库）。
 配置分层优先级：CLI 显式参数 > 本文件 > `.env` / 环境变量 > 内置默认。
@@ -19,7 +19,16 @@ from .errors import UsageError
 SETTINGS_FILE = PROJECT_ROOT / ".llm-settings.json"
 
 # 允许落盘的字段白名单；多余键一律丢弃，避免把任意内容写进 JSON
-_ALLOWED_FIELDS = ("llm_api_key", "llm_base_url", "llm_model_plan", "llm_model_write")
+_ALLOWED_FIELDS = (
+    "llm_api_key",
+    "llm_base_url",
+    "llm_model_plan",
+    "llm_model_write",
+    "asr_backend",
+)
+
+#: 转写引擎白名单：与 asr 工厂支持的后端一一对应（空值 = 跟随 .env，不落盘）
+_ASR_BACKENDS = ("funasr", "dashscope", "dashscope-realtime", "openai", "local")
 
 _URL_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
@@ -59,11 +68,15 @@ def save_user_llm_settings(
     llm_base_url: str = "",
     llm_model_plan: str = "",
     llm_model_write: str = "",
+    asr_backend: str | None = None,
 ) -> dict[str, str]:
     """整体覆盖式保存（前端每次提交完整表单）；空值字段不写入。
 
     api_key 传 "keep" 表示沿用已保存的 key（前端「留空保持不变」语义
     由路由层翻译成 keep，这里不感知）。
+    asr_backend 传 None 表示本次不涉及（调用方未提供该字段）；
+    传空串表示「跟随 .env」（删除已保存的覆盖值）；
+    传具体后端名则校验白名单后落盘。
     """
     updates: dict[str, str] = {}
     if llm_api_key and llm_api_key != "keep":
@@ -80,10 +93,25 @@ def save_user_llm_settings(
             raise UsageError(f"Base URL 必须以 http(s):// 开头：{value!r}")
         updates[name] = value
 
+    removals: list[str] = []
+    if asr_backend is not None:
+        backend = asr_backend.strip().lower()
+        if not backend:
+            removals.append("asr_backend")  # 跟随 .env：撤掉用户覆盖
+        elif backend in _ASR_BACKENDS:
+            updates["asr_backend"] = backend
+        else:
+            raise UsageError(
+                "未知的转写引擎："
+                f"{asr_backend!r}（可选 {' / '.join(_ASR_BACKENDS)}，留空跟随 .env）"
+            )
+
     with _lock:
-        if not updates:
-            return load_user_llm_settings()
         current = load_user_llm_settings()
+        if not updates and not removals:
+            return current
+        for key in removals:
+            current.pop(key, None)
         current.update(updates)
         tmp = SETTINGS_FILE.with_suffix(".json.tmp")
         tmp.write_text(
@@ -93,9 +121,31 @@ def save_user_llm_settings(
     return load_user_llm_settings()
 
 
-def clear_user_llm_settings() -> bool:
-    """删除用户配置文件，回退 .env / 内置默认；文件不存在返回 False。"""
+def clear_user_llm_settings(*, keep_asr: bool = False) -> bool:
+    """删除用户配置，回退 .env / 内置默认；文件不存在返回 False。
+
+    keep_asr=True 时只清 LLM 字段、保留转写引擎的页面选择——
+    「写作模型恢复默认」不该顺手重置另一个页签的配置。
+    """
     with _lock:
+        if keep_asr:
+            remaining = {
+                k: v
+                for k, v in load_user_llm_settings().items()
+                if k == "asr_backend"
+            }
+            if not remaining:
+                try:
+                    SETTINGS_FILE.unlink()
+                    return True
+                except FileNotFoundError:
+                    return False
+            tmp = SETTINGS_FILE.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps(remaining, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            tmp.replace(SETTINGS_FILE)
+            return True
         try:
             SETTINGS_FILE.unlink()
             return True

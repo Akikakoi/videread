@@ -86,12 +86,22 @@ class BatchExportRequest(BaseModel):
 
 
 class LlmSettingsRequest(BaseModel):
-    """模型设置表单：api_key 留空 = 沿用已保存的 key（前端语义）。"""
+    """写作模型设置表单：api_key 留空 = 沿用已保存的 key（前端语义）。
+
+    asr_backend 不属于本表单：缺省 None = 完全不碰转写引擎配置。
+    """
 
     api_key: str = ""
     base_url: str = ""
     model_plan: str = ""
     model_write: str = ""
+    asr_backend: str | None = None
+
+
+class AsrSettingsRequest(BaseModel):
+    """转写引擎设置表单：页面选项即事实源，保存即生效。"""
+
+    backend: str
 
 
 class ModelListRequest(BaseModel):
@@ -378,6 +388,10 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
             asr_model = os.environ.get("OPENAI_ASR_MODEL", "").strip() or "whisper-1"
         elif backend == "local":
             asr_model = os.environ.get("LOCAL_ASR_MODEL", "").strip() or "faster-whisper/small"
+        elif backend == "funasr":
+            asr_model = (
+                os.environ.get("FUNASR_MODEL", "").strip() or "paraformer-zh"
+            ) + "（本地）"
         return {
             "asr_backend": s.asr_backend,
             "asr_model": asr_model,
@@ -535,6 +549,10 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
             "api_key_masked": usersettings.mask_key(s.llm_api_key),
             "has_key": bool(s.llm_api_key),
             "source": "custom" if user.get("llm_api_key") else "env",
+            # 转写引擎：asr_backend 是当前生效值（含用户覆盖），
+            # asr_backend_custom 是用户落盘的覆盖值（空 = 跟随 .env）
+            "asr_backend": s.asr_backend,
+            "asr_backend_custom": user.get("asr_backend", ""),
         }
 
     @app.get("/api/settings")
@@ -543,22 +561,38 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
 
     @app.post("/api/settings")
     def api_save_settings(payload: LlmSettingsRequest) -> dict:
-        """保存模型设置；空 base_url / 模型名不覆盖已有值。"""
+        """保存写作模型设置；空 base_url / 模型名不覆盖已有值。
+
+        只碰 LLM 字段，转写引擎配置不受影响（各页签互不干扰）。
+        """
         try:
             usersettings.save_user_llm_settings(
                 llm_api_key=(payload.api_key or "").strip() or "keep",
                 llm_base_url=payload.base_url,
                 llm_model_plan=payload.model_plan,
                 llm_model_write=payload.model_write,
+                asr_backend=payload.asr_backend,
             )
+        except UsageError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _settings_payload()
+
+    @app.post("/api/settings/asr")
+    def api_save_asr_settings(payload: AsrSettingsRequest) -> dict:
+        """保存转写引擎设置；只碰 asr_backend，写作模型配置不受影响。"""
+        backend = (payload.backend or "").strip().lower()
+        if not backend:
+            raise HTTPException(status_code=400, detail="请选择一个转写引擎")
+        try:
+            usersettings.save_user_llm_settings(asr_backend=backend)
         except UsageError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _settings_payload()
 
     @app.delete("/api/settings")
     def api_clear_settings() -> dict:
-        """删除用户配置，回退 .env / 内置默认。"""
-        usersettings.clear_user_llm_settings()
+        """清空写作模型配置，回退 .env / 内置默认；转写引擎的页面选择保留。"""
+        usersettings.clear_user_llm_settings(keep_asr=True)
         return _settings_payload()
 
     @app.post("/api/settings/test")

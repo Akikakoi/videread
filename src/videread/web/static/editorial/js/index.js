@@ -1424,6 +1424,15 @@ function openSettings(){
     $("#st-base-url").value = s.base_url || "";
     $("#st-model-plan").value = s.model_plan || "";
     $("#st-model-write").value = s.model_write || "";
+    /* 转写引擎：页面选项即事实源。打开时预选当前生效的后端
+       （用户覆盖过用覆盖值，否则用 .env 的值兜底），保存即以页面所选为准；
+       生效值不在选项里（罕见别名）时动态补一项，保证回显不丢 */
+    const asrSel = $("#st-asr");
+    const asrNow = s.asr_backend_custom || s.asr_backend || "funasr";
+    if(!asrSel.querySelector('option[value="' + asrNow + '"]')){
+      asrSel.add(new Option(asrNow + "（当前生效）", asrNow));
+    }
+    asrSel.value = asrNow;
     const keyInput = $("#st-api-key");
     keyInput.value = "";
     keyInput.placeholder = s.has_key
@@ -1457,6 +1466,31 @@ function settingsForm(){
     model_write: $("#st-model-write").value.trim()
   };
 }
+
+function setAsrNote(html, ok){
+  const note = $("#st-asr-note");
+  if(!note) return;
+  note.innerHTML = html;
+  note.classList.toggle("ok", ok === true);
+  note.classList.toggle("bad", ok === false);
+}
+
+$("#st-asr-save").addEventListener("click", async () => {
+  const btn = $("#st-asr-save");
+  const backend = $("#st-asr").value;
+  if(!backend){ setAsrNote("请选择一个转写引擎", false); return; }
+  btn.disabled = true;
+  try{
+    await post("/api/settings/asr", {backend});
+    setAsrNote("已保存，之后投印的报告都会用它转写", true);
+    toast("转写引擎已切换：" + backend);
+    updateConfFootnote();
+  }catch(e){
+    setAsrNote("保存失败：" + esc(e.message), false);
+  }finally{
+    btn.disabled = false;
+  }
+});
 
 /* 按当前 Key / 网关拉取可用模型列表；模型输入框点开即出下拉面板 */
 let stModelCache = [];      /* 最近一次拉到的模型 id */
