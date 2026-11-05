@@ -7,13 +7,16 @@
 
 from __future__ import annotations
 
+import json
 import queue
 import re
+import sqlite3
 import threading
 import traceback
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from .. import failures
 from ..errors import (
@@ -82,6 +85,10 @@ class Job:
         self._subscribers: list[queue.Queue] = []
         self._lock = threading.Lock()
         self._cancel_event = threading.Event()
+        # 落盘钩子由 JobManager 注入（Job 自身不知道存储层的存在）：
+        # 阶段推进 / 定期 / 终态时把快照写进 SQLite，服务重启后可恢复
+        self.persist_hook: Callable[[], None] | None = None
+        self._last_persist_len = 0
 
     # ---------------------------------------------------------------- 事件分发
 
@@ -111,13 +118,21 @@ class Job:
     def progress(self, line: str) -> None:
         """传给 `pipeline.run(progress=...)`；在主线程之外被调用。"""
         match = _STAGE_RE.match(line)
+        stage_changed = False
         if match:
             index = int(match.group(1))
             if index != self.stage_index:
                 self.stage_index = index
+                stage_changed = True
                 self.emit("stage", index=index)
         self.logs.append(line)
         self.emit("log", line=line)
+        # 落盘节流：阶段边界必存，日志每 25 行存一次，终态由调用方兜底保存
+        if self.persist_hook is not None and (
+            stage_changed or len(self.logs) - self._last_persist_len >= 25
+        ):
+            self._last_persist_len = len(self.logs)
+            self.persist_hook()
 
     # -------------------------------------------------------------------- 取消
 
@@ -169,6 +184,145 @@ class Job:
             "finished_at": self.finished_at,
         }
 
+    @classmethod
+    def from_row(cls, row: dict, *, out_root: Path) -> "Job":
+        """从 SQLite 行还原任务句柄（服务重启后的队列恢复用）。"""
+        job = cls(
+            url=str(row["url"]),
+            mode=str(row["mode"]),
+            no_cache=bool(row["no_cache"]),
+            keep_audio=bool(row["keep_audio"]),
+            out_root=out_root,
+            frames=None if row["frames"] is None else bool(row["frames"]),
+            retry=bool(row["retry"]),
+            lang=row["lang"],
+        )
+        job.id = str(row["id"])
+        job.created_at = str(row["created_at"] or job.created_at)
+        job.state = str(row["state"])
+        job.stage_index = int(row["stage_index"] or 0)
+        job.run_id = row["run_id"]
+        job.exit_code = row["exit_code"]
+        job.error = row["error"]
+        job.hint = row["hint"]
+        job.cancel_requested = bool(row["cancel_requested"])
+        job.finished_at = row["finished_at"]
+        try:
+            job.logs = list(json.loads(row["logs"] or "[]"))
+        except json.JSONDecodeError:
+            pass
+        job._last_persist_len = len(job.logs)
+        return job
+
+
+class JobStore:
+    """任务队列的 SQLite 落盘。
+
+    服务重启后：queued 任务重新入队（流水线本身支持断点续跑），running 任务
+    标记为 cancelled 终态并提示续跑方式。落盘失败一律静默降级——内存态仍是
+    权威，存储层坏了不能拖垮任务执行。
+    """
+
+    _SCHEMA = """
+    CREATE TABLE IF NOT EXISTS jobs (
+        id TEXT PRIMARY KEY,
+        created_at TEXT,
+        finished_at TEXT,
+        url TEXT,
+        mode TEXT,
+        no_cache INTEGER,
+        keep_audio INTEGER,
+        frames INTEGER,
+        retry INTEGER,
+        lang TEXT,
+        state TEXT,
+        stage_index INTEGER,
+        run_id TEXT,
+        exit_code INTEGER,
+        error TEXT,
+        hint TEXT,
+        cancel_requested INTEGER,
+        logs TEXT
+    )
+    """
+
+    #: 终态任务在 SQLite 里保留的条数上限（备查历史，超出清最旧的）
+    _KEEP_TERMINAL = 100
+
+    def __init__(self, path: Path) -> None:
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute(self._SCHEMA)
+        self._conn.commit()
+
+    def save(self, job: Job) -> None:
+        """整行快照覆盖写；任何 SQLite 错误都吞掉（见类注释）。"""
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO jobs VALUES "
+                    "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        job.id,
+                        job.created_at,
+                        job.finished_at,
+                        job.url,
+                        job.mode,
+                        int(job.no_cache),
+                        int(job.keep_audio),
+                        job.frames,
+                        int(job.retry),
+                        job.lang,
+                        job.state,
+                        job.stage_index,
+                        job.run_id,
+                        job.exit_code,
+                        job.error,
+                        job.hint,
+                        int(job.cancel_requested),
+                        json.dumps(job.logs[-400:], ensure_ascii=False),
+                    ),
+                )
+                self._conn.commit()
+        except sqlite3.Error:
+            pass
+
+    def load_all(self) -> list[dict]:
+        """按提交顺序取全部任务行；损坏的库当作空表处理。"""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT * FROM jobs ORDER BY rowid"
+                ).fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error:
+            return []
+
+    def prune_terminal(self) -> None:
+        try:
+            with self._lock:
+                stale = [
+                    row["id"]
+                    for row in self._conn.execute(
+                        "SELECT id FROM jobs WHERE state IN ('done','error','cancelled') "
+                        "ORDER BY rowid DESC"
+                    ).fetchall()[self._KEEP_TERMINAL:]
+                ]
+                for job_id in stale:
+                    self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+                self._conn.commit()
+        except sqlite3.Error:
+            pass
+
+    def close(self) -> None:
+        try:
+            with self._lock:
+                self._conn.close()
+        except sqlite3.Error:
+            pass
+
 
 class JobManager:
     """FIFO 队列：同一时刻只执行一个任务，其余任务排队等待。
@@ -188,6 +342,55 @@ class JobManager:
         self._jobs: dict[str, Job] = {}
         self._queue: list[Job] = []
         self._active: Job | None = None
+        self._store = self._open_store()
+        self._recover()
+
+    def _open_store(self) -> JobStore | None:
+        """SQLite 不可用（路径只读 / 文件损坏等）时退化为纯内存队列。"""
+        try:
+            self.out_root.mkdir(parents=True, exist_ok=True)
+            return JobStore(self.out_root / ".jobs.sqlite3")
+        except (sqlite3.Error, OSError):
+            return None
+
+    def _persist(self, job: Job) -> None:
+        if self._store is not None:
+            self._store.save(job)
+
+    def _recover(self) -> None:
+        """服务重启后的队列恢复（对应 README「支持取消」的断点续跑约定）。
+
+        - queued：重新入队，流水线会从已落盘的产物续跑；
+        - running：进程没了，任务无法确认死在哪一步，置为 cancelled 终态并
+          指引用户重新提交（重新提交命中已有产物即续跑，不重复付费）。
+        """
+        if self._store is None:
+            return
+        for row in self._store.load_all():
+            state = row["state"]
+            if state not in ("queued", "running"):
+                continue  # 终态任务留在库里备查，不占会话内存
+            job = Job.from_row(row, out_root=self.out_root)
+            with self._lock:
+                self._jobs[job.id] = job
+                if state == "queued":
+                    self._queue.append(job)
+            if state == "queued":
+                job.emit("log", line="[恢复] 服务重启，任务已从队列恢复，等待执行")
+            else:
+                job.state = "cancelled"
+                job.exit_code = EXIT_CANCELLED
+                job.error = "服务重启，任务中断"
+                job.hint = "已完成的阶段产物保留；重新提交同一视频可断点续跑"
+                job.finished_at = _now()
+                job.emit(
+                    "cancelled",
+                    state="cancelled",
+                    message="服务重启，任务中断；重新提交可断点续跑",
+                )
+            self._persist(job)
+        # 恢复的排队任务不会经过 submit()，这里手动放行 worker
+        self._start_next()
 
     def get(self, job_id: str) -> Job | None:
         with self._lock:
@@ -213,6 +416,8 @@ class JobManager:
                 self._queue.remove(job)
             was_active = self._active is job
         accepted = job.request_cancel()
+        if accepted:
+            self._persist(job)  # 排队任务被秒取消时这里是它的终态落盘点
         if accepted and was_active and job.terminal:
             # 执行中的任务被秒取消（如还在排队检查点前）：立即放行下一个
             self._start_next()
@@ -250,6 +455,7 @@ class JobManager:
                 retry=retry,
                 lang=lang,
             )
+            job.persist_hook = lambda j=job: self._persist(j)
             self._jobs[job.id] = job
             self._prune_jobs_locked()
             self._queue.append(job)
@@ -262,6 +468,7 @@ class JobManager:
                 line=f"[排队] 已加入队列，当前排在第 {queue_position} 位"
                 f"（共 {queue_position} 个等待）",
             )
+        self._persist(job)
         return job
 
     def _prune_jobs_locked(self) -> None:
@@ -301,6 +508,7 @@ class JobManager:
     def _execute(self, job: Job) -> None:
         job.state = "running"
         job.emit("status", state="running")
+        self._persist(job)
         try:
             report = pipeline_run(
                 job.url,
@@ -327,11 +535,13 @@ class JobManager:
                 run_id=job.run_id,
                 report_url=f"/report/{job.run_id}",
             )
+            self._persist_terminal(job)
         except CancelledError:
             # 取消是独立终态（不是失败）：已落盘产物保留，重新提交可断点续跑
             job.exit_code = EXIT_CANCELLED
             self._finish(job, "cancelled")
             job.emit("cancelled", state="cancelled", message="任务已取消")
+            self._persist_terminal(job)
         except VidereadError as exc:
             self._fail(job, int(exc.exit_code), str(exc))
         except BaseException as exc:  # 兜底：未归类异常也要有终态，避免前端挂住
@@ -350,8 +560,20 @@ class JobManager:
         job.hint = hint or failures.hint(exit_code)
         self._finish(job, "error")
         job.emit("error", exit_code=exit_code, state="error", message=error, hint=job.hint)
+        self._persist_terminal(job)
 
-    @staticmethod
-    def _finish(job: Job, state: str) -> None:
+    def _finish(self, job: Job, state: str) -> None:
+        """终态收尾：先置状态与事件（订阅者/轮询立即看到终态），再落盘裁剪。
+
+        落盘放在 emit 之后是有意的：SQLite commit 有毫秒级耗时，若夹在
+        「置终态」和「emit 终态」之间，轮询方会看到 state=done 但事件流
+        还没到 done 的窗口（test_web 的 kinds[-1] 断言就是这么被打破的）。
+        """
         job.state = state
         job.finished_at = _now()
+
+    def _persist_terminal(self, job: Job) -> None:
+        """终态落盘 + 终态历史裁剪（在终态事件 emit 之后调用）。"""
+        self._persist(job)
+        if self._store is not None:
+            self._store.prune_terminal()
