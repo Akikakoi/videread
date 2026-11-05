@@ -532,13 +532,17 @@ body {
 <main class="report-canvas">
   <header class="report-head">
     <h1>{{TITLE}}</h1>
+    {%- if SUBTITLE %}
     <p class="subtitle">{{SUBTITLE}}</p>
+    {%- endif %}
     <p class="lead">{{LEAD}}</p>
     <p class="attribution">{{ATTRIBUTION}}</p>
+    {%- if VIDEO_DESCRIPTION %}
     <details class="meta-fold">
       <summary>{{DESC_TITLE}}</summary>
       <div class="meta-fold-body">{{VIDEO_DESCRIPTION}}</div>
     </details>
+    {%- endif %}
   </header>
 
   <!--

@@ -1,14 +1,20 @@
 """模板填充与自包含检查（对应开发文档 §6.10 / §8.1）。
 
-模板本身是完整 HTML，只做占位符的纯 `str.replace` 替换，**不做 HTML 转义**。
+模板渲染用 Jinja2（``autoescape=False``）：``{{NAME}}`` 占位符与 Jinja2 变量语法
+天然同形，可选块（副标题 / 视频简介）用 ``{% if NAME %}`` 控制空值整块删除。
+LLM 正文等 HTML 片段按 §6.10 约定**不做转义**，平台元信息在上游转义后再注入。
 """
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime
 from html import escape
 from pathlib import Path
+
+from jinja2 import Environment, StrictUndefined
+from jinja2.exceptions import UndefinedError
 
 from .config import Settings
 from .download import VideoMeta
@@ -32,14 +38,9 @@ _INCLUDES = {
 }
 _INCLUDE = re.compile(r"<!--#include:([A-Z0-9_]+)-->")
 
-# 可选占位符为空时整块删除（§8.1：空则整行 / 整块删除）
-_OPTIONAL_BLOCKS = {
-    "SUBTITLE": re.compile(r"[ \t]*<p class=\"subtitle\">\{\{SUBTITLE\}\}</p>[ \t]*\n?"),
-    "VIDEO_DESCRIPTION": re.compile(
-        r"[ \t]*<details class=\"meta-fold\">.*?</details>[ \t]*\n?", re.DOTALL
-    ),
-    "TIMEMAP": re.compile(r"[ \t]*\{\{TIMEMAP\}\}[ \t]*\n?"),
-}
+#: 可选占位符缺省值：Jinja2 未知变量会抛错（StrictUndefined），
+#: 而可选块语义是「不传 = 整块隐藏」，渲染前先补空串
+_OPTIONAL_DEFAULTS = {name: "" for name in OPTIONAL_PLACEHOLDERS}
 
 #: 转写单元 id 形如 `u0001`（`transcript.build_units` 顺序生成，`merge_subtitles` 保持）
 _UNIT_ID = re.compile(r"^u(\d+)$")
@@ -99,7 +100,7 @@ def template_for(mode: str) -> Path:
 
 
 def render_report(*, template: Path, ctx: dict[str, str], out: Path) -> None:
-    """把 ctx 填入模板并写盘；必需占位符缺失时抛 RenderError（提示具体名称）。"""
+    """把 ctx 填入模板并写盘；必需占位符缺失 / 模板引用未知变量时抛 RenderError。"""
     try:
         html = _expand_includes(template.read_text(encoding="utf-8"))
     except OSError as exc:
@@ -117,19 +118,16 @@ def render_report(*, template: Path, ctx: dict[str, str], out: Path) -> None:
             + "、".join(f"{{{{{name}}}}}" for name in missing)
         )
 
-    text = html
-    for name, pattern in _OPTIONAL_BLOCKS.items():
-        value = str(ctx.get(name, "") or "").strip()
-        if value:
-            continue
-        stripped, count = pattern.subn("", text)
-        if count == 0:
-            # 模板结构与预期不符时退化为清空占位符，避免留下空标签
-            stripped = text.replace(f"{{{{{name}}}}}", "")
-        text = stripped
-
-    for name in (*REQUIRED_PLACEHOLDERS, *_CHROME_REQUIRED, *OPTIONAL_PLACEHOLDERS):
-        text = text.replace(f"{{{{{name}}}}}", str(ctx.get(name, "") or ""))
+    environment = Environment(
+        autoescape=False,  # §6.10：LLM 输出的 HTML 片段不转义；元信息上游已 escape
+        keep_trailing_newline=True,
+        undefined=StrictUndefined,  # 未知变量直接报错，等价于旧的 leftover 检查
+    )
+    try:
+        text = environment.from_string(html).render({**_OPTIONAL_DEFAULTS, **ctx})
+    except UndefinedError as exc:
+        name = (exc.message or "").strip("'")
+        raise RenderError(f"模板存在未提供值的占位符：{name}") from exc
 
     leftover = sorted(set(_PLACEHOLDER.findall(text)))
     if leftover:
@@ -287,6 +285,8 @@ def sources(
     asr_label = settings.asr_backend
     if asr_label == "dashscope":
         asr_label = f"dashscope / {settings.dashscope_model}"
+    if asr_label == "funasr":
+        asr_label = f"funasr / {os.environ.get('FUNASR_MODEL', '').strip() or 'paraformer-zh'}"
     if subtitle_first and units and all(unit.source == "subtitle" for unit in units):
         # 本次完全由平台字幕建稿 = 没调用 ASR，报告里必须如实说明
         asr_label = chrome["subtitle_first"]
