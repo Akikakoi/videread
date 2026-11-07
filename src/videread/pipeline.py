@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import uuid
 import webbrowser
@@ -53,6 +54,7 @@ from .report import write as write_outline
 from .report.writer import brief_hard_max, existing_sections
 from .trace import TraceWriter
 from .transcript import (
+    TRANSCRIPT_FORMAT_VERSION,
     TranscriptUnit,
     build_units,
     format_time,
@@ -96,6 +98,20 @@ def _cached(text: str) -> str:
 
 
 _ASR_PARTIAL = "asr.partial.json"
+_TRANSCRIPT_VERSION = "transcript.version"
+
+
+def _transcript_version_ok(run_dir: Path) -> bool:
+    """缓存里的转写是否由当前派生规则生成。
+
+    旧 run 没有版本文件；build_units / parse_srt 修复后需要重建一次
+    （只重算本地文本，不重新调用 ASR）。
+    """
+    try:
+        value = (run_dir / _TRANSCRIPT_VERSION).read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    return value == str(TRANSCRIPT_FORMAT_VERSION)
 
 
 def _clear_frames(run_dir: Path) -> bool:
@@ -128,6 +144,25 @@ def _clear_overwritten_artifacts(run_dir: Path) -> None:
 
 _MODE_MARKER = "run.mode"
 
+# 报告来源区块记录了渲染时使用的阅读模式（模式名固定英文）。旧 run 没有
+# `run.mode` 标记，切换模式时无法判断正文属于哪种模式；从报告反推一次，
+# 既能迁移旧缓存，又不会让「同模式重跑」误付一次正文重写。
+_MODE_LABEL = re.compile(
+    r"(?:阅读模式|Reading mode|閲読モード)\s*[：:]\s*(Standard|Deep|Brief|Outline)",
+    re.IGNORECASE,
+)
+
+
+def _infer_report_mode(run_dir: Path) -> str:
+    """从已有 report.html 反推阅读模式；没有报告或旧模板无标记时返回空串。"""
+    path = run_dir / "report.html"
+    try:
+        html = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    match = _MODE_LABEL.search(html)
+    return match.group(1).strip().lower() if match else ""
+
 
 def _sync_mode(run_dir: Path, mode: str) -> bool:
     """记录本次阅读模式，返回是否发生了模式切换。
@@ -135,13 +170,21 @@ def _sync_mode(run_dir: Path, mode: str) -> bool:
     正文片段只按语言做了缓存标记，不会区分 standard / brief / outline；
     换模式时若直接复用旧片段，会拼出旧篇幅与旧组件的正文。因此模式变化时
     先清空 `sections/`，让调用方置 `force_report` 重写正文与重渲染。
+
+    标记缺失（历史产物）时从报告反推模式：反推得到旧模式就按它比较；
+    反推不出（无报告 / 旧模板）且本次要求非默认模式，则视为一次模式变化。
+    这样同模式重跑旧 run 不会白付一次 LLM，切换模式又能真正生效。
     """
     marker = run_dir / _MODE_MARKER
     try:
         previous = marker.read_text(encoding="utf-8").strip().lower()
     except OSError:
         previous = ""
+    if previous not in REPORT_MODES:
+        previous = _infer_report_mode(run_dir)
     changed = bool(previous) and previous != mode
+    if not previous and mode != "standard":
+        changed = True
     if changed:
         shutil.rmtree(run_dir / "sections", ignore_errors=True)
     try:
@@ -152,11 +195,44 @@ def _sync_mode(run_dir: Path, mode: str) -> bool:
     return changed
 
 
+def _section_lang(lang: str) -> str:
+    """与 `report.writer._norm_lang` 同口径：zh 变体折叠为 zh。
+
+    片段首行标记按折叠后的语言写入；这里不折叠会把 zh-CN 的完整缓存
+    误判为缺失，导致每次重跑都空转一次逐节写作判定。
+    """
+    value = (lang or "").strip().lower()
+    return "zh" if value in {"", "zh-cn", "zh-hans"} else value
+
+
 def _sections_complete(out_dir: Path, outline: Outline, lang: str) -> bool:
     """全部小节都有**同语言**的非空片段才算完整（片段与语言绑定，
     见 existing_sections：换语言后旧片段必须重写而非复用）。"""
-    found = existing_sections(out_dir, lang)
+    found = existing_sections(out_dir, _section_lang(lang))
     return all(found.get(section.id) for section in outline.sections)
+
+
+def _report_is_stale(run_dir: Path, report_path: Path) -> bool:
+    """报告是否落后于它的大纲 / 正文片段（mtime 兜底）。
+
+    `force_report` 已覆盖正常路径；这里再按文件时间兜一次，防止外部修改、
+    上次运行在渲染前中断等场景把旧报告当成新结果返回。
+    """
+    try:
+        report_mtime = report_path.stat().st_mtime_ns
+    except OSError:
+        return False
+    candidates = [run_dir / "outline.json"]
+    directory = run_dir / "sections"
+    if directory.is_dir():
+        candidates.extend(directory.glob("s*.html"))
+    for path in candidates:
+        try:
+            if path.is_file() and path.stat().st_mtime_ns > report_mtime:
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def _asr_cached(use_cache: bool, run_dir: Path, *, force_asr: bool = False) -> bool:
@@ -618,6 +694,11 @@ def _stage_asr(state: _RunState) -> None:
     assert state.run_dir is not None and state.trace is not None and state.meta is not None
     raw_path = state.run_dir / "asr.raw.jsonl"
     with state.trace.stage("asr") as stage:
+        if not state.use_cache:
+            # 覆盖重跑：旧 raw 先作废。否则本次 ASR 失败后，旧 raw 会在下一次
+            # 普通重跑里被当成完整缓存，跳过转写并用旧报告「假成功」。
+            raw_path.unlink(missing_ok=True)
+            (state.run_dir / _ASR_PARTIAL).unlink(missing_ok=True)
         if _asr_cached(
             state.use_cache, state.run_dir, force_asr=state.force_asr
         ):
@@ -683,6 +764,7 @@ def _stage_transcript(state: _RunState) -> None:
             and not state.asr_fresh
             and _nonempty(jsonl_path)
             and _nonempty(markdown_path)
+            and _transcript_version_ok(state.run_dir)
         ):
             units = load_units(jsonl_path)
             stage.detail.update({"units": len(units), "cached": True})
@@ -699,6 +781,9 @@ def _stage_transcript(state: _RunState) -> None:
                 raise AsrError("转写规范化后没有任何可用单元")
             write_jsonl(units, jsonl_path)
             write_markdown(units, markdown_path)
+            (state.run_dir / _TRANSCRIPT_VERSION).write_text(
+                f"{TRANSCRIPT_FORMAT_VERSION}\n", encoding="utf-8", newline="\n"
+            )
             stage.detail["units"] = len(units)
             detail = f"{len(units)} 单元  u0001-u{len(units):04d}"
     state.produced.extend([jsonl_path, markdown_path])
@@ -869,6 +954,10 @@ def _stage_sections(state: _RunState) -> None:
             allowed_classes=render.template_classes(render.template_for(state.mode)),
             cancel_check=state.cancel_check,
         )
+        if not complete:
+            # 本次至少有一节被重写（或分节缓存被判缺失）：旧报告不再可信。
+            # 放在写作之后，避免把「只补缺失节」升级成整篇重写。
+            state.force_report = True
         stage.detail["sections"] = len(parts)
         detail = f"{len(parts)}/{len(state.outline.sections)} 节"
         if complete:
@@ -921,6 +1010,11 @@ def _stage_render(state: _RunState) -> Path:
                 if figures_in_html < len(state.frame_files):
                     cached_ok = False
                     stage.detail["rerender_for_frames"] = True
+            # 大纲 / 正文片段比报告新（分节重写、渲染前中断、外部修改）：
+            # 旧报告不能代表当前产物
+            if _report_is_stale(state.run_dir, report_path):
+                cached_ok = False
+                stage.detail["rerender_for_sections"] = True
         if cached_ok:
             stage.detail["cached"] = True
             detail = _cached("report.html  自包含检查通过")

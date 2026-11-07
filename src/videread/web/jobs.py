@@ -83,7 +83,11 @@ class Job:
 
         self._events: list[Event] = []
         self._subscribers: list[queue.Queue] = []
-        self._lock = threading.Lock()
+        # RLock：progress() 需要在同一临界区里追加日志并发出事件
+        self._lock = threading.RLock()
+        # 事件序号：SSE 客户端带上快照里的 seq，只回放其后的增量，
+        # 避免「快照已渲染的日志 + SSE 历史回放」重复显示
+        self._seq = 0
         self._cancel_event = threading.Event()
         # 落盘钩子由 JobManager 注入（Job 自身不知道存储层的存在）：
         # 阶段推进 / 定期 / 终态时把快照写进 SQLite，服务重启后可恢复
@@ -93,18 +97,28 @@ class Job:
     # ---------------------------------------------------------------- 事件分发
 
     def emit(self, event_type: str, **payload: object) -> None:
-        item: Event = {"type": event_type, **payload}
         with self._lock:
+            self._seq += 1
+            item: Event = {"type": event_type, **payload, "seq": self._seq}
             self._events.append(item)
             subscribers = list(self._subscribers)
         for channel in subscribers:
             channel.put(item)
 
-    def subscribe(self) -> tuple[queue.Queue, list[Event]]:
-        """注册订阅者并返回其历史回放；两者在锁内完成，不会漏事件或重复。"""
+    def subscribe(self, after: int = 0) -> tuple[queue.Queue, list[Event]]:
+        """注册订阅者并返回其历史回放。
+
+        `after` 是客户端快照里的 `seq`：回放只含该序号之后的事件，避免与
+        快照里已有的日志重复。注册与回放筛选在同一临界区完成，不会漏事件
+        或把回放期间的新事件挤进历史。
+        """
         channel: queue.Queue = queue.Queue()
         with self._lock:
-            backlog = list(self._events)
+            backlog = [
+                event
+                for event in self._events
+                if int(event.get("seq", 0) or 0) > after
+            ]
             self._subscribers.append(channel)
         return channel, backlog
 
@@ -119,14 +133,17 @@ class Job:
         """传给 `pipeline.run(progress=...)`；在主线程之外被调用。"""
         match = _STAGE_RE.match(line)
         stage_changed = False
-        if match:
-            index = int(match.group(1))
-            if index != self.stage_index:
-                self.stage_index = index
-                stage_changed = True
-                self.emit("stage", index=index)
-        self.logs.append(line)
-        self.emit("log", line=line)
+        with self._lock:
+            if match:
+                index = int(match.group(1))
+                if index != self.stage_index:
+                    self.stage_index = index
+                    stage_changed = True
+                    self.emit("stage", index=index)
+            # 日志追加与事件发出在同一临界区：快照的 seq 一定覆盖快照里的
+            # 全部日志，SSE 带 after=seq 时不会把旧日志再回放一遍。
+            self.logs.append(line)
+            self.emit("log", line=line)
         # 落盘节流：阶段边界必存，日志每 25 行存一次，终态由调用方兜底保存
         if self.persist_hook is not None and (
             stage_changed or len(self.logs) - self._last_persist_len >= 25
@@ -152,7 +169,7 @@ class Job:
             self.finished_at = _now()
             self.emit("cancelled", state="cancelled", message="已取消排队任务")
         else:
-            self.emit("log", line="[取消] 已请求取消，将在最近的检查点停止…")
+            self.progress("[取消] 已请求取消，将在最近的检查点停止…")
         return True
 
     def cancel_check(self) -> None:
@@ -167,22 +184,24 @@ class Job:
         return self.state in _TERMINAL
 
     def snapshot(self) -> dict:
-        return {
-            "id": self.id,
-            "url": self.url,
-            "mode": self.mode,
-            "state": self.state,
-            "stage_index": self.stage_index,
-            "logs": list(self.logs),
-            "run_id": self.run_id,
-            "report_url": f"/report/{self.run_id}" if self.run_id else None,
-            "exit_code": self.exit_code,
-            "error": self.error,
-            "error_hint": self.hint,
-            "cancel_requested": self.cancel_requested,
-            "created_at": self.created_at,
-            "finished_at": self.finished_at,
-        }
+        with self._lock:
+            return {
+                "id": self.id,
+                "url": self.url,
+                "mode": self.mode,
+                "state": self.state,
+                "stage_index": self.stage_index,
+                "logs": list(self.logs),
+                "seq": self._seq,
+                "run_id": self.run_id,
+                "report_url": f"/report/{self.run_id}" if self.run_id else None,
+                "exit_code": self.exit_code,
+                "error": self.error,
+                "error_hint": self.hint,
+                "cancel_requested": self.cancel_requested,
+                "created_at": self.created_at,
+                "finished_at": self.finished_at,
+            }
 
     @classmethod
     def from_row(cls, row: dict, *, out_root: Path) -> "Job":
@@ -376,7 +395,7 @@ class JobManager:
                 if state == "queued":
                     self._queue.append(job)
             if state == "queued":
-                job.emit("log", line="[恢复] 服务重启，任务已从队列恢复，等待执行")
+                job.progress("[恢复] 服务重启，任务已从队列恢复，等待执行")
             else:
                 job.state = "cancelled"
                 job.exit_code = EXIT_CANCELLED

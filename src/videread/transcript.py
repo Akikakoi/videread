@@ -19,6 +19,11 @@ _SENTENCE_END = "。！？!?；;"
 _CLAUSE_END = "，,、：:"
 _ALL_PUNCT = _SENTENCE_END + _CLAUSE_END
 
+# 转写单元派生规则版本。build_units / parse_srt 的时间轴或拼接语义变化时
+# 递增；pipeline 发现 run 里的旧 transcript.jsonl 版本不同就重建一次
+# （只重算本地文本，不重新调用 ASR）。
+TRANSCRIPT_FORMAT_VERSION = 2
+
 
 @dataclass(frozen=True)
 class TranscriptUnit:
@@ -121,12 +126,21 @@ def build_units(
         raise VidereadError(f"max_chars 过小：{max_chars}")
 
     pieces: list[tuple[str, float, float]] = []
+    cursor_end = 0.0
     for segment in segments:
         text = re.sub(r"\s+", " ", segment.text or "").strip()
         if not text:
             continue
         end = max(segment.end, segment.start)
-        pieces.extend(_split_with_time(text, segment.start, end, max_chars))
+        for piece_text, start, piece_end in _split_with_time(
+            text, segment.start, end, max_chars
+        ):
+            # ASR 偶尔给出互相重叠的分段（尤其尾部幻觉会连续输出同一起止的
+            # 多条）。跨段钳制起点，保证单元时间轴单调不重叠。
+            start = max(start, cursor_end)
+            piece_end = max(piece_end, start)
+            cursor_end = piece_end
+            pieces.append((piece_text, start, piece_end))
 
     units: list[TranscriptUnit] = []
     buffer_text: list[str] = []
@@ -185,7 +199,11 @@ def parse_srt(path: Path) -> list[tuple[float, float, str]]:
         if time_index is None:
             continue
         left, _, right = lines[time_index].partition("-->")
-        text = "".join(lines[time_index + 1 :]).strip()
+        # 多行 cue 按语言拼接：中日韩不加空格，拉丁文字之间补空格，
+        # 否则 "Hello\nworld" 会粘成 "Helloworld"
+        text = _join_parts(
+            [line.strip() for line in lines[time_index + 1 :] if line.strip()]
+        )
         if not text:
             continue
         cues.append((_srt_time_to_seconds(left), _srt_time_to_seconds(right), text))

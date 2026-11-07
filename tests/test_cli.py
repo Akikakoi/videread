@@ -20,6 +20,16 @@ def test_cli_invalid_mode_exits_with_usage_code():
         main([URL, "--mode", "epic"])
     assert excinfo.value.code == 1
 
+
+def test_cli_frames_flags_are_tristate():
+    """--frames / --no-frames 可覆盖 .env；不传则跟随配置（None）。"""
+    from videread.cli import build_parser
+
+    parser = build_parser()
+    assert parser.parse_args([URL]).frames is None
+    assert parser.parse_args([URL, "--frames"]).frames is True
+    assert parser.parse_args([URL, "--no-frames"]).frames is False
+
 # ---------------------------------------------------------------- 批量模式
 
 
@@ -64,6 +74,14 @@ def test_cli_batch_empty_list_returns_usage_code(tmp_path: Path):
     from videread.cli import main
 
     assert main([str(list_file), "--out", str(tmp_path)]) == 1
+
+
+def test_cli_batch_rejects_page_override(tmp_path: Path):
+    """批量列表 + 全局 --page 会改变每一行的含义：整批拒绝并指路 ?p=N。"""
+    list_file = tmp_path / "urls.txt"
+    list_file.write_text("BV1xx411c7mD\n", encoding="utf-8")
+
+    assert main([str(list_file), "--page", "2", "--out", str(tmp_path)]) == 1
 
 
 def test_cli_single_file_path_still_treated_as_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

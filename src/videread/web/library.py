@@ -272,11 +272,14 @@ def _read_map(path: Path) -> dict[str, str]:
 
 
 def _write_map(path: Path, data: dict[str, str]) -> None:
+    """原子写：先写同目录临时文件再替换，中断不会留下半截收藏 / 标题表。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    tmp.replace(path)
 
 
 def load_favorites(out_root: Path) -> dict[str, str]:
@@ -486,9 +489,16 @@ def run_detail(out_root: Path, run_id: str) -> dict | None:
         if outline
         else []
     )
+    # 未完成的一期（取消 / 失败）没有报告可判断模式，标记文件是唯一线索；
+    # 前端用它把「继续解析」的表单切回原来的阅读模式。
+    try:
+        mode = (run_dir / "run.mode").read_text(encoding="utf-8").strip().lower()
+    except OSError:
+        mode = ""
 
     entry.update(
         {
+            "mode": mode,
             "title_full": outline.title if outline else entry["title"],
             "subtitle": outline.subtitle if outline else "",
             "lead": outline.lead if outline else "",

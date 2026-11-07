@@ -34,7 +34,7 @@
 | A2 | 输出单个 `report.html`，无外部依赖（无 CDN、无外链图片、无外链字体） |
 | A3 | 同一视频第二次运行，跳过下载与转写，不产生重复的 ASR 费用             |
 | A4 | 报告中每个核心判断可通过 `data-source-units` 追溯到转写单元    |
-| A5 | 报告中不出现"作者认为""不是……而是……"等转述层与套路句式             |
+| A5 | 报告中不出现"作者认为""不是……而是……"等转述层与套路句式（规则禁止 + 事后检测报警，不自动改写） |
 | A6 | 1 小时视频端到端耗时不超过 15 分钟                        |
 
 ---
@@ -43,13 +43,13 @@
 
 | 环节      | 选型                                        | 理由                                          |
 | ------- | ----------------------------------------- | ------------------------------------------- |
-| 语言 / 环境 | Python 3.12 + `uv`                        | Windows 友好，依赖隔离干净，`uv run` 免手动建环境           |
+| 语言 / 环境 | Python 3.11+ + `uv`                        | Windows 友好，依赖隔离干净，`uv run` 免手动建环境           |
 | 视频下载    | `yt-dlp`                                  | B 站支持最好，可同时拿到标题 / UP主 / 时长 / 封面 / 字幕        |
 | 音视频处理   | `ffmpeg` + `ffprobe`                      | 抽音频、静音点检测、时长探测                              |
-| ASR     | 通义 Paraformer（阿里百炼）｜备用 OpenAI `whisper-1` / 本地 faster-whisper | 云端、免显卡、按量付费；用 adapter 抽象便于替换。faster-whisper 为可选依赖（`local` 后端），离线免费 |
-| LLM     | DeepSeek / 通义千问（OpenAI 兼容接口）              | 中文表现好、成本低、`openai` SDK 直接调用                 |
+| ASR     | 通义 Paraformer（阿里百炼）｜OpenAI `whisper-1` ｜本地 faster-whisper / FunASR | 云端、免显卡、按量付费；用 adapter 抽象便于替换。`local` / `funasr` 为可选依赖，离线免费 |
+| LLM     | DeepSeek / 通义千问 / 小米 MiMo（OpenAI 兼容接口） | 中文表现好、成本低、`openai` SDK 直接调用 |
 | HTTP    | `httpx`                                   | 超时与重试控制比 `requests` 更清晰                     |
-| 模板渲染    | 纯字符串占位符替换（**不用 Jinja2**）                  | 模板本身是完整 HTML，替换 `{{BODY}}` 即可，避免 HTML 被二次转义 |
+| 模板渲染    | Jinja2（`StrictUndefined`，`autoescape=False`） | `{{NAME}}` 占位符与 Jinja2 同形；可选块用 `{% if %}`；LLM 正文不转义、平台元信息上游 `escape` |
 | 配置      | `python-dotenv` + 环境变量                    | 个人工具，够用                                     |
 | 测试      | `pytest`                                  | 标准选择                                        |
 
@@ -64,19 +64,21 @@
 ```
 Bilibili URL / BV 号
    │
-   ├─[1] 下载      yt-dlp ──→ meta.json + audio.m4a
+   ├─[1] 下载      yt-dlp ──→ meta.json + audio.m4a（字幕优先时跳过音频）
    │
    ├─[2] 音频处理  ffmpeg ──→ 16kHz 单声道 wav + 静音点
    │
-   ├─[3] 转写      云 ASR ──→ asr.raw.jsonl（带时间戳）
+   ├─[3] 转写      云 / 本地 ASR ──→ asr.raw.jsonl（带时间戳）
    │
    ├─[4] 规范化    ────────→ transcript.jsonl + transcript.md   ← 唯一事实来源
    │
    ├─[5] 结构规划  LLM #1 ─→ outline.json（章节 + intent + source_ids）
    │
-   ├─[6] 逐节写作  LLM #2 ─→ 各节 HTML 片段
+   ├─[6] 截图（可选）ffmpeg + yt-dlp ─→ frames/sN.jpg（按章节定点抽帧）
    │
-   └─[7] 渲染      ────────→ report.html
+   ├─[7] 逐节写作  LLM #2 ─→ 各节 HTML 片段
+   │
+   └─[8] 渲染      ────────→ report.html（自包含）
 ```
 
 ### 3.2 核心设计原则
@@ -120,15 +122,21 @@ videread/
 │  ├─ config.py
 │  ├─ download.py
 │  ├─ audio.py
+│  ├─ frames.py               # 按章节定点抽帧并内嵌报告
+│  ├─ markdown.py / pdf.py / png.py  # 三种导出
 │  ├─ errors.py               # 退出码常量与异常分类
 │  ├─ execution.py            # 外部命令统一执行（yt-dlp / ffmpeg 共用）
 │  ├─ failures.py             # 退出码 → 失败类别 / 用户文案（纯函数）
+│  ├─ retry.py                # 指数退避（可重试错误判定）
+│  ├─ usersettings.py         # Web 设置页写入的 .llm-settings.json
 │  ├─ asr/
 │  │  ├─ __init__.py
 │  │  ├─ base.py
 │  │  ├─ dashscope.py
 │  │  ├─ realtime.py          # 实时 WebSocket 后端（不经 OSS 桶）
-│  │  └─ openai_whisper.py
+│  │  ├─ openai_whisper.py
+│  │  ├─ local_whisper.py     # 可选依赖 faster-whisper
+│  │  └─ funasr_backend.py    # 可选依赖 FunASR
 │  ├─ transcript.py
 │  ├─ report/
 │  │  ├─ __init__.py
@@ -138,10 +146,18 @@ videread/
 │  │  └─ qa.py                # 报告内问答（检索 + 引用），仅 Web 前端调用
 │  ├─ render.py
 │  ├─ trace.py
-│  └─ templates/
-│     ├─ report.html          # Standard 模板
-│     ├─ brief-report.html    # Brief 模板
-│     └─ outline-report.html  # Outline 模板（每节一句话要点）
+│  ├─ templates/
+│  │  ├─ report.html          # Standard / Deep 模板
+│  │  ├─ brief-report.html    # Brief 模板
+│  │  └─ outline-report.html  # Outline 模板（每节一句话要点）
+│  └─ web/
+│     ├─ __init__.py / __main__.py
+│     ├─ app.py               # FastAPI 路由
+│     ├─ jobs.py              # FIFO 队列 + SQLite 落盘 + SSE
+│     ├─ library.py           # 报告库扫描 / 收藏 / 改名 / 搜索 / 统计
+│     ├─ probe.py             # 提交前预检
+│     ├─ batch_export.py      # 批量导出 ZIP
+│     └─ static/editorial/    # 编辑风前端（零构建）
 ├─ runs/                      # 运行产物（gitignore）
 │  └─ <run-id>/
 └─ tests/
@@ -153,15 +169,21 @@ videread/
 
 | 文件                 | 说明                       | 可否复用           |
 | ------------------ | ------------------------ | -------------- |
-| `meta.json`        | 标题 / UP主 / 时长 / URL / 封面 | 是              |
+| `meta.json`        | 标题 / UP主 / 时长 / URL / 简介 / 字幕清单 | 是              |
 | `audio.m4a`        | 原始音频（仅在线视频；`--keep-audio` 时保留） | 是              |
 | `audio.wav`        | 16kHz 单声道，ASR 输入（跑完自动清理）  | 可删             |
 | `asr.raw.jsonl`    | ASR 原始输出，带时间戳            | **是（最贵，务必保留）** |
+| `asr.part.*.jsonl` | 长音频分段缓存；`asr.partial.json` 标记部分失败 | 是              |
 | `transcript.jsonl` | 规范化转写单元，带 id             | 是              |
 | `transcript.md`    | 同上，人 / 模型可读              | 是              |
+| `transcript.version` | 转写派生规则版本；不符时免费重建     | —              |
 | `outline.json`     | 结构规划结果                   | 是              |
 | `sections/`        | 各节 HTML 片段，便于单节重试        | 是              |
+| `frames/`          | 按章节抽出的 JPEG（`--frames`）    | 是              |
 | `report.html`      | 最终交付                     | —              |
+| `report.pdf/png/md` | 按需导出的文档 / 长图 / 纯文字       | 是              |
+| `qa.jsonl`         | 报告内问答历史（仅 Web 问答产生）      | 是              |
+| `run.mode`         | 本次阅读模式标记（切换模式时清正文）      | —              |
 | `run.trace.jsonl`  | 分阶段耗时 / 用量 / 错误          | 是              |
 
 > `run-id` 建议用 `{bvid}-{hash8}`，保证同一视频多次运行落到同一目录，天然实现缓存复用。
@@ -181,8 +203,8 @@ videread/
   "uploader": "UP主名称",
   "duration": 2137.0,
   "url": "https://www.bilibili.com/video/BV1xx411c7mD",
-  "cover": "https://...jpg",
   "description": "视频简介（可空）",
+  "uploader_id": "UP主 UID（可空）",
   "subtitles": [
     {"lang": "zh-CN", "path": "subtitle.zh-CN.srt"}
   ]
@@ -302,8 +324,14 @@ videread/
 #   --no-cache                忽略已有产物，全部重跑
 #   --keep-audio              跑完保留音频中间文件（默认自动清理）
 #   --open                    生成后自动用浏览器打开
-#   --asr NAME                临时覆盖 ASR 后端（dashscope / dashscope-realtime / openai / local）
-#   --page N                  多 P 视频指定解析第 N 个分P（默认 1）
+#   --asr NAME                临时覆盖 ASR 后端（dashscope / dashscope-realtime / openai / local / funasr）
+#   --force-asr               强制走 ASR，忽略字幕优先与 ASR/转写/大纲缓存
+#   --lang LANG               报告输出语言（en / ja，默认 zh）
+#   --page N                  多 P 视频指定解析第 N 个分P（默认 1；批量列表不支持，
+#                             请在该行链接里用 ?p=N）
+#   --frames / --no-frames    截图开关；不传跟随 .env 的 FRAMES
+#   --pdf / --png / --md      渲染后导出 PDF / 竖长图 / Markdown
+#   --version                 打印版本
 ```
 
 **退出码约定**（便于脚本化）：
@@ -557,6 +585,22 @@ def delete_history(run_dir, index) -> dict | None      # 按读取顺序删一�
 | `POST /api/runs/{run_id}/qa` | 就指定报告提问，返回答案 HTML 与引用，并追加 `qa.jsonl` |
 | `GET /api/runs/{run_id}/qa` | 读取该报告的问答历史 |
 | `DELETE /api/runs/{run_id}/qa/{index}` | 删除一条历史问答；`index` 与 GET 返回的 `history` 下标一致（从 0 起），越界 / 无记录返回 404，与提问共用 run 锁 |
+| `GET /api/runs/{run_id}` | 单期详情：基础信息 + 大纲章节 + `mode`（未完成的一期用于「继续解析」） |
+| `DELETE /api/runs/{run_id}` | 删除整个 run 目录，并同步摘除收藏 / 改名 |
+| `GET /api/search?q=` | 全文检索转写稿（≥2 字），返回命中摘要与次数 |
+| `GET /api/stats` | 印务统计：全库累计概览 + 按日汇总 |
+| `GET /api/config` | 非密钥配置摘要（ASR 后端 / 模型名、LLM 模型名、FRAMES） |
+| `GET /api/runs/{run_id}/markdown` | 纯文字报告导出 Markdown；带截图的报告返回 409 |
+| `GET /api/runs/{run_id}/pdf` / `png` | Edge / Chrome 无头导出 PDF / 竖长图，产物缓存在 run 目录 |
+| `POST /api/runs/export` | 批量导出 ZIP（md / pdf / png）；带截图的报告导出 md 时整批拒绝 |
+| `POST /api/probe` | 提交前预检：时长 / 分P / 付费 / 已解析记录 |
+| `POST /api/jobs` | 提交任务（FIFO，队列上限 10）；返回 `job_id` |
+| `POST /api/jobs/{job_id}/cancel` | 请求取消，在最近检查点停止 |
+| `GET /api/jobs/{job_id}` | 任务快照：状态 / 阶段 / 日志 / `seq` / 报告地址 |
+| `GET /api/jobs/{job_id}/events?after=N` | SSE 事件流；`after` 为快照 `seq`，只回放增量，避免日志重复 |
+| `GET/POST/DELETE /api/settings`、`POST /api/settings/asr`、`POST /api/settings/test`、`POST /api/settings/models` | 写作模型 / 转写引擎用户配置、连通性测试与模型列表（完整 key 不回传） |
+
+本机部署默认启用 Host 白名单（`127.0.0.1` / `localhost` / `::1`），阻断 DNS rebinding 调用无鉴权接口；显式绑 `0.0.0.0` 时不启用（视为用户主动对外暴露）。
 
 主题偏好（浅色 / 深色 / 自动跟随系统）为纯客户端能力，无对应接口：偏好存浏览器 `localStorage`（键 `videread.theme`），`<head>` 内联脚本在首屏渲染前落地 `<html data-theme>`（防闪白），深色令牌组「深夜印刷间」（深纸底 / 暖白字 / 强调红提亮）在三个页面 CSS 的 `[data-theme="dark"]` 整组覆盖；`js/theme.js` 三页共享，负责报头按钮三档循环、系统变化跟随与切换瞬间禁用全站过渡（防颜色闪烁）。换浏览器 / 清缓存后偏好丢失，属预期。
 
@@ -685,17 +729,19 @@ def delete_history(run_dir, index) -> dict | None      # 按读取顺序删一�
 
 ### 8.1 占位符
 
-两份模板共用 7 个占位符：
+三份模板（standard/deep 共用、brief、outline）共用以下占位符：
 
 | 占位符 | 内容 | 必需 |
 |---|---|---|
-| `{{TITLE}}` | 主标题 | 是 |
-| `{{SUBTITLE}}` | 副标题 | 否（空则整行删除） |
-| `{{LEAD}}` | 导语，一段话 | 是 |
+| `{{TITLE}}` | 主标题（纯文本，注入前转义） | 是 |
+| `{{SUBTITLE}}` | 副标题（空则整块删除） | 否 |
+| `{{LEAD}}` | 导语，一段话（纯文本，注入前转义） | 是 |
 | `{{ATTRIBUTION}}` | 平台；UP主；《原片完整标题》；原视频 URL（URL 同时作可见文本与 `href`） | 是 |
 | `{{VIDEO_DESCRIPTION}}` | 视频简介折叠块，可空 | 否 |
 | `{{BODY}}` | 各节 HTML 片段拼接结果 | 是 |
 | `{{SOURCES}}` | 页尾折叠的"来源与处理说明" | 是 |
+| `{{DOC_TITLE}}` / `{{DESC_TITLE}}` / `{{SOURCES_TITLE}}` | 报告 chrome 文案（按报告语言翻译） | 是 |
+| `{{TIMEMAP}}` | 段落级时间戳跳转的 `window.__VTS` 映射 | 否（本地文件为空串） |
 
 ### 8.2 Standard 模板组件清单
 
@@ -769,13 +815,14 @@ videread "<url>"
 运行输出示例：
 
 ```
-[1/7] 下载            ✓ meta.json  BV1xx411c7mD  时长 35:37
-[2/7] 音频处理        ✓ 16kHz 单声道  (缓存命中，跳过)
-[3/7] 转写            ✓ 412 段  (缓存命中，跳过)
-[4/7] 规范化          ✓ 268 单元  u0001-u0268
-[5/7] 结构规划        ✓ 6 节  profile=mechanism  1.8k tokens
-[6/7] 逐节写作        ✓ 6/6 节  14.2k tokens
-[7/7] 渲染            ✓ report.html  自包含检查通过
+[1/8] 下载            ✓ meta.json  BV1xx411c7mD  时长 35:37
+[2/8] 音频处理        ✓ 16kHz 单声道  (缓存命中，跳过)
+[3/8] 转写            ✓ 412 段  (缓存命中，跳过)
+[4/8] 规范化          ✓ 268 单元  u0001-u0268
+[5/8] 结构规划        ✓ 6 节  profile=mechanism  1.8k tokens
+[6/8] 截图            ✓ 未开启（--frames 或 FRAMES=1 可开启）
+[7/8] 逐节写作        ✓ 6/6 节  14.2k tokens
+[8/8] 渲染            ✓ report.html  自包含检查通过
 完成 → runs/BV1xx411c7mD-3f9a2c11/report.html
 ```
 
@@ -804,6 +851,11 @@ LOCAL_ASR_DEVICE=auto
 LOCAL_ASR_COMPUTE_TYPE=auto
 LOCAL_ASR_LANGUAGE=auto
 
+# --- 报告 / 截图 ---
+SUBTITLE_FIRST=1
+FRAMES=0
+REPORT_LANG=zh
+
 # --- LLM ---
 LLM_BASE_URL=https://api.deepseek.com/v1
 LLM_API_KEY=
@@ -815,12 +867,15 @@ LLM_TIMEOUT=180
 FFMPEG_BIN=
 FFPROBE_BIN=
 
-# --- 网络 ---
+# --- 登录态 / 网络 ---
+YTDLP_COOKIES_FILE=
+YTDLP_COOKIES_FROM_BROWSER=
 HTTP_PROXY=
 HTTPS_PROXY=
 ```
 
-配置分层：`.env` → 环境变量 → CLI 参数（后者覆盖前者）。
+配置分层：`.env` < 环境变量 < `.llm-settings.json`（Web 设置页）< CLI 显式参数。
+改 `.env` 后需重启服务（`override=False`，已生效的键不会热更新）。
 
 ---
 
@@ -850,13 +905,14 @@ def retry(fn, *, attempts=3, base=1.0, jitter=0.2): ...
 
 | 阶段 | 检查的产物 | 命中则 |
 |---|---|---|
-| 下载 | `meta.json` + `audio.m4a` | 跳过下载 |
-| 音频处理 | `audio.wav` | 跳过转码 |
-| 转写 | `asr.raw.jsonl` | 跳过 ASR（**省钱关键**） |
-| 规范化 | `transcript.jsonl` | 跳过规范化 |
-| 结构规划 | `outline.json` | 跳过 LLM #1 |
-| 逐节写作 | `sections/s*.html` 全部存在 | 跳过 LLM #2；部分存在则只补缺失的节 |
-| 渲染 | `report.html` | 跳过渲染 |
+| 下载 | `meta.json`（先校验其中 `url` 与本次规范 URL 一致） | 跳过元信息抓取；字幕优先或 ASR 已缓存时连音频也不下载 |
+| 音频处理 | `audio.wav`；或字幕优先 / ASR 已缓存 | 跳过转码 |
+| 转写 | `asr.raw.jsonl` 非空且无 `asr.partial.json` | 跳过 ASR（**省钱关键**） |
+| 规范化 | `transcript.jsonl` + `transcript.md`，且 `transcript.version` 与当前派生规则一致 | 跳过规范化；版本不符时免费重建一次 |
+| 结构规划 | `outline.json`（`lang` 与本次一致） | 跳过 LLM #1 |
+| 截图 | `frames/sN.jpg` 已存在 | 跳过该节抽帧 |
+| 逐节写作 | `sections/s*.html` 全部存在且语言标记一致 | 跳过 LLM #2；部分存在则只补缺失的节 |
+| 渲染 | `report.html` 存在，且不早于 `outline.json` / `sections/*` / 帧数 | 跳过渲染 |
 
 > 远端阶段 1 命中 `meta.json` 前，会先校验其中 `url` 与本次请求的规范 URL 是否一致；不一致（例如 run 目录被别的视频复用、或同名样本残留）则视为未命中，重新抓取元信息并落到新 run 目录，避免张冠李戴。
 
@@ -883,11 +939,13 @@ def retry(fn, *, attempts=3, base=1.0, jitter=0.2): ...
 | 目标 | 用例 |
 |---|---|
 | `transcript.build_units` | 过短分段正确合并；`id` 连续不重复；`max_chars` 生效 |
-| `transcript` 时间戳 | 切分后 `start` / `end` 单调不减 |
-| `render.render_report` | 7 个占位符全部替换；缺失占位符报错 |
+| `transcript` 时间戳 | 切分后 `start` / `end` 单调不减；跨 ASR 分段重叠时自动钳制 |
+| `render.render_report` | 全部必需 / 可选占位符替换；缺失占位符报错；可选块为空时整块移除 |
 | `render.check_self_contained` | 能识别外链 CSS / 外链图片 / 外链字体 |
-| `report.outline` | 非法 `source_ids` 被剔除；JSON 修复分支生效 |
-| `pipeline` 缓存 | 产物存在时对应阶段被跳过 |
+| `report.outline` | 非法 `source_ids` 被剔除；JSON 修复分支生效；超长转写按预算抽样 |
+| `pipeline` 缓存 | 产物存在时对应阶段被跳过；分节重写 / 模式迁移 / 转写版本变化会正确失效 |
+
+> 当前离线用例 **404 条**，`pytest -q` 全过；`network` marker 默认排除。
 
 ### 13.2 集成测试（打网络，标记 `@pytest.mark.network`）
 

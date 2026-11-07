@@ -80,6 +80,35 @@ def test_build_units_timestamps_are_monotonic():
     assert 0.0 <= units[0].start and units[-1].end <= 180.0
 
 
+def test_build_units_clamps_overlapping_asr_segments():
+    """ASR 分段互相重叠时，跨段钳制起点，单元时间轴不能交叠。"""
+    segments = [
+        AsrSegment(start=0.0, end=10.0, text="第一段内容。" * 6),
+        AsrSegment(start=9.5, end=12.0, text="第二段内容。" * 3),
+        AsrSegment(start=11.8, end=12.0, text="第三段内容。" * 2),
+    ]
+
+    units = build_units(segments, max_chars=20)
+
+    for previous, current in zip(units, units[1:]):
+        assert current.start >= previous.end
+    assert all(unit.end >= unit.start for unit in units)
+
+
+def test_parse_srt_joins_multiline_cues_with_language_aware_spacing(tmp_path: Path):
+    srt = tmp_path / "multi.srt"
+    srt.write_text(
+        "1\n00:00:00,000 --> 00:00:02,000\nHello\nworld\n\n"
+        "2\n00:00:02,000 --> 00:00:04,000\n你好\n世界\n",
+        encoding="utf-8",
+    )
+
+    cues = parse_srt(srt)
+
+    assert cues[0][2] == "Hello world"
+    assert cues[1][2] == "你好世界"
+
+
 def test_load_raw_jsonl_and_merge_subtitles_keep_ids():
     segments = load_raw_jsonl(FIXTURES / "asr_sample.jsonl")
     assert len(segments) == 3

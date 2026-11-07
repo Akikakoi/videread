@@ -49,6 +49,10 @@ _SUBTITLE_PRIORITY = ("zh-CN", "zh-Hans", "zh", "zh-Hant", "ai-zh", "en", "ai-en
 # 不在请求列表里 yt-dlp 就不会下载，这正是 B 站视频"明明有字幕却走了 ASR"的主因
 _SUBTITLE_LANGS = ",".join(_SUBTITLE_PRIORITY)
 
+# Netscape cookies.txt 用 `#HttpOnly_` 前缀标记 HttpOnly cookie；它不是注释，
+# 而 SESSDATA 常常正是 HttpOnly。解析时必须先剥前缀，再判断普通注释行。
+_HTTPONLY_PREFIX = "#HttpOnly_"
+
 # B 站分P探测用的公开 view 接口：无需登录，一次请求带回全部分P 的标题与时长
 _VIEW_API = "https://api.bilibili.com/x/web-interface/view"
 _VIEW_TIMEOUT_SEC = 8.0
@@ -589,11 +593,19 @@ def _cookies_dict(settings: Settings) -> dict[str, str]:
     cookies: dict[str, str] = {}
     try:
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if line.startswith("#"):
+            if line.startswith(_HTTPONLY_PREFIX):
+                line = line[len(_HTTPONLY_PREFIX) :]
+            elif line.startswith("#"):
                 continue
             parts = line.split("\t")
-            if len(parts) >= 7 and parts[5] and parts[6].strip():
-                cookies[parts[5]] = parts[6].strip()
+            if len(parts) < 7 or not parts[5] or not parts[6].strip():
+                continue
+            # 只把 B 站域的 cookie 交给 B 站接口：用户导出的可能是整个浏览器的
+            # cookies，不应把其他站点的凭据一起发送。
+            domain = parts[0].lstrip(".").lower()
+            if domain != "bilibili.com" and not domain.endswith(".bilibili.com"):
+                continue
+            cookies[parts[5]] = parts[6].strip()
     except OSError:
         return {}
     return cookies
@@ -886,10 +898,15 @@ def cookies_have_login(cookies_file: str | None) -> bool:
         return False
     try:
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if line.startswith("#"):
+            if line.startswith(_HTTPONLY_PREFIX):
+                line = line[len(_HTTPONLY_PREFIX) :]
+            elif line.startswith("#"):
                 continue
             parts = line.split("\t")
-            if len(parts) >= 7 and parts[5] == "SESSDATA" and parts[6].strip():
+            if len(parts) < 7 or parts[5] != "SESSDATA" or not parts[6].strip():
+                continue
+            domain = parts[0].lstrip(".").lower()
+            if domain == "bilibili.com" or domain.endswith(".bilibili.com"):
                 return True
     except OSError:
         return False
@@ -939,10 +956,10 @@ def subtitle_login_hint(settings: Settings) -> str | None:
     """本期没抓到字幕时，给一条「为什么 / 怎么办」的提示；已具备登录态则 None。
 
     只做静态判断（cookies 文件里有没有 SESSDATA / 是否配置浏览器直读），
-    不发任何网络请求。`cookies-from-browser` 视为已登录——文件锁与加密问题
-    由 _yt_dlp 的去 cookie 重试兜底，这里无法也不必廉价验证。
+    不发任何网络请求。浏览器直读只能供 yt-dlp 使用，B 站 AI 字幕的直连接口
+    只认 cookies.txt 里的 SESSDATA，因此这种情况要明确指路，而不是静默。
     """
-    if settings.cookies_from_browser or cookies_have_login(settings.cookies_file):
+    if cookies_have_login(settings.cookies_file):
         return None
     if settings.cookies_file:
         return (
@@ -950,6 +967,14 @@ def subtitle_login_hint(settings: Settings) -> str | None:
             "用户不可见——本期未抓到字幕。用已登录的浏览器重新导出一份 "
             "cookies.txt（需包含 SESSDATA）可让字幕优先路径生效，"
             "省去音频下载与 ASR 费用。"
+        )
+    if settings.cookies_from_browser:
+        return (
+            "当前配置的是浏览器直读 Cookie（YTDLP_COOKIES_FROM_BROWSER）。"
+            "它能让 yt-dlp 访问登录可见的视频，但 B 站 AI 字幕的直连接口只认 "
+            "cookies.txt 里的 SESSDATA。想让字幕优先路径生效，请用已登录的浏览器"
+            "导出含 SESSDATA 的 cookies.txt 并配置 YTDLP_COOKIES_FILE；"
+            "两处都配时优先使用文件。"
         )
     return (
         "本期未抓到平台字幕。B 站 AI 生成字幕（常见于口播/知识类视频）需登录态"

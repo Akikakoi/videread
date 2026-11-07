@@ -12,7 +12,7 @@ import queue
 import threading
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import (
@@ -117,13 +117,17 @@ def _frame(item: dict) -> str:
     return f"event: {item.get('type', 'message')}\ndata: {data}\n\n"
 
 
-async def _event_stream(job: Job, request: Request):
-    """回放历史事件后持续推送；心跳既防超时也让 `is_disconnected` 有机会生效。
+async def _event_stream(job: Job, request: Request, after: int = 0):
+    """回放 `after` 之后的增量事件，再持续推送；心跳既防超时也让
+    `is_disconnected` 有机会生效。
+
+    前端先把快照里的日志渲染出来，再带 `after=快照的 seq` 连 SSE；只回放
+    增量才不会把同一批日志渲染两遍。直接连接（after=0）仍能拿到全量回放。
 
     `queue.get` 必须走 `asyncio.to_thread`：生成器运行在事件循环线程里，
     直接阻塞会挂住整个服务的其他请求。
     """
-    channel, backlog = job.subscribe()
+    channel, backlog = job.subscribe(after)
     try:
         for item in backlog:
             yield _frame(item)
@@ -144,17 +148,35 @@ async def _event_stream(job: Job, request: Request):
         job.unsubscribe(channel)
 
 
-def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
+def create_app(
+    out_root: Path,
+    self_base: str | None = None,
+    allowed_hosts: set[str] | None = None,
+) -> FastAPI:
     """`self_base`：本服务自身的基址（如 http://127.0.0.1:8765）。
 
     提供后「导出 PNG」走编辑风阅读页长图（无头浏览器截 /read/{run_id}?png=1）；
     为 None（离线测试等场景）时回退为直接截 report.html 的原始样式。
+
+    `allowed_hosts`：非 None 时校验 HTTP Host 头，阻断 DNS rebinding 访问本机
+    无鉴权接口。`web.__main__` 在绑定本机时传入白名单；绑 0.0.0.0 表示用户
+    明确对外暴露，不启用校验。测试可留 None。
     """
     out_root = Path(out_root)
     app = FastAPI(title="videread", docs_url=None, redoc_url=None)
     # demo 页面禁缓存：开发迭代时浏览器必须每次拿到最新 HTML
     _NO_CACHE = {"Cache-Control": "no-cache"}
     manager = JobManager(out_root)
+
+    if allowed_hosts is not None:
+        allowed = {host.strip().lower() for host in allowed_hosts if host.strip()}
+
+        @app.middleware("http")
+        async def _host_guard(request: Request, call_next):
+            name = (urlsplit("//" + (request.headers.get("host") or "")).hostname or "")
+            if name.lower() not in allowed:
+                return Response("Host not allowed", status_code=400, media_type="text/plain")
+            return await call_next(request)
 
     # 每个 run 一把问答锁：串行化同一报告的问答，避免历史交叉写入；
     # 锁表本身也用一把 guard 保护 setdefault，否则并发首问会各建一把锁。
@@ -718,12 +740,12 @@ def create_app(out_root: Path, self_base: str | None = None) -> FastAPI:
         return snap
 
     @app.get("/api/jobs/{job_id}/events")
-    async def job_events(job_id: str, request: Request):
+    async def job_events(job_id: str, request: Request, after: int = 0):
         job = manager.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="未找到该任务")
         return StreamingResponse(
-            _event_stream(job, request),
+            _event_stream(job, request, after),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )

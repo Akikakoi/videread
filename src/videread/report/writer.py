@@ -6,6 +6,7 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from html import escape
 from pathlib import Path
 from typing import Callable
 
@@ -31,6 +32,19 @@ _ANY_TAG = re.compile(r"<[^>]+>")
 _MD_BOLD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 _MD_BOLD_UNDERSCORE = re.compile(r"__(.+?)__", re.DOTALL)
 _CLASS_ATTR = re.compile(r'(\s*)class\s*=\s*"([^"]*)"', re.IGNORECASE)
+# 事件属性 / javascript: 链接 / 可交互标签：模型输出可能被转写内容诱导，
+# 报告与问答都在本机 localhost 同源页面里渲染，必须在写盘前剥掉。
+_EVENT_ATTR = re.compile(
+    r"""\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE
+)
+_JS_URL = re.compile(
+    r"""\s+(?:href|xlink:href|src)\s*=\s*(?:"[^"]*(?:javascript|data:text/html)[^"]*"|'[^']*(?:javascript|data:text/html)[^']*'|[^\s>]*(?:javascript|data:text/html)[^\s>]*)""",
+    re.IGNORECASE,
+)
+_DANGEROUS_TAG = re.compile(
+    r"<\s*/?\s*(?:iframe|object|embed|form|input|button|textarea|select|meta|link)\b[^>]*>",
+    re.IGNORECASE,
+)
 # 写作规则 7「不是/并非/不在于……而是/而在于」的拆句变体实测会出现「不在…而在」，
 # 单独列出（2026-11-05 消融实验：摘除规则 7-9 后模型用该变体绕开窄匹配）
 FORBIDDEN_STYLE = re.compile(
@@ -183,6 +197,21 @@ def sanitize_section_html(
         violations.append("包含 <html> / <body> / <head>，已移除")
     cleaned = without_structure
 
+    without_handlers = _EVENT_ATTR.sub("", cleaned)
+    if without_handlers != cleaned:
+        violations.append("包含事件属性（on*），已移除")
+    cleaned = without_handlers
+
+    without_js = _JS_URL.sub("", cleaned)
+    if without_js != cleaned:
+        violations.append("包含 javascript: / data:text/html 链接，已移除")
+    cleaned = without_js
+
+    without_tags = _DANGEROUS_TAG.sub("", cleaned)
+    if without_tags != cleaned:
+        violations.append("包含 iframe / form 等可交互标签，已移除")
+    cleaned = without_tags
+
     def _fix_attr(match: re.Match[str]) -> str:
         ids = [item.strip() for item in match.group(1).split(",") if item.strip()]
         kept = [item for item in ids if item in allowed_ids]
@@ -218,7 +247,7 @@ def assemble_section(
     不能交给模型自由发挥。Standard/Deep 带手写编号与右侧时间戳；
     Brief/Outline 只给纯标题（编号交给模板 CSS 计数器，正文不显示时间戳）。
     """
-    heading = section.heading.strip()
+    heading = escape(section.heading.strip())
     if mode in ("brief", "outline"):
         title = f"<h2>{heading}</h2>"
     else:

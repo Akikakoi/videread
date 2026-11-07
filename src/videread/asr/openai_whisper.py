@@ -58,17 +58,18 @@ class OpenAiWhisperAsr(ChunkedAsr):
             )
         return self._client
 
-    # whisper 接口按文件计费、无分段缓存；部分段失败时静默降级（原行为）
-    def _use_part_cache(self) -> bool:
-        return False
-
-    def _warn_partial(self) -> bool:
-        return False
-
+    # 每段结果立即落盘：长音频部分段失败后，重跑只补失败段，不重复计费
     def _transcribe_chunk(
         self, audio: Path, index: int, start: float, end: float
     ) -> list[AsrSegment]:
-        return offset_segments(self._transcribe_file(audio), start)
+        cached = self._read_part(index, start, end)
+        if cached is not None:
+            self.progress(f"第 {index + 1} 段转写命中缓存，跳过")
+            return offset_segments(cached, start)
+
+        segments = self._transcribe_file(audio)
+        self._write_part(index, segments, start, end)
+        return offset_segments(segments, start)
 
     def _transcribe_file(self, audio: Path) -> list[AsrSegment]:
         from ..retry import retry_call

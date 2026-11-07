@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from videread import download, pipeline
 from videread.config import get_settings
-from videread.errors import AudioError, LlmError, UsageError, VidereadError
+from videread.errors import AsrError, AudioError, LlmError, UsageError, VidereadError
 from videread.pipeline import run
 
 URL = "https://www.bilibili.com/video/BV1xx411c7mD"
@@ -60,6 +61,10 @@ def _seed_run(out_root: Path) -> Path:
         + "\n",
     )
     _write(run_dir / "transcript.md", "## u0001 [00:00-00:12]\n我们今天讲缓存预热。\n")
+    _write(
+        run_dir / "transcript.version",
+        f"{pipeline.TRANSCRIPT_FORMAT_VERSION}\n",
+    )
     _write(
         run_dir / "outline.json",
         json.dumps(
@@ -577,6 +582,44 @@ def test_realtime_backend_is_selectable(monkeypatch: pytest.MonkeyPatch):
     )
 
 
+def test_openai_asr_reuses_part_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """OpenAI 后端也按段落盘：部分段失败后重跑只补失败段，不重复计费。"""
+    from videread.asr.base import AsrSegment
+    from videread.asr.openai_whisper import OpenAiWhisperAsr
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    backend = OpenAiWhisperAsr(get_settings(), cache_dir=tmp_path)
+    calls: list[Path] = []
+
+    def _fake(audio: Path) -> list[AsrSegment]:
+        calls.append(audio)
+        return [AsrSegment(start=0.0, end=1.0, text="你好")]
+
+    monkeypatch.setattr(backend, "_transcribe_file", _fake)
+    audio = tmp_path / "audio.wav"
+
+    first = backend.transcribe(audio, duration=60.0)
+    second = backend.transcribe(audio, duration=60.0)
+
+    assert len(calls) == 1
+    assert first == second
+    assert list(tmp_path.glob("asr.part.000.0-60.jsonl"))
+
+
+def test_no_proxy_ipv6_brackets_are_normalized(monkeypatch: pytest.MonkeyPatch):
+    """httpx 解析 NO_PROXY 里的 `[::1]` 会抛 InvalidURL；载入配置时清洗掉。"""
+    import httpx
+
+    from videread.config import load_env
+
+    monkeypatch.setenv("NO_PROXY", "localhost,[::1],::1")
+    load_env()
+
+    assert "[" not in os.environ["NO_PROXY"]
+    client = httpx.Client(proxy=None)
+    client.close()
+
+
 def test_wav_cleaned_up_after_successful_run(tmp_path: Path):
     """跑完自动清理 audio.wav —— 它占 run 目录体积的 99.9%，且 ASR 之后没人再读。"""
     run_dir = _seed_run(tmp_path)
@@ -648,6 +691,87 @@ def test_sync_mode_invalidates_sections_on_change(tmp_path: Path):
     assert (run_dir / "run.mode").read_text(encoding="utf-8").strip() == "brief"
 
 
+def _fake_writer_client(text: str):
+    """逐节写作的最小假客户端：只实现 _stage_sections 会用到的方法。"""
+
+    class _Usage:
+        total = 0
+
+        def describe(self) -> str:
+            return "0 tokens"
+
+    class _FakeLlm:
+        def __init__(self, _settings: object) -> None:
+            self.usage = _Usage()
+
+        def complete(self, **_kwargs: object) -> str:
+            return f'<div data-source-units="u0001"><p>{text}</p></div>'
+
+    return _FakeLlm
+
+
+def test_regenerated_sections_force_rerender(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """补齐缺失分节后必须重渲染，不能把旧 report.html 当新结果返回。"""
+    run_dir = _seed_run(tmp_path)
+    (run_dir / "sections" / "s1.html").unlink()
+    monkeypatch.setattr(pipeline, "LlmClient", _fake_writer_client("新写正文"))
+
+    report = run(URL, out_root=tmp_path, progress=lambda _msg: None)
+
+    html = report.read_text(encoding="utf-8")
+    assert "新写正文" in html
+    assert "已有报告" not in html
+
+
+def test_sections_newer_than_report_trigger_rerender(tmp_path: Path):
+    """正文片段比报告新（上次渲染前中断 / 外部修改）时按 mtime 兜底重渲染。"""
+    run_dir = _seed_run(tmp_path)
+    section = run_dir / "sections" / "s1.html"
+    _write(section, '<div data-source-units="u0001"><p>补写正文</p></div>\n')
+    report_mtime = (run_dir / "report.html").stat().st_mtime
+    os.utime(section, (report_mtime + 5, report_mtime + 5))
+
+    report = run(URL, out_root=tmp_path, progress=lambda _msg: None)
+
+    assert "补写正文" in report.read_text(encoding="utf-8")
+
+
+def test_legacy_run_mode_is_inferred_from_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """没有 run.mode 的历史 run：从报告反推旧模式，切换模式时真正重写。"""
+    run_dir = _seed_run(tmp_path)
+    _write(
+        run_dir / "report.html",
+        "<html><body><p>阅读模式：Deep；信息结构：mechanism</p></body></html>",
+    )
+    assert not (run_dir / "run.mode").exists()
+    monkeypatch.setattr(pipeline, "LlmClient", _fake_writer_client("按标准模式重写"))
+
+    report = run(URL, out_root=tmp_path, mode="standard", progress=lambda _msg: None)
+
+    assert "按标准模式重写" in report.read_text(encoding="utf-8")
+    assert (run_dir / "run.mode").read_text(encoding="utf-8").strip() == "standard"
+
+
+def test_legacy_run_same_mode_keeps_sections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """历史 run 反推出同一模式时只补标记，不白付一次正文重写。"""
+    run_dir = _seed_run(tmp_path)
+    _write(
+        run_dir / "report.html",
+        "<html><body><p>阅读模式：Standard；信息结构：mechanism</p></body></html>",
+    )
+
+    class _Boom:
+        def __init__(self, _settings: object) -> None:
+            raise AssertionError("同模式重跑不应调用 LLM")
+
+    monkeypatch.setattr(pipeline, "LlmClient", _Boom)
+
+    report = run(URL, out_root=tmp_path, mode="standard", progress=lambda _msg: None)
+
+    assert "阅读模式：Standard" in report.read_text(encoding="utf-8")
+    assert (run_dir / "run.mode").read_text(encoding="utf-8").strip() == "standard"
+
+
 def test_asr_cached_respects_partial_marker(tmp_path: Path):
     """部分失败的 raw 不能当完整缓存；force_asr 同样绕过缓存。"""
     run_dir = _seed_run(tmp_path)
@@ -656,6 +780,68 @@ def test_asr_cached_respects_partial_marker(tmp_path: Path):
     assert pipeline._asr_cached(True, run_dir) is False
     (run_dir / pipeline._ASR_PARTIAL).unlink()
     assert pipeline._asr_cached(True, run_dir, force_asr=True) is False
+
+
+def test_transcript_rebuilds_when_format_version_changes(tmp_path: Path):
+    """派生规则变更后，旧版本 transcript 应重建一次（不重新调用 ASR）。"""
+    run_dir = _seed_run(tmp_path)
+    _write(
+        run_dir / "transcript.jsonl",
+        json.dumps(
+            {"id": "u0001", "start": 0.0, "end": 12.0, "text": "旧版本内容", "source": "asr"},
+            ensure_ascii=False,
+        )
+        + "\n",
+    )
+    _write(run_dir / "transcript.md", "旧版本 markdown\n")
+    _write(run_dir / "transcript.version", "1\n")
+
+    run(URL, out_root=tmp_path, progress=lambda _msg: None)
+
+    units = _read_units(run_dir)
+    assert units[0]["text"] == "我们今天讲缓存预热。"
+    assert (run_dir / "transcript.version").read_text(encoding="utf-8").strip() == str(
+        pipeline.TRANSCRIPT_FORMAT_VERSION
+    )
+
+
+def test_overwrite_drops_stale_asr_cache_before_rerun(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """覆盖重跑先删旧 raw：本次 ASR 失败后，下一次不能把旧转写当完整缓存。"""
+    run_dir = _seed_run(tmp_path)
+    old_raw = run_dir / "asr.raw.jsonl"
+    _write(run_dir / pipeline._ASR_PARTIAL, "[]\n")
+    assert old_raw.is_file()
+
+    state = pipeline._RunState(
+        url=URL,
+        mode="standard",
+        out_root=tmp_path,
+        use_cache=False,
+        keep_audio=False,
+        force_asr=False,
+        force_report=False,
+        settings=get_settings(),
+        progress=lambda _msg: None,
+    )
+    state.run_dir = run_dir
+    state.trace = pipeline.TraceWriter(run_dir / "run.trace.jsonl")
+    state.meta = download.VideoMeta(
+        bvid=BVID, title="缓存预热讲清楚", uploader="某UP主", duration=12.0, url=URL
+    )
+    state.wav = run_dir / "audio.wav"
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise AsrError("模拟 ASR 失败")
+
+    monkeypatch.setattr(pipeline, "get_backend", _boom)
+
+    with pytest.raises(AsrError):
+        pipeline._stage_asr(state)
+
+    assert not old_raw.exists()
+    assert not (run_dir / pipeline._ASR_PARTIAL).exists()
 
 
 def test_disabling_frames_clears_old_frames_and_rerenders(tmp_path: Path):

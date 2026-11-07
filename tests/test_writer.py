@@ -300,3 +300,49 @@ def test_assemble_section_outline_has_plain_h2():
     html = assemble_section(outline_section, 1, "", mode="outline")
     assert html.startswith("<h2>预热的作用</h2>")
     assert "num" not in html and "section-time" not in html
+
+
+def test_sanitize_strips_event_handlers_and_javascript_urls():
+    """模型输出被提示注入时，不能在 localhost 同源页面里执行脚本。"""
+    raw = (
+        '<div data-source-units="u0001">'
+        '<img src="x" onerror="alert(1)">'
+        '<a href="javascript:alert(2)">链接</a>'
+        "</div>"
+    )
+
+    cleaned, violations = sanitize_section_html(raw, {"u0001"}, set())
+
+    assert "onerror" not in cleaned
+    assert "javascript:" not in cleaned
+    assert 'data-source-units="u0001"' in cleaned
+    assert any("事件属性" in item for item in violations)
+    assert any("javascript:" in item for item in violations)
+
+
+def test_sanitize_strips_interactive_tags_but_keeps_svg():
+    raw = (
+        '<div data-source-units="u0001">'
+        '<iframe src="https://example.com"></iframe>'
+        '<form><input value="x"></form>'
+        '<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"></circle></svg>'
+        "<p>正文</p></div>"
+    )
+
+    cleaned, violations = sanitize_section_html(raw, {"u0001"}, set())
+
+    for tag in ("<iframe", "<form", "<input"):
+        assert tag not in cleaned
+    assert "<svg" in cleaned and "正文" in cleaned
+    assert any("可交互标签" in item for item in violations)
+
+
+def test_assemble_section_escapes_heading():
+    outline_section = OutlineSection(
+        id="s1", heading="<b>标题</b>", time_range="", intent="", source_ids=["u0001"]
+    )
+
+    html = assemble_section(outline_section, 1, "<p>正文</p>")
+
+    assert "&lt;b&gt;标题&lt;/b&gt;" in html
+    assert "<b>标题</b>" not in html

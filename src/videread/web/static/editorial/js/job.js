@@ -45,6 +45,8 @@ async function postCancel(){
 const ACTIVE_STATES = new Set(["queued", "running"]);
 const reduceMotion = () => window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
 let currentState = "queued";
+/* 快照里已渲染到的事件序号；SSE 带 after=lastSeq 只接收增量，避免日志重复 */
+let lastSeq = 0;
 let typeQueue = [], typeTimer = null, idleTimer = null, idleEl = null;
 
 function scrollLog(){
@@ -193,6 +195,7 @@ function renderMeta(job){
 
 function renderJob(job){
   currentState = job.state;
+  if(typeof job.seq === "number") lastSeq = job.seq;
   document.body.classList.toggle("job-done", job.state === "done");
   document.body.classList.toggle("job-running", job.state === "running");
   if(JOB_TERMINAL.has(job.state) && localStorage.getItem("videread.activeJob") === job.id){
@@ -227,7 +230,7 @@ function renderJob(job){
 /* ---------- SSE 订阅 + 快照兜底轮询 ---------- */
 let es = null, pollTimer = null;
 function subscribe(){
-  es = new EventSource("/api/jobs/" + encodeURIComponent(job_id) + "/events");
+  es = new EventSource("/api/jobs/" + encodeURIComponent(job_id) + "/events?after=" + lastSeq);
   es.addEventListener("status", ev => {
     const d = JSON.parse(ev.data);
     currentState = d.state;

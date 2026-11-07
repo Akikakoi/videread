@@ -237,6 +237,17 @@ def test_run_detail_includes_sections_and_files(tmp_path: Path):
     assert detail["lead"] == "导语一段"
 
 
+def test_run_detail_exposes_run_mode_for_resume(tmp_path: Path):
+    """未完成的一期靠 run.mode 让前端把「继续解析」切回原阅读模式。"""
+    run_dir = make_run(tmp_path, RUN_ID)
+    (run_dir / "run.mode").write_text("brief\n", encoding="utf-8")
+
+    detail = library.run_detail(tmp_path, RUN_ID)
+
+    assert detail is not None
+    assert detail["mode"] == "brief"
+
+
 # ------------------------------------------------------------- 路径穿越防护
 
 
@@ -266,6 +277,18 @@ def test_index_redirects_to_editorial(tmp_path: Path):
     assert index.headers["location"] == "/editorial"
     assert editorial.status_code == 200
     assert "VIDEREAD" in editorial.text
+
+
+def test_host_guard_blocks_dns_rebinding(tmp_path: Path):
+    """无鉴权的本机服务只接受白名单 Host，阻断 DNS rebinding 调用接口。"""
+    app = create_app(tmp_path, allowed_hosts={"127.0.0.1", "localhost", "::1"})
+
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        assert client.get("/api/runs").status_code == 200
+    with TestClient(app, base_url="http://[::1]") as client:
+        assert client.get("/api/runs").status_code == 200
+    with TestClient(app, base_url="http://evil.example") as client:
+        assert client.get("/api/runs").status_code == 400
 
 
 def test_api_runs_lists_existing_runs(tmp_path: Path):
@@ -684,6 +707,39 @@ def test_probe_handles_local_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert body["too_long"] is True
 
 
+def test_probe_reports_existing_run_for_local_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """本地文件重复投递也要提示「已解析过」，与远程视频同一套覆盖确认。"""
+    local = tmp_path / "sample.m4a"
+    local.write_bytes(b"fake")
+    run_id = download.make_run_id(local.resolve().as_uri(), "local")
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "bvid": "local",
+                "title": "sample",
+                "uploader": "",
+                "duration": 120.0,
+                "url": local.resolve().as_uri(),
+                "description": "",
+                "subtitles": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "report.html").write_text("<html>ok</html>", encoding="utf-8")
+    monkeypatch.setattr(probe.audio, "probe_duration", lambda _path, _settings: 120.0)
+
+    with TestClient(create_app(tmp_path)) as client:
+        body = client.post("/api/probe", json={"url": str(local)}).json()
+
+    assert body["existing_run"]["run_id"] == run_id
+
+
 def test_probe_rejects_invalid_input(tmp_path: Path):
     with TestClient(create_app(tmp_path)) as client:
         empty = client.post("/api/probe", json={"url": "   "})
@@ -799,6 +855,30 @@ def test_job_manager_runs_pipeline_and_emits_events(
     assert "stage" in kinds and "log" in kinds
     assert kinds[-1] == "done"
     assert job.stage_index == 8
+
+
+def test_job_subscribe_after_snapshot_only_replays_new_events(tmp_path: Path):
+    """SSE 带 after=快照 seq 时只回放增量：快照已渲染的日志不会再来一遍。"""
+    job = jobs.Job(
+        url=URL, mode="standard", no_cache=False, keep_audio=False, out_root=tmp_path
+    )
+    job.progress("[1/8] 下载 ✓ meta.json")
+    snapshot = job.snapshot()
+    assert snapshot["logs"] == ["[1/8] 下载 ✓ meta.json"]
+    assert snapshot["seq"] > 0
+
+    channel, backlog = job.subscribe(after=snapshot["seq"])
+    assert backlog == []
+
+    job.progress("[2/8] 音频处理 ✓ wav")
+    events = []
+    while True:
+        event = channel.get(timeout=2)
+        events.append(event)
+        if event.get("type") == "log":
+            break
+    assert any(str(e.get("line", "")).startswith("[2/8]") for e in events)
+    assert all(e.get("seq", 0) > snapshot["seq"] for e in events)
 
 
 def test_job_manager_maps_videread_error_to_exit_code(
@@ -1088,12 +1168,17 @@ def test_job_status_and_events_routes(tmp_path: Path, monkeypatch: pytest.Monkey
 
         stream = client.get(f"/api/jobs/{job_id}/events")
         snapshot = client.get(f"/api/jobs/{job_id}")
+        replay = client.get(
+            f"/api/jobs/{job_id}/events?after={snapshot.json()['seq']}"
+        )
         missing = client.get("/api/jobs/deadbeef")
 
     assert stream.status_code == 200
     assert "event: stage" in stream.text
     assert "event: log" in stream.text
     assert "event: done" in stream.text
+    # 客户端已有快照时，after=seq 的流不应再回放历史事件
+    assert "event:" not in replay.text
 
     body = snapshot.json()
     assert body["state"] == "done"

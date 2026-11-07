@@ -295,10 +295,11 @@ def sources(
     rows = [
         f"{chrome['source_video']}：<a href=\"{url_text}\" target=\"_blank\" rel=\"noopener\">{url_text}</a>",
         f"{chrome['mode']}：{_MODE_LABELS.get(mode, 'Standard')}；"
-        f"{chrome['structure']}：{outline.profile}",
-        f"{chrome['transcript']}：{asr_label}；{chrome['units']} {len(units)}"
-        f"（{breakdown or chrome['no_units']}）",
-        f"{chrome['llm']}：{settings.llm_model_plan} / {settings.llm_model_write}",
+        f"{chrome['structure']}：{escape(outline.profile)}",
+        f"{chrome['transcript']}：{escape(asr_label)}；{chrome['units']} {len(units)}"
+        f"（{escape(breakdown) or chrome['no_units']}）",
+        f"{chrome['llm']}：{escape(settings.llm_model_plan)} / "
+        f"{escape(settings.llm_model_write)}",
         f"{chrome['generated_at']}：{generated_at}",
         chrome["note_1"],
         chrome["note_2"],
@@ -350,9 +351,9 @@ def context(
     """组装模板上下文；LLM 输出按 §6.10 不转义，平台元信息转义后再注入。"""
     chrome = _chrome(lang)
     return {
-        "TITLE": outline.title,
-        "SUBTITLE": outline.subtitle,
-        "LEAD": outline.lead,
+        "TITLE": escape(outline.title),
+        "SUBTITLE": escape(outline.subtitle),
+        "LEAD": escape(outline.lead),
         "ATTRIBUTION": attribution(meta, lang),
         "VIDEO_DESCRIPTION": escape(meta.description) if meta.description else "",
         "DOC_TITLE": chrome["doc_title"],

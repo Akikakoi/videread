@@ -148,9 +148,23 @@ class Settings:
         return self.llm_api_key
 
 
+def _normalize_no_proxy() -> None:
+    """去掉 NO_PROXY 里的 IPv6 方括号。
+
+    httpx 在按 `trust_env` 读取 NO_PROXY 时会把 `[::1]` 解析成非法端口
+    （InvalidURL），导致 ASR / LLM 客户端在构造阶段就失败。`::1` 是等价写法，
+    这里做一次幂等清洗；不改变代理本身的含义。
+    """
+    for key in ("NO_PROXY", "no_proxy"):
+        raw = os.environ.get(key, "")
+        if "[" in raw or "]" in raw:
+            os.environ[key] = raw.replace("[", "").replace("]", "")
+
+
 def load_env() -> None:
     """载入 .env（不覆盖已存在的环境变量），并确保项目根可被导入。"""
     load_dotenv(ENV_FILE, override=False)
+    _normalize_no_proxy()
 
 
 def resolve_binary(env_key: str, name: str) -> str | None:

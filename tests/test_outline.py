@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
+from videread.config import get_settings
+from videread.download import VideoMeta
 from videread.errors import LlmError
-from videread.report.outline import validate
+from videread.report.outline import (
+    OUTLINE_CONTEXT_BUDGET,
+    plan_outline,
+    validate,
+)
 from videread.transcript import TranscriptUnit
 
 
@@ -70,3 +78,54 @@ def test_validate_requires_title():
 def test_validate_requires_at_least_one_section_with_sources():
     with pytest.raises(LlmError):
         validate({"title": "标题", "sections": [{"source_ids": ["u9999"]}]}, _units())
+
+
+def test_plan_outline_samples_long_transcript_within_budget():
+    """超长转写按时间抽样后再送模型，避免 2 小时视频直接撑爆上下文。"""
+    units = [
+        TranscriptUnit(
+            id=f"u{index:04d}",
+            start=float(index * 10),
+            end=float(index * 10 + 10),
+            text="很长的转写内容" * 20,
+        )
+        for index in range(1, 401)
+    ]
+    captured: list[str] = []
+
+    class _FakeClient:
+        def complete_json(self, *, system: str, user: str, model: str):
+            captured.append(user)
+            ids = re.findall(r"## (u\d+)", user)
+            return (
+                {
+                    "title": "长视频",
+                    "lead": "导语",
+                    "profile": "mechanism",
+                    "sections": [
+                        {"id": "s1", "heading": "一", "intent": "讲清", "source_ids": [ids[0]]}
+                    ],
+                },
+                "{}",
+            )
+
+    meta = VideoMeta(
+        bvid="BV1xx411c7mD",
+        title="长视频",
+        uploader="某UP主",
+        duration=4000.0,
+        url="https://www.bilibili.com/video/BV1xx411c7mD",
+    )
+
+    outline = plan_outline(
+        meta,
+        units,
+        client=_FakeClient(),  # type: ignore[arg-type]
+        settings=get_settings(),
+        progress=lambda _msg: None,
+    )
+
+    prompt = captured[0]
+    assert "抽样" in prompt
+    assert len(prompt) < OUTLINE_CONTEXT_BUDGET + 2000
+    assert outline.sections and outline.sections[0].source_ids

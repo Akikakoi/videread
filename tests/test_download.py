@@ -442,11 +442,26 @@ def _write_cookies(tmp_path: Path, rows: list[str]) -> str:
 
 _SESSDATA_ROW = ".bilibili.com\tTRUE\t/\tTRUE\t1999999999\tSESSDATA\tabc123"
 _DEVICE_ROW = ".bilibili.com\tTRUE\t/\tTRUE\t1999999999\tbuvid3\twhatever"
+_HTTPONLY_SESSDATA_ROW = (
+    "#HttpOnly_.bilibili.com\tTRUE\t/\tTRUE\t1999999999\tSESSDATA\tabc123"
+)
 
 
 def test_cookies_have_login_true_with_sessdata(tmp_path: Path):
     cookies = _write_cookies(tmp_path, [_SESSDATA_ROW])
     assert download.cookies_have_login(cookies) is True
+
+
+def test_cookies_have_login_true_for_httponly_sessdata(tmp_path: Path):
+    """SESSDATA 常是 HttpOnly；`#HttpOnly_` 前缀不是注释，不能整行跳过。"""
+    cookies = _write_cookies(tmp_path, [_HTTPONLY_SESSDATA_ROW])
+    assert download.cookies_have_login(cookies) is True
+
+
+def test_cookies_have_login_ignores_foreign_domain(tmp_path: Path):
+    foreign = ".example.com\tTRUE\t/\tTRUE\t1999999999\tSESSDATA\tabc123"
+    cookies = _write_cookies(tmp_path, [foreign])
+    assert download.cookies_have_login(cookies) is False
 
 
 def test_cookies_have_login_false_without_sessdata(tmp_path: Path):
@@ -470,14 +485,25 @@ def _hint_settings(**overrides: object) -> Settings:
     return replace(download.get_settings(), **merged)  # type: ignore[arg-type]
 
 
+def test_cookies_dict_keeps_httponly_and_filters_foreign_domains(tmp_path: Path):
+    foreign = ".example.com\tTRUE\t/\tTRUE\t1999999999\tSESSDATA\tleak"
+    cookies = _write_cookies(tmp_path, [_HTTPONLY_SESSDATA_ROW, foreign])
+
+    result = download._cookies_dict(_hint_settings(cookies_file=cookies))  # noqa: SLF001
+
+    assert result == {"SESSDATA": "abc123"}
+
+
 def test_subtitle_login_hint_silent_when_logged_in(tmp_path: Path):
     settings = _hint_settings(cookies_file=_write_cookies(tmp_path, [_SESSDATA_ROW]))
     assert download.subtitle_login_hint(settings) is None
 
 
-def test_subtitle_login_hint_silent_with_browser_cookies():
+def test_subtitle_login_hint_explains_browser_cookies_limitation():
+    """浏览器直读可用于下载，但 AI 字幕接口只认 cookies.txt，提示不能静默。"""
     settings = _hint_settings(cookies_file=None, cookies_from_browser="edge")
-    assert download.subtitle_login_hint(settings) is None
+    hint = download.subtitle_login_hint(settings)
+    assert hint is not None and "cookies.txt" in hint and "SESSDATA" in hint
 
 
 def test_subtitle_login_hint_reports_missing_sessdata(tmp_path: Path):

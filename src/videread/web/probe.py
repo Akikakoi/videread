@@ -92,6 +92,7 @@ def probe_source(
         duration = audio.probe_duration(local, settings)
         title = local.stem
         source_kind = "local"
+        meta = download.local_meta(local, duration)
     elif url.lower().startswith(("http://", "https://")):
         # 付费内容（充电专属 / 付费课程）提前拦截：返回结构化信号让前端
         # 禁用提交按钮，而不是走 fetch_meta 抛错
@@ -143,10 +144,10 @@ def probe_source(
     }
     if source_kind == "remote" and charging:
         result["charging"] = True
-    if local is None:
-        existing = _existing_run(Path(out_root), meta)
-        if existing:
-            result["existing_run"] = existing
+    # 远程与本地都查历史记录：本地文件重复投递同样要提示「已解析过」
+    existing = _existing_run(Path(out_root), meta)
+    if existing:
+        result["existing_run"] = existing
     if source_kind == "remote" and len(pages) > 1:
         result["pages"] = [
             {

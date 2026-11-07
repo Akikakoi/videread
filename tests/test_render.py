@@ -6,17 +6,21 @@ from pathlib import Path
 
 import pytest
 
+from videread.config import get_settings
+from videread.download import VideoMeta
 from videread.errors import RenderError
 from videread.render import (
     OPTIONAL_PLACEHOLDERS,
     REQUIRED_PLACEHOLDERS,
     _CHROME_REQUIRED,
     check_self_contained,
+    context,
     render_report,
     template_classes,
     template_for,
     timemap_script,
 )
+from videread.report import Outline
 from videread.transcript import TranscriptUnit
 
 
@@ -181,3 +185,35 @@ def test_templates_expose_timemap_hook(mode: str):
     assert "{{TIMEMAP}}" in text
     assert "ts-jump" in template_classes(template), "跳转胶囊的 class 必须是模板已定义的"
     assert "TIMEMAP" in OPTIONAL_PLACEHOLDERS
+
+
+def test_context_escapes_outline_text_fields():
+    """大纲标题 / 副标题 / 导语是纯文本，注入模板前必须转义。"""
+    meta = VideoMeta(
+        bvid="local",
+        title="示例",
+        uploader="",
+        duration=10.0,
+        url="file:///tmp/x.m4a",
+    )
+    outline = Outline(
+        title="<script>alert(1)</script>",
+        subtitle="<b>副标题</b>",
+        lead="<img src=x onerror=alert(2)>",
+        profile="argument",
+        sections=[],
+    )
+
+    ctx = context(
+        meta,
+        outline,
+        [],
+        [],
+        get_settings(),
+        mode="standard",
+        subtitle_first=False,
+    )
+
+    assert "<script>" not in ctx["TITLE"] and "&lt;script&gt;" in ctx["TITLE"]
+    assert "<b>" not in ctx["SUBTITLE"] and "&lt;b&gt;" in ctx["SUBTITLE"]
+    assert "<img" not in ctx["LEAD"] and "&lt;img" in ctx["LEAD"]

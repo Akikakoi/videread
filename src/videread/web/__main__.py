@@ -21,7 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog="videread-web",
         description="videread 本地 Web 控制台：填链接、看进度、读报告",
     )
-    parser.add_argument("--host", default="127.0.0.1", help="监听地址，默认仅本机")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="监听地址，默认仅本机；0.0.0.0 会关闭 Host 白名单校验，请勿对外暴露",
+    )
     parser.add_argument("--port", type=int, default=_DEFAULT_PORT, help="监听端口，默认 8765")
     parser.add_argument("--out", default=None, help="产物根目录，默认 ./runs")
     parser.add_argument(
@@ -58,8 +62,20 @@ def main(argv: list[str] | None = None) -> int:
 
     # 无头导出回头访问自身固定走 127.0.0.1：服务只绑本机（README 约定），
     # host 即便配成 0.0.0.0，本机回环也总是可达
+    # 绑 0.0.0.0 / :: 是用户明确对外暴露，不启用 Host 白名单；其余情况
+    # 只接受本机名 + 配置的监听地址，阻断 DNS rebinding 调用无鉴权接口。
+    bind_all = args.host in {"0.0.0.0", "::", ""}
+    allowed_hosts = (
+        None
+        if bind_all
+        else {args.host, "127.0.0.1", "localhost", "::1"}
+    )
     uvicorn.run(
-        create_app(out_root, self_base=f"http://127.0.0.1:{args.port}"),
+        create_app(
+            out_root,
+            self_base=f"http://127.0.0.1:{args.port}",
+            allowed_hosts=allowed_hosts,
+        ),
         host=args.host,
         port=args.port,
         log_level="info",

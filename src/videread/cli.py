@@ -69,14 +69,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         metavar="N",
-        help="多 P 视频指定解析第 N 个分P（默认 1；本地文件无效）",
+        help="多 P 视频指定解析第 N 个分P（默认 1；本地文件无效；"
+        "批量列表不支持，请在该行链接里用 ?p=N 指定）",
     )
     parser.add_argument(
         "--frames",
         dest="frames",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=None,
-        help="按大纲节截取视频画面并内嵌进报告（默认跟随 .env 的 FRAMES，默认关）",
+        help="按大纲节截取视频画面并内嵌进报告（默认跟随 .env 的 FRAMES；"
+        "--no-frames 显式关闭并清除旧截图）",
     )
     parser.add_argument(
         "--pdf",
@@ -157,6 +159,14 @@ def _run_batch(list_path: Path, args: argparse.Namespace) -> int:
     entries = [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
     if not entries:
         print(f"错误：批量列表是空的：{list_path}（每行一个链接 / BV 号 / 本地文件，# 为注释）", file=sys.stderr)
+        return EXIT_USAGE
+    if args.page > 1:
+        # 批量列表里的多个来源未必都是同一视频的分P；全局 --page 会静默
+        # 改变每一行的含义，宁可整批拒绝并指路到逐行 ?p=N。
+        print(
+            "错误：批量列表不支持 --page；请在该行链接里用 ?p=N 指定分P",
+            file=sys.stderr,
+        )
         return EXIT_USAGE
 
     print(f"批量模式：共 {len(entries)} 个任务（失败不中断，逐个继续）")

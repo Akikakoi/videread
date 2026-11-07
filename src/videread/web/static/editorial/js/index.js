@@ -91,7 +91,9 @@ async function jfetch(path, opts){
     if(!r.ok){
       let detail = r.status;
       try{ const j = await r.json(); if(j && j.detail) detail = j.detail; }catch(e){}
-      throw new Error(detail);
+      const err = new Error(detail);
+      err.status = r.status;
+      throw err;
     }
     if(OFFLINE){ OFFLINE = false; $("#offline").style.display = "none"; refreshAll(); }
     return await r.json();
@@ -210,6 +212,15 @@ async function loadHero(){
 let currentRunId = null;
 let currentVideoUrl = "";
 
+function showFeatureEmpty(message){
+  currentRunId = null;
+  currentVideoUrl = "";
+  const hint = $("#feature-hint");
+  if(hint){ hint.textContent = ""; hint.title = ""; }
+  $("#feature-body").innerHTML = '<p class="skeleton">' + esc(message) + '</p>';
+  syncFeatureMarks();
+}
+
 async function openFeature(runId){
   currentRunId = runId;
   const body = $("#feature-body");
@@ -220,7 +231,7 @@ async function openFeature(runId){
   try{
     d = await jfetch("/api/runs/" + encodeURIComponent(runId));
   }catch(e){
-    if(!OFFLINE){ toast("读取详情失败：" + e.message); return; }
+    if(!OFFLINE){ showFeatureEmpty("这一期暂时读不出来（" + e.message + "）。回目录看看其它期。"); return; }
     const s = SAMPLE.runs.find(x => x.run_id === runId);
     d = Object.assign({}, s, SAMPLE.details[runId] || {sections_detail: []});
   }
@@ -244,7 +255,9 @@ async function openFeature(runId){
           (d.generated_at ? '<span>刊于 ' + esc(String(d.generated_at).split(" ")[0]) + '</span>' : "") +
         '</div>' +
       '</header>' +
-      '<p class="lead' + (d.lead ? "" : " empty") + '">' + esc(d.lead || "") + '</p>' +
+      '<p class="lead' + ((d.has_report && d.lead) ? "" : " empty") + '">' +
+        esc(d.has_report ? (d.lead || "") : "这一期还没有生成报告：点「继续解析」会沿用已完成的转写与大纲缓存，从断点继续。") +
+      '</p>' +
       (sections.length ?
         '<ul class="chapters">' + sections.map((s, i) =>
           '<li data-sec="' + (i + 1) + '" style="cursor:pointer" title="翻开这一章">' +
@@ -254,6 +267,7 @@ async function openFeature(runId){
           (s.intent ? '<div class="desc">' + esc(s.intent) + '</div>' : "") +
           '</li>').join("") + '</ul>' : "") +
       '<div class="actions">' +
+        (!d.has_report && d.url ? '<button class="act" id="btn-resume" data-url="' + esc(d.url) + '" data-mode="' + esc(d.mode || "") + '" title="沿用已完成的转写与大纲缓存继续解析">继续解析<span>→</span></button>' : "") +
         (d.has_report ? '<button class="act" id="btn-read" data-run="' + esc(runId) + '">翻开全文<span>→</span></button>' : "") +
         (d.has_report ? '<a class="act" href="' + API + '/report/' + encodeURIComponent(runId) + '" target="_blank" rel="noopener">原样打开</a>' : "") +
         (d.has_report && !d.has_frames ? '<a class="act" href="' + API + '/api/runs/' + encodeURIComponent(runId) + '/markdown">导出 MD</a>' : "") +
@@ -275,8 +289,13 @@ async function openFeature(runId){
   if(renameBtn) renameBtn.addEventListener("click", () => startRename(runId));
   const readBtn = $("#btn-read");
   if(readBtn) readBtn.addEventListener("click", () => openReaderPage(runId));
+  const resumeBtn = $("#btn-resume");
+  if(resumeBtn) resumeBtn.addEventListener("click", () => resumeRun(resumeBtn.dataset.url, resumeBtn.dataset.mode));
   document.querySelectorAll("#feature-body .chapters li[data-sec]").forEach(li => {
-    li.addEventListener("click", () => openReaderPage(runId, parseInt(li.dataset.sec, 10)));
+    li.addEventListener("click", () => {
+      if(d.has_report) openReaderPage(runId, parseInt(li.dataset.sec, 10));
+      else toast("这一期还没有生成报告，点「继续解析」继续");
+    });
   });
   const askBtn = $("#btn-ask");
   /* 事件委托：ask() 只重绘 #letters-list 内部，容器上的监听不会失效 */
@@ -302,6 +321,40 @@ function videoAt(url, seconds){
   if(!/^https?:/i.test(url || "")) return "";
   const t = Math.max(0, Math.round(Number(seconds) || 0));
   return url + (url.indexOf("?") >= 0 ? "&" : "?") + "t=" + t;
+}
+
+/* 未完成的一期续跑：把 meta 里的来源写回投印表单并切回原模式。
+   file:// URI 转成本地路径（Windows 去掉 /D: 前的斜杠），其余原样。 */
+function formSource(url){
+  if(!url) return "";
+  if(url.indexOf("file://") === 0){
+    try{
+      let path = decodeURIComponent(new URL(url).pathname);
+      if(/^\/[A-Za-z]:/.test(path)) path = path.slice(1);
+      return path;
+    }catch(e){ return ""; }
+  }
+  return url;
+}
+
+function resumeRun(url, runMode){
+  const source = formSource(url);
+  if(!source){ toast("这一期没有可用的来源地址，请重新粘贴视频链接或本地文件路径"); return; }
+  $("#url").value = source;
+  if(runMode){
+    const btn = document.querySelector('#modes .mode[data-mode="' + runMode + '"]');
+    if(btn){
+      document.querySelectorAll("#modes .mode[data-mode]").forEach(x => x.classList.remove("on"));
+      btn.classList.add("on");
+      mode = runMode;
+    }
+  }
+  /* 旧输入对应的分P / 已解析提示可能失效：强制重新预检 */
+  lastProbedUrl = null; probeOk = false; probeBlocked = false; probeBlockMsg = "";
+  probedExisting = null; probedTitle = "";
+  doProbe();
+  $("#submit").scrollIntoView({behavior: scrollBehavior(), block: "start"});
+  toast("已填入投印区，确认后点「投印 →」续跑");
 }
 
 /* 答案引用：§N 跳阅读页对应章节，▶ 时间戳跳原视频；摘要作为悬停提示 */
@@ -569,7 +622,7 @@ function langTagOf(item){
 
 function tagOf(item){
   /* 收藏期数：类型标签转朱红描边，与红星呼应；未收藏为灰描边 */
-  if(!item.has_report) return '<span class="tag gray">生成中</span>';
+  if(!item.has_report) return '<span class="tag gray" title="这一期还没有生成报告，打开特稿可「继续解析」">未完成</span>';
   return '<span class="tag' + (item.favorite ? "" : " gray") + '">' + esc(structureZh(item.profile)) + '</span>';
 }
 
@@ -816,7 +869,10 @@ function bindToc(){
           try{
             const r = await jfetch("/api/runs?page=1&page_size=1");
             if(r.runs && r.runs[0]) openFeature(r.runs[0].run_id);
-          }catch(err2){}
+            else showFeatureEmpty("这一期已删除，报告库暂时是空的。先去「投印新篇」解析一个视频吧。");
+          }catch(err2){
+            showFeatureEmpty("这一期已删除。");
+          }
         }
         loadRuns(null, true);
       }catch(err){
@@ -1381,9 +1437,19 @@ function watchActiveJob(){
       if(JOB_TERMINAL.has(job.state)){
         clearJobline();
         clearInterval(jobPoll); jobPoll = null;
-        if(job.state === "done"){ toast("新的一期印好了"); loadRuns(1, true); }
+        if(job.state === "done"){
+          toast("新的一期印好了");
+          loadRuns(1, true);
+          if(job.run_id) openFeature(job.run_id);
+        }
       }
-    }catch(e){ /* 服务暂时下线等：保留现状，下轮再看 */ }
+    }catch(e){
+      /* 工单已被清理（重启后只恢复 queued/running）时停止轮询，别一直打 404 */
+      if(e && e.status === 404){
+        clearJobline();
+        clearInterval(jobPoll); jobPoll = null;
+      }
+    }
   }, 15000);
 }
 async function checkActiveJob(){
@@ -1399,7 +1465,10 @@ async function checkActiveJob(){
     watchActiveJob();
   }catch(err){
     /* 404 = 工单确实没了才清标记；服务暂时下线时保留 */
-    if(String(err.message) === "404") localStorage.removeItem("videread.activeJob");
+    if(err && err.status === 404){
+      localStorage.removeItem("videread.activeJob");
+      $("#jobline").innerHTML = "";
+    }
   }
 }
 
@@ -1769,4 +1838,8 @@ refreshAll();
 checkActiveJob();
 jfetch("/api/runs?page=1&page_size=1").then(r => {
   if(r.runs && r.runs[0]) openFeature(r.runs[0].run_id);
-}).catch(() => openFeature(SAMPLE.runs[0].run_id));
+  else showFeatureEmpty("报告库还是空的：先在「投印新篇」提交一个 B 站链接或本地文件。");
+}).catch(() => {
+  if(OFFLINE) openFeature(SAMPLE.runs[0].run_id);
+  else showFeatureEmpty("暂时读不到报告库，请稍后刷新。");
+});

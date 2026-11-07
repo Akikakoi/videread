@@ -20,6 +20,11 @@ _MAX_SECTIONS = 8
 _MIN_SECTIONS = 1
 _MAX_SOURCE_IDS = 40
 
+# 结构规划 prompt 的转写预算（字符）。2 小时高密度中文口播可能远超小模型的
+# 上下文；超预算时按时间均匀抽样转写单元，保证请求仍可发出并在提示里注明
+# 「哪些单元未进入规划」，而不是直接 400 / 截断在半句话上。
+OUTLINE_CONTEXT_BUDGET = 48000
+
 
 @dataclass
 class OutlineSection:
@@ -163,6 +168,38 @@ def validate(data: dict, units: list[TranscriptUnit], lang: str = "zh") -> Outli
     )
 
 
+def outline_transcript(units: list[TranscriptUnit]) -> tuple[str, int]:
+    """结构规划用的转写 markdown 与抽样后的单元数。
+
+    未超预算时原样返回全部单元；超出时按时间顺序等间隔抽样，既保留
+    开头 / 中段 / 结尾的覆盖，又把请求控制在预算内。
+    """
+    full = units_to_markdown(units)
+    if len(full) <= OUTLINE_CONTEXT_BUDGET:
+        return full, len(units)
+
+    # 尽量多保留单元：先按预算比例估一个目标数，再逐步下调直到 markdown
+    # 真正落进预算（头部时间戳/标题也有开销，比例只是起点）。
+    target = max(1, min(len(units), int(len(units) * OUTLINE_CONTEXT_BUDGET / len(full))))
+    while True:
+        if target >= len(units):
+            sampled = list(units)
+        elif target <= 1:
+            sampled = units[:1]
+        else:
+            stride = (len(units) - 1) / (target - 1)
+            sampled = [units[round(index * stride)] for index in range(target)]
+        text = units_to_markdown(sampled)
+        if len(text) <= OUTLINE_CONTEXT_BUDGET or target <= 1:
+            break
+        target = max(1, int(target * 0.9))
+    note = (
+        f"（转写较长：结构规划按时间均匀抽样 {len(sampled)}/{len(units)} 个单元；"
+        "未列出的单元不会进入章节。）\n\n"
+    )
+    return note + text, len(sampled)
+
+
 def plan_outline(
     meta: VideoMeta,
     units: list[TranscriptUnit],
@@ -182,10 +219,13 @@ def plan_outline(
     outline_system = prompts.OUTLINE_SYSTEM.replace(
         "{language_rule}", prompts.language_rule(lang)
     )
+    transcript_md, sampled = outline_transcript(units)
+    if sampled < len(units):
+        progress(f"转写较长：结构规划按时间抽样 {sampled}/{len(units)} 个单元")
     base_user = prompts.fill(
         prompts.OUTLINE_USER,
         meta=meta_summary(meta),
-        transcript_md=units_to_markdown(units),
+        transcript_md=transcript_md,
     )
 
     user = base_user
