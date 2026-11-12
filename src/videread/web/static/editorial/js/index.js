@@ -1502,17 +1502,19 @@ function openSettings(){
       asrSel.add(new Option(asrNow + "（当前生效）", asrNow));
     }
     asrSel.value = asrNow;
+    stSavedKeys = s.saved_keys || {};
+    stHasActiveKey = !!s.has_key;
+    stActiveMasked = s.api_key_masked || "";
+    stKeySource = s.source || "env";
     const keyInput = $("#st-api-key");
     keyInput.value = "";
-    keyInput.placeholder = s.has_key
-      ? (s.source === "custom" ? "已保存 " + s.api_key_masked + "（留空保持不变）" : ".env 中的 Key " + s.api_key_masked + "（留空保持不变）")
-      : "尚未设置，报告写作需要 Key";
     /* 当前端点能对上预设就选中它（用户只见 Key 输入框）；
        对不上说明是自定义网关，才露出 Base URL 一栏 */
     const preset = detectPreset(s.base_url || "");
     $("#st-preset").value = preset;
     setBaseVisible(preset === "custom");
-    fetchModels(); /* 已保存过 Key 时，打开即带出可选模型 */
+    updateKeyPlaceholder();
+    fetchModels(); /* 该端点保存过 Key 时，打开即带出可选模型 */
   }).catch(e => { closeSettings(); toast("读取设置失败：" + e.message); });
 }
 function closeSettings(){
@@ -1567,13 +1569,39 @@ let stModelsSeq = 0;        /* 请求序号：快速切换厂商时丢弃过期�
 let stSuggestFor = null;    /* 当前展开建议面板的输入框 id */
 let stEffectiveBaseUrl = "";/* 打开弹窗时的生效端点（判断回退 Key 是否匹配） */
 let stTypedQuery = false;   /* 本次聚焦后用户是否输入过；没输入过则展开全部、不过滤 */
+let stSavedKeys = {};       /* 端点 → 脱敏 Key；切换服务商时据此沿用之前填过的 Key */
+let stHasActiveKey = false; /* 当前生效端点是否有 Key（含 .env 回退） */
+let stActiveMasked = "";
+let stKeySource = "env";
+
+function baseUrlKey(url){ return (url || "").trim().replace(/\/+$/, ""); }
+function savedKeyFor(base){ return stSavedKeys[baseUrlKey(base)] || ""; }
+function activeEndpointHasKey(){
+  const base = $("#st-base-url").value.trim() || stEffectiveBaseUrl;
+  return !!savedKeyFor(base)
+    || (baseUrlKey(base) === baseUrlKey(stEffectiveBaseUrl) && stHasActiveKey);
+}
+/* 切换服务商/端点时更新 Key 输入框提示：已保存过就提示留空沿用 */
+function updateKeyPlaceholder(){
+  const base = $("#st-base-url").value.trim() || stEffectiveBaseUrl;
+  const saved = savedKeyFor(base);
+  const input = $("#st-api-key");
+  if(saved){
+    input.placeholder = "已保存 " + saved + "（留空保持不变）";
+  }else if(baseUrlKey(base) === baseUrlKey(stEffectiveBaseUrl) && stHasActiveKey){
+    input.placeholder = (stKeySource === "custom" ? "已保存 " : ".env 中的 Key ")
+      + stActiveMasked + "（留空保持不变）";
+  }else{
+    input.placeholder = "该端点还没有保存 Key（无需 Key 的网关可留空）";
+  }
+}
 
 function fetchModels(){
   const form = settingsForm();
   if(!form.base_url) return;
-  /* 没填 Key 且端点已换：回退的旧 Key 对新厂商必然失败，别浪费这次请求 */
-  if(!form.api_key && form.base_url !== stEffectiveBaseUrl){
-    setStNote("填好 API Key 后会自动拉取该服务的模型列表");
+  /* 没填 Key 且该端点也没保存过：回退的旧 Key 对新厂商必然失败，别浪费这次请求 */
+  if(!form.api_key && !activeEndpointHasKey()){
+    setStNote("填好该服务的 API Key 后会自动拉取模型列表");
     return;
   }
   const seq = ++stModelsSeq;
@@ -1591,7 +1619,8 @@ function fetchModels(){
   });
 }
 $("#st-api-key").addEventListener("blur", fetchModels);
-$("#st-base-url").addEventListener("change", fetchModels);
+$("#st-base-url").addEventListener("change", () => { updateKeyPlaceholder(); fetchModels(); });
+$("#st-base-url").addEventListener("input", updateKeyPlaceholder);
 
 /* Key 输入框显示/隐藏；不支持 CSS 遮罩的浏览器（Firefox）退回 type=password */
 if(!CSS.supports("-webkit-text-security", "disc")){
@@ -1689,10 +1718,12 @@ $("#st-preset").addEventListener("change", e => {
     $("#st-model-plan").value = p.plan;
     $("#st-model-write").value = p.write;
     setBaseVisible(false);
+    updateKeyPlaceholder(); /* 这家之前保存过 Key 就提示「留空保持不变」 */
     fetchModels(); /* 换厂商后按新端点刷新模型列表 */
   }else{
     /* 自定义网关或未选：露出 Base URL 手动填 */
     setBaseVisible(true);
+    updateKeyPlaceholder();
   }
 });
 
@@ -1702,8 +1733,15 @@ $("#st-save").addEventListener("click", async () => {
   if(!form.base_url){ setStNote("Base URL 不能为空", false); return; }
   btn.disabled = true;
   try{
-    await post("/api/settings", form);
-    setStNote("已保存，之后投印的报告都会用这套模型", true);
+    const saved = await post("/api/settings", form);
+    /* 用返回值刷新「端点 → Key」缓存：刚填的 Key 已记在当前端点名下 */
+    stSavedKeys = saved.saved_keys || stSavedKeys;
+    stEffectiveBaseUrl = saved.base_url || stEffectiveBaseUrl;
+    stHasActiveKey = !!saved.has_key;
+    stActiveMasked = saved.api_key_masked || "";
+    stKeySource = saved.source || "env";
+    updateKeyPlaceholder();
+    setStNote("已保存，之后投印的报告都会用这套模型；Key 已按服务商记住，切换回来留空即可", true);
     toast("模型设置已保存");
     updateConfFootnote();
     setTimeout(closeSettings, 700);

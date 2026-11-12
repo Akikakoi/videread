@@ -877,6 +877,8 @@ HTTPS_PROXY=
 配置分层：`.env` < 环境变量 < `.llm-settings.json`（Web 设置页）< CLI 显式参数。
 改 `.env` 后需重启服务（`override=False`，已生效的键不会热更新）。
 
+`.llm-settings.json` 里的 API Key 按端点（Base URL）存成 `llm_api_keys` 映射：切换服务商只切换生效端点，各家 Key 互不覆盖；页面留空 = 沿用该端点已保存的 Key。旧版顶层 `llm_api_key` 读取时自动归到当时的 Base URL 名下，下次保存即迁移成映射。
+
 ---
 
 ## 11. 错误处理、重试与断点续跑

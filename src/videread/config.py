@@ -22,6 +22,9 @@ BIN_DIR = PROJECT_ROOT / "bin"
 
 DEFAULT_OUT_ROOT = PROJECT_ROOT / "runs"
 
+# LLM 默认端点（.env 未设 LLM_BASE_URL 时；也是旧版单 Key 迁移时的默认归属端点）
+DEFAULT_LLM_BASE_URL = "https://api.deepseek.com/v1"
+
 # --- 超时与上限（§12 Windows 落地清单）---
 LLM_TIMEOUT_SEC = 180.0
 ASR_SEGMENT_TIMEOUT_SEC = 600.0
@@ -257,7 +260,7 @@ def get_settings(**overrides: object) -> Settings:
             1.0, _env_float("ASR_REALTIME_SPEEDUP", ASR_REALTIME_SPEEDUP)
         ),
         llm_base_url=(
-            os.environ.get("LLM_BASE_URL", "").strip() or "https://api.deepseek.com/v1"
+            os.environ.get("LLM_BASE_URL", "").strip() or DEFAULT_LLM_BASE_URL
         ),
         llm_api_key=os.environ.get("LLM_API_KEY", "").strip(),
         llm_model_plan=(os.environ.get("LLM_MODEL_PLAN", "").strip() or "deepseek-chat"),

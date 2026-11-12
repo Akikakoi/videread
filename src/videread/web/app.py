@@ -561,9 +561,17 @@ def create_app(
     # --------------------------------------------------------- 模型设置
 
     def _settings_payload() -> dict:
-        """设置弹窗数据：生效配置 + 脱敏 key；完整 key 永不出后端。"""
+        """设置弹窗数据：生效配置 + 脱敏 key；完整 key 永不出后端。
+
+        saved_keys 是「端点 → 脱敏 Key」表：前端切换服务商时据此提示
+        该端点是否已保存过 Key，留空即沿用，不会覆盖别家的 Key。
+        """
         s = get_settings()
         user = usersettings.load_user_llm_settings()
+        saved_keys = {
+            base: usersettings.mask_key(key)
+            for base, key in usersettings.load_api_keys().items()
+        }
         return {
             "base_url": s.llm_base_url,
             "model_plan": s.llm_model_plan,
@@ -571,6 +579,7 @@ def create_app(
             "api_key_masked": usersettings.mask_key(s.llm_api_key),
             "has_key": bool(s.llm_api_key),
             "source": "custom" if user.get("llm_api_key") else "env",
+            "saved_keys": saved_keys,
             # 转写引擎：asr_backend 是当前生效值（含用户覆盖），
             # asr_backend_custom 是用户落盘的覆盖值（空 = 跟随 .env）
             "asr_backend": s.asr_backend,
@@ -627,7 +636,7 @@ def create_app(
         s = get_settings()
         base_url = (payload.base_url or "").strip() or s.llm_base_url
         model = (payload.model_plan or "").strip() or s.llm_model_plan
-        api_key = _resolve_llm_key(payload.api_key)
+        api_key = _resolve_llm_key(payload.api_key, base_url)
         if not base_url.startswith(("http://", "https://")):
             raise HTTPException(status_code=400, detail="Base URL 必须以 http(s):// 开头")
         if not model:
@@ -659,11 +668,23 @@ def create_app(
             note = "连接正常（Key 与模型名均有效）；该模型在测试上限内没产出文本，正式写作无此限制"
         return {"ok": True, "model": model, "reply": reply[:50], "note": note}
 
-    def _resolve_llm_key(form_key: str) -> str:
-        """表单 key → 已保存/环境 key → 占位串（Ollama 等免 key 网关可用）。"""
+    def _resolve_llm_key(form_key: str, base_url: str) -> str:
+        """表单 key → 该端点已保存的 key → 生效端点沿用 .env → 占位串。
+
+        按端点查表，切到另一家厂商时即使表单没填 key，也能用之前
+        给这家保存的 key 测试/拉模型，而不是误用当前生效端点的 key。
+        """
+        key = (form_key or "").strip()
+        if key:
+            return key
+        saved = usersettings.key_for_base_url(base_url)
+        if saved:
+            return saved
         s = get_settings()
-        key = (form_key or "").strip() or s.llm_api_key
-        return key or "sk-placeholder"
+        same_endpoint = usersettings.normalize_base_url(
+            base_url
+        ) == usersettings.normalize_base_url(s.llm_base_url)
+        return (s.llm_api_key if same_endpoint else "") or "sk-placeholder"
 
     @app.post("/api/settings/models")
     def api_list_models(payload: ModelListRequest) -> dict:
@@ -674,7 +695,7 @@ def create_app(
         """
         s = get_settings()
         base_url = (payload.base_url or "").strip() or s.llm_base_url
-        api_key = _resolve_llm_key(payload.api_key)
+        api_key = _resolve_llm_key(payload.api_key, base_url)
         if not base_url.startswith(("http://", "https://")):
             raise HTTPException(status_code=400, detail="Base URL 必须以 http(s):// 开头")
 
